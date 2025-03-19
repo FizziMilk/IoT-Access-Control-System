@@ -30,6 +30,7 @@ MobileApp/.DS_Store
 
 # local env files
 MobileApp/.env*.local
+MobileApp/.env
 
 # typescript
 *.tsbuildinfo
