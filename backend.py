@@ -1,19 +1,23 @@
 from flask import Flask, request, jsonify
 from flask_restful import Resource, Api
 from flask_sqlalchemy import SQLAlchemy
+from flask_mqtt import Mqtt
 from datetime import datetime
 from twilio.rest import Client
 from dotenv import load_dotenv
 from flask_bcrypt import Bcrypt
 from flask_jwt_extended import JWTManager
 from flask_jwt_extended import create_access_token
+import ssl
 import os
 
 #Twilio Setup
 load_dotenv("twilio.env") # Load the Twilio environment file
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
-
+#Other secrets
+MQTT_BROKER_URL = os.getenv("MQTT_BROKER_URL")
+JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY")
 client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
 
 TWILIO_VERIFY_SID="VA1c1c5d9906340e1c187f83dbc26057a0"
@@ -23,8 +27,17 @@ app = Flask(__name__)
 api = Api(app)
 bcrypt = Bcrypt(app)
 
+# Flask-MQTT Configuration
+app.config['MQTT_BROKER_URL'] = MQTT_BROKER_URL
+app.config['MQTT_BROKER_PORT'] = 8883
+app.config['MQTT_TLS_VERSION'] = ssl.PROTOCOL_TLSv1_2
+app.config['MQTT_TLS_ENABLED'] = True
+app.config['MQTT_TLS_CA_CERTS'] = '/etc/mosquitto/ca_certificates/ca.crt'
+
+mqtt = Mqtt(app)
+
 ## JWT Setup
-app.config["JWT_SECRET_KEY"] = "super-secret-key" # change to more secure later
+app.config["JWT_SECRET_KEY"] = JWT_SECRET_KEY
 jwt = JWTManager(app)
 
 
@@ -213,11 +226,30 @@ class GetAccessLogs(Resource):
 			})
 		return results, 200
 
+## MQTT Resources ##
+
+## Event fires when app connects (debug purposes)
+@mqtt.on_connect()
+def handle_connect(client,userdata,flags,rc):
+	if rc == 0:
+		print("Connected to MQTT broker!:")
+		mqtt.subscribe('door/responses')
+	else:
+		print("Failed to connect, return code %d\n",rc)
+
+
+# MQTT Resrouce to unlock door with RPI
 class UnlockDoor(Resource):
 	def post(self):
-		data = request.json
-		#door unlock logic
-		return {"status": "unlocked"}
+		data = request.get_json()
+		command = data.get("command","open_door")
+
+		mqtt.publish("door/commands",command, qos = 1)
+
+		return {"status": f"Door command '{command}' sent"},200
+
+## Exposing RESTful API endpoints
+
 api.add_resource(LoginResource,"/login")
 api.add_resource(CheckVerification,"/verify-otp")
 api.add_resource(StartVerification, "/start-verification")
@@ -226,3 +258,4 @@ api.add_resource(UnlockDoor, '/unlock')
 api.add_resource(GetAccessLogs, "/access-logs")
 if __name__ == '__main__':
 	app.run(debug=True)
+
