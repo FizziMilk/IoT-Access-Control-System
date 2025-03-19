@@ -4,7 +4,7 @@ import ImageViewer from '@/components/ImageViewer';
 import { useAuth } from '@/providers/auth';
 
 const PlaceholderImage = require("@/assets/images/background-image.png");
-const backendIP = process.env.BACKEND_IP;
+const backendIP = process.env.EXPO_PUBLIC_BACKEND_IP;
 
 export default function Index() {
   const { signOut } = useAuth();
