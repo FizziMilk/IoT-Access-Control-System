@@ -242,11 +242,22 @@ def handle_connect(client,userdata,flags,rc):
 class UnlockDoor(Resource):
 	def post(self):
 		data = request.get_json()
-		command = data.get("command","open_door")
+		command = data.get("command","unlock_door")
 
 		mqtt.publish("door/commands",command, qos = 1)
 
 		return {"status": f"Door command '{command}' sent"},200
+
+# MQTT Resource to lock door with RPI
+
+class LockDoor(Resource):
+	def post(self):
+		data = request.get_json()
+		command = data.get("command","lock_door")
+
+		mqtt.publish("door/commmands",command, qos = 1)
+
+		return {"status": f"Door command '{command' sent"},200
 
 ## Exposing RESTful API endpoints
 
