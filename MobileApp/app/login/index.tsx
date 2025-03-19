@@ -11,12 +11,14 @@ export default function LoginScreen() {
     const [stage, setStage] = useState<'login' | 'otp'>('login');
     const router = useRouter();
     //Secret backend ip stored in .env
-    const backendIP = process.env.BACKEND_IP;
+    const backendIP = process.env.EXPO_PUBLIC_BACKEND_IP;
+    
 
     //Sends a POST to the webserver with the user's login information and waits for response
     //Replies with OTP prompt if details correct
     const handleLogin = async () => {
         try {
+            console.log(backendIP)
             const response = await fetch(`${backendIP}/login`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json'},
