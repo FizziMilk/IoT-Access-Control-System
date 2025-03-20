@@ -37,3 +37,7 @@ MobileApp/.env
 *.tsbuildinfo
 
 MobileApp/app-example
+
+RaspberryPi/.env
+
+.env
