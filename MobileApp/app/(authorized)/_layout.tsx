@@ -20,7 +20,7 @@ export default function RootLayout(): ReactNode {
         headerShown: false
       }}
     >
-      <Stack.Screen name="/(authorized)/(tabs)" />
+      <Stack.Screen name="(tabs)" />
     </Stack>
   );
 }
