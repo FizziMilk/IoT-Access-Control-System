@@ -70,6 +70,24 @@ class User(db.Model):
 
 	def check_password(self, password: str) -> bool:
 		return bcrypt.check_password_hash(self.password_hash, password)
+
+## Door schedule database model
+
+class Schedule(db.Model):
+	id = db.Column(db.Integer, primary_key= True)
+	day = db.Column(db.String(10),unique=True, nullable=False)
+	open_time = db.Column(db.Time, nullable=True)
+	close_time = db.Column(db.Time, nullable=True)
+	force_locked = db.Column(db.Boolean,default=False)
+
+	def to_dict(self):
+		return {
+			"day": self.day,
+			"open_time": self.open_time.strftime("%H:%M") if self.open_time else None,
+			"close_time": self.close_time.strftime("%H:%M") if self.close_time else None,
+			"force_unlocked": self.force_unlocked,
+		}
+
 # Create the database tables if they don't exist
 with app.app_context():
 	db.create_all()
@@ -225,7 +243,39 @@ class GetAccessLogs(Resource):
 				"timestamp": log.timestamp.isoformat()
 			})
 		return results, 200
+## Scheduler
 
+class ScheduleAPI(Resource):
+	def get(self):
+		schedule = Schedule.query.all()
+		return jsonify([entry.to_dict() for entry in schedule])
+
+	def put(self):
+		data = request.get_json()
+		if not isinstance(data,list):
+			return{"error": "Invalid data format, expected a list"}, 400
+
+		for entry in data:
+			db_entry = Schedule.query.filter_by(day=entry["day"]).first()
+			if db_entry:
+				db_entry.open_time = entry["open_time"]
+				db_entry.close_time = entry["close_time"]
+				db_entry.force_locked =entry["force_unlocked"]
+			else:
+				new_entry = Schedule(
+					day=entry["day"],
+					open_time=entry["open_time"],
+					close_time=entry["close_time"],
+					force_unlocked=entry["force_unlocked"]
+				)
+				db.session.add(new_entry)
+		db.session.commit()
+
+		# Send schedule update via MQTT
+		mqtt_payload = json.dumps(data)
+		mqtt_client.publish("door/schedule", mqtt_payload)
+
+		return{"message": "Schedule updated successfully"}, 200
 ## MQTT Resources ##
 
 ## Event fires when app connects (debug purposes)
@@ -257,7 +307,7 @@ class LockDoor(Resource):
 
 		mqtt.publish("door/commmands",command, qos = 1)
 
-		return {"status": f"Door command '{command' sent"},200
+		return {"status": f"Door command '{command}' sent"},200
 
 ## Exposing RESTful API endpoints
 
@@ -266,6 +316,7 @@ api.add_resource(CheckVerification,"/verify-otp")
 api.add_resource(StartVerification, "/start-verification")
 api.add_resource(CheckVerificationRPI, "/check-verification-RPI")
 api.add_resource(UnlockDoor, '/unlock')
+api.add_resource(ScheduleAPI,"/schedule")
 api.add_resource(GetAccessLogs, "/access-logs")
 if __name__ == '__main__':
 	app.run(debug=True)
