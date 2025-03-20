@@ -5,3 +5,5 @@ python3: can't open file '/home/benas/access-control-system/IoT-Access-Control-S
   client = mqtt.Client()
 /home/benas/access-control-system/IoT-Access-Control-System/RaspberryPi/doorcontrol.py:16: RuntimeWarning: This channel is already in use, continuing anyway.  Use GPIO.setwarnings(False) to disable warnings.
   GPIO.setup(DOOR_PIN,GPIO.OUT)
+/home/benas/access-control-system/IoT-Access-Control-System/RaspberryPi/doorcontrol.py:16: RuntimeWarning: This channel is already in use, continuing anyway.  Use GPIO.setwarnings(False) to disable warnings.
+  GPIO.setup(DOOR_PIN,GPIO.OUT)
