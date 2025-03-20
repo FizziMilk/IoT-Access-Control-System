@@ -31,7 +31,11 @@ const SchedulePage = () => {
   // Fetch schedule from backend
   useEffect(() => {
     fetch(API_URL)
-      .then(response => response.json())
+      .then(response => response.text()) // Fetch raw text first for debugging
+      .then(text => {
+        console.log("Raw response:", text);
+        return JSON.parse(text);
+      })
       .then(data => {
         console.log("Fetched schedule data:", data);
         if (!Array.isArray(data) || data.length !== 7) {
@@ -72,20 +76,23 @@ const SchedulePage = () => {
 
   // Save schedule to backend
   const saveSchedule = () => {
+    const formattedSchedule = schedule.map(item => ({
+      open: item.open ? item.open.toISOString() : null,
+      close: item.close ? item.close.toISOString() : null,
+      forceUnlocked: item.forceUnlocked,
+    }));
+
+    console.log("Saving schedule:", formattedSchedule); // Debugging output
+
     fetch(API_URL, {
-      method: "POST",
+      method: "PUT", // Changed from POST to PUT
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(
-        schedule.map(item => ({
-          open: item.open ? item.open.toISOString() : null,
-          close: item.close ? item.close.toISOString() : null,
-          forceUnlocked: item.forceUnlocked,
-        }))
-      ),
+      body: JSON.stringify(formattedSchedule),
     })
-      .then(response => {
-        if (!response.ok) throw new Error("Failed to save schedule");
-        return response.json();
+      .then(response => response.text()) // Get raw response first
+      .then(text => {
+        console.log("Raw response:", text);
+        return JSON.parse(text);
       })
       .then(() => Alert.alert("Success", "Schedule updated successfully"))
       .catch(error => {
