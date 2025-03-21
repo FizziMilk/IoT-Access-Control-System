@@ -1,111 +1,121 @@
 import React, { useState, useEffect } from "react";
 import { View, ScrollView, Switch, Alert, ActivityIndicator } from "react-native";
-import { Button, Card, Text } from "react-native-paper";
+import { Text, Button, Card } from "react-native-paper";
 import DateTimePicker from "@react-native-community/datetimepicker";
 
 const backendIP = process.env.EXPO_PUBLIC_BACKEND_IP;
-const API_URL = `${backendIP}/schedule`;
+const backendURL = `${backendIP}/schedule`;
 
-const daysOfWeek = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+type ScheduleEntry = {
+  day: string;
+  open_time: string | null;     // e.g. "08:00"
+  close_time: string | null;    // e.g. "18:00"
+  forceUnlocked: boolean;
+};
 
-type ScheduleItem = {
+// For local state, we store them as Dates for easy DateTimePicker usage.
+type LocalEntry = {
+  day: string;
   open: Date | null;
   close: Date | null;
   forceUnlocked: boolean;
 };
 
-const defaultSchedule: ScheduleItem[] = daysOfWeek.map(() => ({
-  open: null,
-  close: null,
-  forceUnlocked: false,
-}));
-
 const SchedulePage = () => {
-  const [schedule, setSchedule] = useState<ScheduleItem[]>(defaultSchedule);
-  const [pickerVisible, setPickerVisible] = useState<{ index: number | null; type: "open" | "close" | null }>({
-    index: null,
-    type: null,
-  });
+  const [schedule, setSchedule] = useState<LocalEntry[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // Fetch schedule from backend
+  // Which day/time are we editing?
+  const [pickerVisible, setPickerVisible] = useState<{
+    index: number;
+    type: "open" | "close";
+  } | null>(null);
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // 1. Load the Current Schedule from the Backend
+  // ─────────────────────────────────────────────────────────────────────────────
   useEffect(() => {
-    fetch(API_URL)
-      .then(response => response.text()) // Fetch raw text first for debugging
-      .then(text => {
-        console.log("Raw response:", text);
-        return JSON.parse(text);
-      })
-      .then(data => {
-        console.log("Fetched schedule data:", data);
-        if (!Array.isArray(data) || data.length !== 7) {
-          throw new Error("Invalid schedule format from backend");
-        }
-        const formattedData = data.map((item: any, index: number) => ({
-          open: item.open ? new Date(item.open) : null,
-          close: item.close ? new Date(item.close) : null,
-          forceUnlocked: item.forceUnlocked ?? false,
+    fetch(backendURL)
+      .then((res) => res.json())
+      .then((data: ScheduleEntry[]) => {
+        // Convert schedule to local state with Date objects
+        const converted = data.map((item) => ({
+          day: item.day,
+          open: item.open_time
+            ? new Date(`1970-01-01T${item.open_time}:00`) // "HH:MM" -> "1970-01-01THH:MM:00"
+            : null,
+          close: item.close_time
+            ? new Date(`1970-01-01T${item.close_time}:00`)
+            : null,
+          forceUnlocked: item.forceUnlocked,
         }));
-        setSchedule(formattedData);
+        setSchedule(converted);
       })
-      .catch(error => {
-        console.error("Error fetching schedule:", error);
-        Alert.alert("Error", "Failed to load schedule. Using default settings.");
-        setSchedule(defaultSchedule);
+      .catch((err) => {
+        console.error("Error fetching schedule:", err);
+        Alert.alert("Error", "Failed to load schedule.");
       })
       .finally(() => setLoading(false));
   }, []);
 
-  // Update open/close time
-  const updateTime = (index: number, type: "open" | "close", time: Date) => {
-    setSchedule(prevSchedule => {
-      const newSchedule = [...prevSchedule];
-      newSchedule[index] = { ...newSchedule[index], [type]: time };
-      return newSchedule;
-    });
-  };
-
-  // Toggle force unlock
-  const toggleForceUnlock = (index: number) => {
-    setSchedule(prevSchedule => {
-      const newSchedule = [...prevSchedule];
-      newSchedule[index] = { ...newSchedule[index], forceUnlocked: !newSchedule[index].forceUnlocked };
-      return newSchedule;
-    });
-  };
-
-  // Save schedule to backend
+  // ─────────────────────────────────────────────────────────────────────────────
+  // 2. Save the Updated Schedule to the Backend
+  // ─────────────────────────────────────────────────────────────────────────────
   const saveSchedule = () => {
-    const formattedSchedule = schedule.map(item => ({
-      open: item.open ? item.open.toISOString() : null,
-      close: item.close ? item.close.toISOString() : null,
-      forceUnlocked: item.forceUnlocked,
+    // Convert local state (Dates) back to strings ("HH:MM")
+    const payload: ScheduleEntry[] = schedule.map((entry) => ({
+      day: entry.day,
+      open_time: entry.open
+        ? entry.open.toTimeString().slice(0, 5) // e.g. "08:00"
+        : null,
+      close_time: entry.close
+        ? entry.close.toTimeString().slice(0, 5)
+        : null,
+      forceUnlocked: entry.forceUnlocked,
     }));
 
-    console.log("Saving schedule:", formattedSchedule); // Debugging output
-
-    fetch(API_URL, {
-      method: "PUT", // Changed from POST to PUT
+    fetch(backendURL, {
+      method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(formattedSchedule),
+      body: JSON.stringify(payload),
     })
-      .then(response => response.text()) // Get raw response first
-      .then(text => {
-        console.log("Raw response:", text);
-        return JSON.parse(text);
+      .then((res) => res.json())
+      .then((result) => {
+        console.log("Schedule updated:", result);
+        Alert.alert("Success", "Schedule updated successfully!");
       })
-      .then(() => Alert.alert("Success", "Schedule updated successfully"))
-      .catch(error => {
-        console.error("Error saving schedule:", error);
-        Alert.alert("Error", "Failed to update schedule");
+      .catch((err) => {
+        console.error("Error saving schedule:", err);
+        Alert.alert("Error", "Failed to update schedule.");
       });
   };
 
-  // Show loading indicator while fetching data
+  // ─────────────────────────────────────────────────────────────────────────────
+  // 3. Time Picker for "open" or "close"
+  // ─────────────────────────────────────────────────────────────────────────────
+  const handleTimeChange = (
+    event: any,
+    selectedTime: Date | undefined
+  ) => {
+    if (!pickerVisible) return;
+    const { index, type } = pickerVisible;
+
+    if (selectedTime) {
+      const updated = [...schedule];
+      updated[index][type] = selectedTime;
+      setSchedule(updated);
+    }
+    // Hide the picker
+    setPickerVisible(null);
+  };
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // UI
+  // ─────────────────────────────────────────────────────────────────────────────
   if (loading) {
     return (
-      <View style={{ flex: 1, justifyContent: "center", alignItems: "center" }}>
-        <ActivityIndicator size="large" color="#0000ff" />
+      <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
+        <ActivityIndicator size="large" color="#000" />
         <Text>Loading schedule...</Text>
       </View>
     );
@@ -113,39 +123,61 @@ const SchedulePage = () => {
 
   return (
     <ScrollView style={{ padding: 20 }}>
-      {daysOfWeek.map((day, index) => (
-        <Card key={day} style={{ marginBottom: 10, padding: 10 }}>
-          <Text style={{ fontSize: 18, fontWeight: "bold" }}>{day}</Text>
-          <View style={{ flexDirection: "row", justifyContent: "space-between", marginTop: 10 }}>
-            <Button mode="outlined" onPress={() => setPickerVisible({ index, type: "open" })}>
-              {schedule[index]?.open ? schedule[index].open.toLocaleTimeString() : "Set Open Time"}
+      {schedule.map((entry, index) => (
+        <Card key={entry.day} style={{ marginBottom: 10 }}>
+          <Card.Title title={entry.day} />
+          <Card.Content>
+            <Text>Open Time:</Text>
+            <Button
+              mode="outlined"
+              onPress={() => setPickerVisible({ index, type: "open" })}
+            >
+              {entry.open
+                ? entry.open.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+                : "Set Open Time"}
             </Button>
-            <Button mode="outlined" onPress={() => setPickerVisible({ index, type: "close" })}>
-              {schedule[index]?.close ? schedule[index].close.toLocaleTimeString() : "Set Close Time"}
+
+            <Text style={{ marginTop: 10 }}>Close Time:</Text>
+            <Button
+              mode="outlined"
+              onPress={() => setPickerVisible({ index, type: "close" })}
+            >
+              {entry.close
+                ? entry.close.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+                : "Set Close Time"}
             </Button>
-          </View>
-          <View style={{ flexDirection: "row", alignItems: "center", marginTop: 10 }}>
-            <Text>Force Unlock:</Text>
-            <Switch
-              value={schedule[index]?.forceUnlocked ?? false}
-              onValueChange={() => toggleForceUnlock(index)}
-            />
-          </View>
-          {pickerVisible.index === index && pickerVisible.type && (
-            <DateTimePicker
-              value={schedule[index]?.[pickerVisible.type] || new Date()}
-              mode="time"
-              is24Hour={true}
-              display="default"
-              onChange={(_, selectedTime) => {
-                if (selectedTime) updateTime(index, pickerVisible.type as "open" | "close", selectedTime);
-                setPickerVisible({ index: null, type: null });
-              }}
-            />
-          )}
+
+            <View style={{ flexDirection: "row", alignItems: "center", marginTop: 10 }}>
+              <Text>Force Unlocked:</Text>
+              <Switch
+                value={entry.forceUnlocked}
+                onValueChange={() => {
+                  const updated = [...schedule];
+                  updated[index].forceUnlocked = !updated[index].forceUnlocked;
+                  setSchedule(updated);
+                }}
+                style={{ marginLeft: 10 }}
+              />
+            </View>
+          </Card.Content>
         </Card>
       ))}
-      <Button mode="contained" style={{ marginTop: 20, marginBottom: 40, padding: 10 }} onPress={saveSchedule}>
+
+      {/* DateTimePicker for the currently editing day/time */}
+      {pickerVisible && (
+        <DateTimePicker
+          mode="time"
+          value={schedule[pickerVisible.index][pickerVisible.type] || new Date()}
+          onChange={handleTimeChange}
+          is24Hour
+        />
+      )}
+
+      <Button
+        mode="contained"
+        style={{ marginTop: 20, padding: 10 }}
+        onPress={saveSchedule}
+      >
         Save Schedule
       </Button>
     </ScrollView>
