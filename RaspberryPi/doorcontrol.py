@@ -17,7 +17,7 @@ GPIO.setup(DOOR_PIN,GPIO.OUT)
 
 #Get MQTT broker IP from .env
 MQTT_BROKER = os.getenv("MQTT_BROKER")
-MQTT_PORT = int(os.getenv("MQTT_PORT",8883)) #Default to 8883 if not set
+MQTT_PORT = int(os.getenv("MQTT_PORT")) #Default to 8883 if not set
 MQTT_COMMAND_TOPIC = "door/commands"
 MQTT_SCHEDULE_TOPIC = "door/schedule"
 
