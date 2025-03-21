@@ -54,7 +54,7 @@ class AccessLog(db.Model):
     user = db.Column(db.String(50), nullable=False)
     method = db.Column(db.String(50), nullable=False)
     status = db.Column(db.String(20), nullable=False)
-    timestamp = db.Column(db.DateTime, default=datetime.utcnow)
+    timestamp = db.Column(db.DateTime, default=datetime.timezone.utc)
 
     def __repr__(self):
         return f"<AccessLog {self.user} - {self.status}>"
