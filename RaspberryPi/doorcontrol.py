@@ -27,7 +27,7 @@ schedule = {}
 # Path to certificate
 CA_CERT = os.getenv("CA_CERT")
 
-def on_connect(client, userdata, flags, rc):
+def on_connect(client, userdata, flags, rc, properties):
     if rc == 0:
         print("Connected successfully")
         client.subscribe(MQTT_COMMAND_TOPIC)
