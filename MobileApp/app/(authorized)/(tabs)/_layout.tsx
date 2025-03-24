@@ -31,7 +31,16 @@ export default function TabLayout() {
         options={{ 
           title: 'Schedule',
           tabBarIcon: ({ color, focused }) => (
-            <Ionicons name={focused ? 'information-circle' : 'information-circle-outline'} color={color} size={24} />
+            <Ionicons name={focused ? 'time' : 'time-outline'} color={color} size={24} />
+          ),
+        }} 
+      />
+      <Tabs.Screen 
+        name="sendcode" 
+        options={{ 
+          title: 'Send Code',
+          tabBarIcon: ({ color, focused }) => (
+            <Ionicons name={focused ? 'send' : 'send-outline'} color={color} size={24} />
           ),
         }} 
       />
