@@ -7,6 +7,8 @@ from twilio.rest import Client
 from dotenv import load_dotenv
 from flask_bcrypt import Bcrypt
 from flask_jwt_extended import JWTManager, create_access_token
+from apscheduler.schedulers.background import BackgroundScheduler
+from apsecheduler.triggers.date import DateTrigger
 import ssl
 import os
 import json
@@ -51,11 +53,10 @@ db = SQLAlchemy(app)
 
 class AccessLog(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    user = db.Column(db.String(50), nullable=False)
+    user = db.Column(db.String(50), nullable=True)
     method = db.Column(db.String(50), nullable=False)
     status = db.Column(db.String(20), nullable=False)
     timestamp = db.Column(db.DateTime, default=datetime.timezone.utc)
-
     def __repr__(self):
         return f"<AccessLog {self.user} - {self.status}>"
 
@@ -81,6 +82,7 @@ class Schedule(db.Model):
     open_time = db.Column(db.Time, nullable=True)
     close_time = db.Column(db.Time, nullable=True)
     force_locked = db.Column(db.Boolean, default=False)  # True means door is forced locked
+    #Updated after database creation, needs cleanup
 
     def to_dict(self):
         # Return forceUnlocked as the inverse of force_locked.
@@ -151,80 +153,88 @@ class CheckVerification(Resource):
         except Exception as e:
             return {"error": str(e)}, 500
 
-# Verification for RPI?
-class StartVerification(Resource):
+
+# Function to send OTP code
+def send_otp(phone_number):
+    try:
+        # Send the OTP code via Twilio Verify
+        verification = client.verify.v2.services(TWILIO_VERIFY_SID) \
+            .verifications \
+            .create(to=phone_number, channel ="sms")
+
+        new_log = AccessLog(
+            user=phone_number,
+            method="SMS OTP",
+            status="Started"
+        )
+        db.session.add(new_log)
+        db.session.commit()
+        
+        return {"status": "OTP sent"},200
+
+    except Exception as e:
+        # Log failure if Twilio call fails
+        new_log = AccessLog(
+            user=phone_number or "Unknown",
+            method="SMS OTP",
+            status="Failed"
+        )
+        db.session.add(new_log)
+        db.session.commit()
+
+        return {"error": str(e)}, 500
+        
+# Verification for users at the door
+class StartVerificationRPI(Resource):
     def post(self):
         data = request.get_json()
         phone_number = data.get("phone_number")
+        schedule_time = data.get("schedule_time")
 
         if not phone_number:
             return {"error": "phone_number is required"}, 400
 
         try:
-            verification = client.verify.v2.services(TWILIO_VERIFY_SID) \
-                .verifications \
-                .create(to=phone_number, channel="sms")
-
-            # Log the initiation of verification
-            new_log = AccessLog(
-                user=phone_number,
-                method="SMS OTP",
-                status="Started"
-            )
-            db.session.add(new_log)
-            db.session.commit()
-
-            return {"status": verification.status}, 200
-
+            if schedule_time:
+                # Schedule the OTP sending
+                schedule_time = datetime.strptime(schedule_time, "%Y-%m-%dT%H:%M%S")
+                scheduler.add_job(send_otp, DateTrigger(run_date=schedule_time), args=[phone_number])
+                return{"status": "OTP scheduled"}, 200
+            else:
+                # Send the OTP immediately
+                return send_otp(phone_number)
+            
         except Exception as e:
-            # Log failure if Twilio call fails
-            new_log = AccessLog(
-                user=phone_number or "Unknown",
-                method="SMS OTP",
-                status="Failed"
-            )
-            db.session.add(new_log)
-            db.session.commit()
-
             return {"error": str(e)}, 500
+        
+# Initialize the scheduler
+scheduler = BackgroundScheduler()
+scheduler.start()
 
-# Twilio Verification Check
+# Twilio Verification Check for users at the door
 class CheckVerificationRPI(Resource):
     def post(self):
         data = request.get_json()
         phone_number = data.get("phone_number")
-        code = data.get("code")
+        otp_code = data.get("otp_code")
 
-        if not phone_number or not code:
-            return {"error": "phone_number and code are required"}, 400
-
+        if not phone_number or not otp_code:
+            return {"error": "phone_number and otp_code are required"}, 400
+        
         try:
             verification_check = client.verify.v2.services(TWILIO_VERIFY_SID) \
                 .verification_checks \
-                .create(to=phone_number, code=code)
-
-            # Log the verification result
-            new_log = AccessLog(
-                user=phone_number,
-                method="SMS OTP",
-                status=verification_check.status
-            )
-            db.session.add(new_log)
-            db.session.commit()
-
-            return {"status": verification_check.status}, 200
-
+                .create(to=phone_number, code=otp_code)
+            
+            if verification_check.status == "approved":
+                return {"status": "approved"}, 200
+            else:
+                return{"status": verification_check.status}, 400
+            
         except Exception as e:
-            # Log failure
-            new_log = AccessLog(
-                user=phone_number or "Unknown",
-                method="SMS OTP",
-                status="Failed"
-            )
-            db.session.add(new_log)
-            db.session.commit()
-
-            return {"error": str(e)}, 500
+            return {"error": str(e)},500
+                
+        
 
 # Resource to retrieve all logs
 class GetAccessLogs(Resource):
@@ -241,7 +251,7 @@ class GetAccessLogs(Resource):
             })
         return results, 200
 
-## Scheduler
+## Handles the setting of door schedule
 class ScheduleAPI(Resource):
     def get(self):
         schedule = Schedule.query.all()
@@ -309,7 +319,7 @@ class LockDoor(Resource):
 ## Exposing RESTful API endpoints
 api.add_resource(LoginResource, "/login")
 api.add_resource(CheckVerification, "/verify-otp")
-api.add_resource(StartVerification, "/start-verification")
+api.add_resource(StartVerificationRPI, "/start-verification")
 api.add_resource(CheckVerificationRPI, "/check-verification-RPI")
 api.add_resource(UnlockDoor, '/unlock')
 api.add_resource(ScheduleAPI, "/schedule")
