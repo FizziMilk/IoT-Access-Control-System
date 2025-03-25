@@ -147,10 +147,10 @@ def door_entry():
         try:
             ## This is semi-okay, will need to be hidden behind https or implemented with MQTT
             # May reveal the backend IP address
-            resp = requests.post(f"{BACKEND_URL}/door")
+            resp = requests.post(f"{BACKEND_URL}/door-entry")
             data = resp.json()
         except Exception as e:
-            flash("Error connecting to backend." "danger")
+            flash("Error connecting to backend.", "danger")
             return redirect(url_for("door_entry"))
         if data.get("status") == "OTP sent":
             flash("OTP sent to your phone. Please enter the OTP.", "success")
