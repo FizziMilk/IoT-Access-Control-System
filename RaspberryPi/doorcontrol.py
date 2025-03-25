@@ -55,7 +55,7 @@ def verify_otp_mqtt(phone_number, otp_code):
 
     #Publish the verification request on a dedicated topic
     payload = json.dumps({"phone_number": phone_number, "otp_code": otp_code})
-    mqtt.publish("door/otp/verify", payload, qos=1)
+    mqtt.publish("/door/otp/verify", payload, qos=1)
 
     #Wait for a response (timeout after 30 seconds)
     if not event.wait(timeout=30):
@@ -140,7 +140,7 @@ def update_schedule():
         print(f"Error updating schedule: {e}")
         return {"status": "error", "message": str(e)}, 500
     
-@app.route('door/entry', methods=['GET','POST'])
+@app.route('/door-entry', methods=['GET','POST'])
 def door_entry():
     if request.method == "POST":
         phone_number = request.form['phone_number']
