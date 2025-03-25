@@ -34,7 +34,7 @@ app.secret_key = os.getenv("SECRET_KEY", "supersecretkey")
 
 # Flask-MQTT Configuration
 app.config['MQTT_BROKER_URL'] = os.getenv("MQTT_BROKER")
-app.config['MQTT_BROKER_PORT'] = os.getenv("MQTT_PORT")
+app.config['MQTT_BROKER_PORT'] = int(os.getenv("MQTT_PORT"))
 app.config['MQTT_TLS_VERSION'] = ssl.PROTOCOL_TLSv1_2
 app.config['MQTT_TLS_ENABLED'] = True
 app.config['MQTT_TLS_CA_CERTS'] = os.getenv("CA_CERT")
