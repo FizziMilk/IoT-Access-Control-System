@@ -103,6 +103,16 @@ class Schedule(db.Model):
 # Create the database tables if they don't exist
 with app.app_context():
     db.create_all()
+    # Insert default schedule if none exists
+    days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+    if Schedule.query.count() == 0:
+        for day in days:
+            open_time = datetime.strptime("09:00", "%H:%M").time()
+            close_time = datetime.strptime("13:00", "%H:%M").time()
+            new_schedule = Schedule(day=day, open_time=open_time, close_time=close_time, force_unlocked=False)
+            db.session.add(new_schedule)
+        db.session.commit()
+        print("Default schedule added.")
 
 # Handles login request for admin. Checks username and password
 class LoginResource(Resource):
