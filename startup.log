@@ -1,6 +1,0 @@
-/bin/sh: 1: /home/ubuntu/flask-app/startupscript.sh: not found
-Starting flask app on all IPs, port 5000
-/home/ubuntu/flask-app/Backend/startupscript.sh: line 11: flask: command not found
-Starting flask app on all IPs, port 5000
-/home/ubuntu/flask-app/Backend/startupscript.sh: line 11: flask: command not found
-/bin/sh: 1: /home/ubuntu/flask-app/Backend/startupscript.sh: not found

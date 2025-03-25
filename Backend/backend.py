@@ -2,13 +2,13 @@ from flask import Flask, request, jsonify
 from flask_restful import Resource, Api
 from flask_sqlalchemy import SQLAlchemy
 from flask_mqtt import Mqtt
-from datetime import datetime
+from datetime import datetime, timezone
 from twilio.rest import Client
 from dotenv import load_dotenv
 from flask_bcrypt import Bcrypt
 from flask_jwt_extended import JWTManager, create_access_token
 from apscheduler.schedulers.background import BackgroundScheduler
-from apsecheduler.triggers.date import DateTrigger
+from apscheduler.triggers.date import DateTrigger
 import ssl
 import os
 import json
@@ -56,7 +56,11 @@ class AccessLog(db.Model):
     user = db.Column(db.String(50), nullable=True)
     method = db.Column(db.String(50), nullable=False)
     status = db.Column(db.String(20), nullable=False)
+<<<<<<< Updated upstream
     timestamp = db.Column(db.DateTime, default=datetime.timezone.utc)
+=======
+    timestamp = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+>>>>>>> Stashed changes
     def __repr__(self):
         return f"<AccessLog {self.user} - {self.status}>"
 
