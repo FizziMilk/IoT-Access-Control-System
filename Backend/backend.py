@@ -56,11 +56,7 @@ class AccessLog(db.Model):
     user = db.Column(db.String(50), nullable=True)
     method = db.Column(db.String(50), nullable=False)
     status = db.Column(db.String(20), nullable=False)
-<<<<<<< Updated upstream
-    timestamp = db.Column(db.DateTime, default=datetime.timezone.utc)
-=======
     timestamp = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
->>>>>>> Stashed changes
     def __repr__(self):
         return f"<AccessLog {self.user} - {self.status}>"
 
