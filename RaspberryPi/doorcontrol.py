@@ -96,7 +96,7 @@ def check_schedule():
                     print(f"Time format error: {ve}")
                     time.sleep(60)
                     continue
-                current_time = now.replace(second=0, microsecond=0)
+                current_time = now.time().replace(second=0, microsecond=0)
 
                 # If forced unlocked, ensure door is unlocked
                 if force_unlocked:
