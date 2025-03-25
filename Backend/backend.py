@@ -131,6 +131,7 @@ class LoginResource(Resource):
                 "verification_status": verification.status
             }, 200
         except Exception as e:
+            print(f"Error sending OTP: {e}" )
             return {"error": str(e)}, 500
 
 ## Check OTP for phone login
