@@ -1,14 +1,14 @@
-import ssl
 from flask import Flask, render_template, request, redirect, url_for, flash
 import RPi.GPIO as GPIO
 import time
 import requests
 from dotenv import load_dotenv
-import os
 from datetime import datetime
 import threading
 import json
 from flask_mqtt import Mqtt
+import ssl
+import os
 
 # Load environment variables
 load_dotenv()
@@ -18,17 +18,18 @@ DOOR_PIN = 17
 GPIO.setmode(GPIO.BCM)
 GPIO.setup(DOOR_PIN, GPIO.OUT)
 
+BACKEND_URL = os.getenv("BACKEND_URL")
+
 #Get MQTT broker IP from .env
 MQTT_BROKER = os.getenv("MQTT_BROKER")
 MQTT_PORT = int(os.getenv("MQTT_PORT")) #Default to 8883 if not set
 MQTT_COMMAND_TOPIC = "door/commands"
 MQTT_SCHEDULE_TOPIC = "door/schedule"
-# Backend URL
-BACKEND_URL = os.getenv("BACKEND_URL")
 
-
-# Schedule storage (we'll store it as a dict keyed by day)
+# Schedule storage
 schedule = {}
+# Global dictionary to track pending OTP verifications.
+pending_verifications = {}
 
 app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", "supersecretkey")
@@ -49,32 +50,24 @@ def unlock_door(duration=10):
     GPIO.output(DOOR_PIN, GPIO.LOW)  # Deactivate door relay
     print("Door locked")
 
-def verify_otp(phone_number, otp_code):
-    try:
-        response = requests.post(f"{BACKEND_URL}/check-verification-RPI", json={
-            "phone_number": phone_number,
-            "otp_code": otp_code
-        })
-        return response.json()
-    except Exception as e:
-        print(f"Error verifying OTP: {e}")
-        return {"status": "error", "message": str(e)}
+def verify_otp_mqtt(phone_number, otp_code):
+    #Publish OTP verification request via MQTT and wait for response
+    event = threading.Event()
+    pending_verifications[phone_number] = {"event": event, "result": None}
 
-@app.route('/')
-def index():
-    return render_template('index.html')
+    #Publish the verification request on a dedicated topic
+    payload = json.dumps({"phone_number": phone_number, "otp_code": otp_code})
+    mqtt.publish("door/otp/verify", payload, qos=1)
 
-@app.route('/verify', methods=['POST'])
-def verify():
-    phone_number = request.form['phone_number']
-    otp_code = request.form['otp_code']
-    response = verify_otp(phone_number, otp_code)
-    if response.get("status") == "approved":
-        unlock_door()
-        flash("OTP verified, door unlocked", "success")
-    else:
-        flash("Invalid OTP", "danger")
-    return redirect(url_for('index'))
+    #Wait for a response (timeout after 30 seconds)
+    if not event.wait(timeout=30):
+        #Timeout reached, cleanup and return error
+        pending_verifications.pop(phone_number,None)
+        return {"status": "error", "message": "Verification timeout"}
+    
+    #Retrieve the result
+    result = pending_verifications.pop(phone_number)["result"]
+    return result
 
 def check_schedule():
     while True:
@@ -114,6 +107,24 @@ def check_schedule():
 
         time.sleep(60)  # Check every minute
 
+## Flask Routes
+
+@app.route('/')
+def index():
+    return render_template('index.html')
+
+@app.route('/verify', methods=['POST'])
+def verify():
+    phone_number = request.form['phone_number']
+    otp_code = request.form['otp_code']
+    response = verify_otp_mqtt(phone_number, otp_code)
+    if response.get("status") == "approved":
+        unlock_door()
+        flash("OTP verified, door unlocked", "success")
+    else:
+        flash("Invalid OTP", "danger")
+    return redirect(url_for('index'))
+
 @app.route('/update_schedule', methods=['POST'])
 def update_schedule():
     global schedule
@@ -130,7 +141,32 @@ def update_schedule():
     except Exception as e:
         print(f"Error updating schedule: {e}")
         return {"status": "error", "message": str(e)}, 500
-
+    
+@app.route('door/entry', methods=['GET','POST'])
+def door_entry():
+    if request.method == "POST":
+        phone_number = request.form['phone_number']
+        try:
+            ## This is semi-okay, will need to be hidden behind https or implemented with MQTT
+            # May reveal the backend IP address
+            resp = requests.post(f"{BACKEND_URL}/door")
+            data = resp.json()
+        except Exception as e:
+            flash("Error connecting to backend." "danger")
+            return redirect(url_for("door_entry"))
+        if data.get("status") == "OTP sent":
+            flash("OTP sent to your phone. Please enter the OTP.", "success")
+            return render_template("otp.html", phone_number=phone_number)
+        elif data.get("status") == "pending":
+            flash(data.get("message", "Access pending."), "warning")
+            return render_template("pending.html")
+        else:
+            flash(data.get("error", "An error occurred."), "danger")
+            return redirect(url_for("door_entry"))
+    return render_template("door_entry.html")
+    
+## MQTT Handling
+    
 @mqtt.on_connect()
 def handle_connect(client, userdata, flags, rc):
     if rc == 0:
@@ -145,20 +181,20 @@ def handle_connect(client, userdata, flags, rc):
 def handle_mqtt_message(client, userdata, message):
     global schedule
     topic = message.topic
-    command = message.payload.decode()
-    print(f"Received message on {topic}: {command}")
+    payload = message.payload.decode()
+    print(f"Received message on {topic}: {payload}")
     # Handle commands for the door
     if topic == "door/commands":
-        if command == "unlock_door":
+        if payload == "unlock_door":
             unlock_door()  # Use the unlock_door function
-        elif command == "lock_door":
+        elif payload == "lock_door":
             GPIO.output(DOOR_PIN, GPIO.LOW)  # Deactivate door relay
             print("Door locked")
     # Update schedule
     elif topic == "door/schedule":
         try:
             # Parse the raw JSON received (expected as an array)
-            raw = json.loads(command)
+            raw = json.loads(payload)
             # Convert array to a dict keyed by day
             new_schedule = {}
             for entry in raw:
@@ -169,6 +205,16 @@ def handle_mqtt_message(client, userdata, message):
             print(f"Updated schedule: {schedule}")
         except json.JSONDecodeError:
             print("Invalid schedule format received")
+    # OTP verification responses
+    elif topic.startswith("door/otp/response/"):
+        try:
+            response_payload = json.loads(payload)
+            phone_number = response_payload.get("phone_number")
+            if phone_number in pending_verifications:
+                pending_verifications[phone_number]["result"] = response_payload
+                pending_verifications[phone_number]["event"].set()
+        except Exception as e:
+            print(f"Error processing OTP response: {e}")
 
 if __name__ == '__main__':
     # Start the schedule checking in a separate thread
