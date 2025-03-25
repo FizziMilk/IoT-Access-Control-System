@@ -147,7 +147,9 @@ def door_entry():
         try:
             ## This is semi-okay, will need to be hidden behind https or implemented with MQTT
             # May reveal the backend IP address
-            resp = requests.post(f"{BACKEND_URL}/door-entry")
+            resp = requests.post(f"{BACKEND_URL}/door-entry",json={"phone_number":phone_number})
+            print("Status code:", resp.status_code)
+            print("Response text:",resp.text)
             data = resp.json()
         except Exception as e:
             flash("Error connecting to backend.", "danger")
