@@ -90,8 +90,8 @@ def check_schedule():
             if open_time_str and close_time_str:
                 try:
                     # Parse times from "HH:MM" strings
-                    open_time = datetime.strptime(open_time_str, "%H:%M")
-                    close_time = datetime.strptime(close_time_str, "%H:%M")
+                    open_time = datetime.strptime(open_time_str, "%H:%M").time()
+                    close_time = datetime.strptime(close_time_str, "%H:%M").time()
                 except ValueError as ve:
                     print(f"Time format error: {ve}")
                     time.sleep(60)

@@ -21,6 +21,13 @@ type LocalEntry = {
   forceUnlocked: boolean;
 };
 
+const timeStringToDate = (timeString: string): Date => {
+  const [hours, minutes] = timeString.split(':').map(Number);
+  const date = new Date();
+  date.setHours(hours, minutes, 0, 0);
+  return date;
+};
+
 const SchedulePage = () => {
   const [schedule, setSchedule] = useState<LocalEntry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -38,15 +45,11 @@ const SchedulePage = () => {
     fetch(backendURL)
       .then((res) => res.json())
       .then((data: ScheduleEntry[]) => {
-        // Convert schedule to local state with Date objects
+      // Convert schedule to local state with Date objects
         const converted = data.map((item) => ({
           day: item.day,
-          open: item.open_time
-            ? new Date(`1970-01-01T${item.open_time}:00`) // "HH:MM" -> "1970-01-01THH:MM:00"
-            : null,
-          close: item.close_time
-            ? new Date(`1970-01-01T${item.close_time}:00`)
-            : null,
+          open: item.open_time ? timeStringToDate(item.open_time) : null,
+          close: item.close_time ? timeStringToDate(item.close_time) : null,
           forceUnlocked: item.forceUnlocked,
         }));
         setSchedule(converted);
