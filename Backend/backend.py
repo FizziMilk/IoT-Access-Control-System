@@ -89,8 +89,7 @@ class Schedule(db.Model):
     day = db.Column(db.String(10), unique=True, nullable=False)
     open_time = db.Column(db.Time, nullable=True)
     close_time = db.Column(db.Time, nullable=True)
-    force_unlocked = db.Column(db.Boolean, default=False)  # True means door is forced locked
-    #Updated after database creation, needs cleanup
+    force_unlocked = db.Column(db.Boolean, default=False)  # True means door is forced unlocked
 
     def to_dict(self):
         # Return forceUnlocked as the inverse of force_locked.
@@ -98,7 +97,7 @@ class Schedule(db.Model):
             "day": self.day,
             "open_time": self.open_time.strftime("%H:%M") if self.open_time else None,
             "close_time": self.close_time.strftime("%H:%M") if self.close_time else None,
-            "forceUnlocked": not self.force_unlocked,  # Mobile app expects 'forceUnlocked'
+            "forceUnlocked": self.force_unlocked, 
         }
 
 # Create the database tables if they don't exist
