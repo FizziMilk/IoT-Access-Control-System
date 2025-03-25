@@ -39,7 +39,7 @@ app.config['MQTT_BROKER_URL'] = os.getenv("MQTT_BROKER_URL")
 app.config['MQTT_BROKER_PORT'] = 8883
 app.config['MQTT_TLS_VERSION'] = ssl.PROTOCOL_TLSv1_2
 app.config['MQTT_TLS_ENABLED'] = True
-app.config['MQTT_TLS_CA_CERTS'] = '/etc/mosquitto/ca_certificates/ca.crt'
+app.config['MQTT_TLS_CA_CERTS'] = os.getenv("CA_CERT")
 
 mqtt = Mqtt(app)
 
