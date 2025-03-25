@@ -287,7 +287,7 @@ class ScheduleAPI(Resource):
                 db_entry.close_time = close_time
                 db_entry.force_unlocked = force_unlocked
             else:
-                db.session.add(Schedule(day=entry["day"], open_time=open_time, close_time=close_time, force_locked=force_unlocked))
+                db.session.add(Schedule(day=entry["day"], open_time=open_time, close_time=close_time, force_unlocked=force_unlocked))
         db.session.commit()
 
         # Send schedule update via MQTT
