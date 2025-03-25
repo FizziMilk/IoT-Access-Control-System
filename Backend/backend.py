@@ -251,7 +251,33 @@ class CheckVerificationRPI(Resource):
             
         except Exception as e:
             return {"error": str(e)},500
-                
+        
+# Door entry API resource
+class DoorEntryAPI(Resource):
+    def post(self):
+        data = request.get_json()
+        phone_number = data.get("phone_number")
+        if not phone_number:
+            return {"error": "phone_number is required"}, 400
+        
+        user = User.query.filter_by(phone_number=phone_number).first()
+        if user:
+            if user.is_allowed:
+                # Allowed on file - send OTP now and return status.
+                otp_result, status = send_otp(phone_number) 
+                if status == 200:
+                    return {"status" : "OTP sent", "phone_number": phone_number}, 200
+                else:
+                    return otp_result, status
+            else:
+                #User exists but not allowed yet.
+                return {"status": "pending", "message": "Your number is pending review."},
+        else:
+            #Not found - add to user database pending review.
+            new_user = User(phone_number=phone_number, is_allowed=False)
+            db.session.add(new_user)
+            db.session.commit()
+            return{"status": "pending", "message": "Number added. Your access is now pending review."}, 200                
         
 
 # Resource to retrieve all logs
@@ -310,13 +336,44 @@ class ScheduleAPI(Resource):
 
 ## Event fires when app connects (debug purposes)
 @mqtt.on_connect()
-def handle_connect(client, userdata, flags, rc):
+def handle_connect(mqtt_client, userdata, flags, rc):
     if rc == 0:
         print("Connected to MQTT broker!:")
         mqtt.subscribe('door/responses')
+        mqtt.subscribe("door/otp/verify")
     else:
         print("Failed to connect, return code %d\n", rc)
 
+# MQTT Handler for OTP verification requests
+@mqtt.on_message()
+def handle_otp_verification(mqtt_client, userdata, message):
+    if message.topic == "door/otp/verify":
+        try:
+            payload = message.payload.decode()
+            data = json.loads(payload)
+            phone_number = data.get("phone_number")
+            otp_code = data.get("otp_code")
+            print(f"Received OTP verification request for {phone_number}")
+
+            # Use Twilio Verify to check OTP:
+            verification_check = client.verify.v2.services(TWILIO_VERIFY_SID) \
+                .verification_checks \
+                .create(to=phone_number,code = otp_code)
+             
+            if verification_check.status == "approved":
+                res = {"phone_number": phone_number, "status": "approved"}
+            else:
+                res = {"phone_number": phone_number, "status": verification_check.status}
+
+        except Exception as e:
+            res = {"phone_number": phone_number, "status": "error", "message": str(e)}
+            print(f"Error during OTP verification for {phone_number}: {e}")
+
+        # Publish the verification response to a topic specific to the phone number.
+        response_topic = f"door/otp/response/{phone_number}"
+        mqtt.publish(response_topic,json.dumps(res), qos=1)
+        print(f"Published OTP verification result for {phone_number} on topic {response_topic}")
+    
 # MQTT Resource to unlock door with RPI
 class UnlockDoor(Resource):
     def post(self):
@@ -342,6 +399,7 @@ api.add_resource(CheckVerificationRPI, "/check-verification-RPI")
 api.add_resource(UnlockDoor, '/unlock')
 api.add_resource(ScheduleAPI, "/schedule")
 api.add_resource(GetAccessLogs, "/access-logs")
+api.add_resource(DoorEntryAPI, "/door-entry")
 
 if __name__ == '__main__':
     app.run(debug=True)
