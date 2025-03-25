@@ -89,7 +89,7 @@ class Schedule(db.Model):
     day = db.Column(db.String(10), unique=True, nullable=False)
     open_time = db.Column(db.Time, nullable=True)
     close_time = db.Column(db.Time, nullable=True)
-    force_locked = db.Column(db.Boolean, default=False)  # True means door is forced locked
+    force_unlocked = db.Column(db.Boolean, default=False)  # True means door is forced locked
     #Updated after database creation, needs cleanup
 
     def to_dict(self):
@@ -98,7 +98,7 @@ class Schedule(db.Model):
             "day": self.day,
             "open_time": self.open_time.strftime("%H:%M") if self.open_time else None,
             "close_time": self.close_time.strftime("%H:%M") if self.close_time else None,
-            "forceUnlocked": not self.force_locked,  # Mobile app expects 'forceUnlocked'
+            "forceUnlocked": not self.force_unlocked,  # Mobile app expects 'forceUnlocked'
         }
 
 # Create the database tables if they don't exist
@@ -264,10 +264,14 @@ class GetAccessLogs(Resource):
 class ScheduleAPI(Resource):
     def get(self):
         schedule = Schedule.query.all()
-        return jsonify([entry.to_dict() for entry in schedule])
+        schedule_list = [entry.to_dict() for entry in schedule]
+        print(f"Schedule data: {schedule_list}")  # Add logging
+        return jsonify(schedule_list)
+
 
     def put(self):
         data = request.get_json()
+        print(f"Received schedule update: {data}")  # Add logging
         if not isinstance(data, list):
             return {"error": "Invalid data format, expected a list"}, 400
 
@@ -277,18 +281,14 @@ class ScheduleAPI(Resource):
             # Convert time strings to time objects if provided
             open_time = datetime.strptime(entry["open_time"], "%H:%M").time() if entry["open_time"] else None
             close_time = datetime.strptime(entry["close_time"], "%H:%M").time() if entry["close_time"] else None
-
-            # Mobile app sends forceUnlocked (true means door forced unlocked),
-            # so store the inverse in force_locked.
             force_unlocked = entry.get("forceUnlocked", False)
-            force_locked = not force_unlocked
-
+            
             if db_entry:
                 db_entry.open_time = open_time
                 db_entry.close_time = close_time
-                db_entry.force_locked = force_locked
+                db_entry.force_unlocked = force_unlocked
             else:
-                db.session.add(Schedule(day=entry["day"], open_time=open_time, close_time=close_time, force_locked=force_locked))
+                db.session.add(Schedule(day=entry["day"], open_time=open_time, close_time=close_time, force_locked=force_unlocked))
         db.session.commit()
 
         # Send schedule update via MQTT
