@@ -21,8 +21,6 @@ GPIO.setup(DOOR_PIN, GPIO.OUT)
 BACKEND_URL = os.getenv("BACKEND_URL")
 
 #Get MQTT broker IP from .env
-MQTT_BROKER = os.getenv("MQTT_BROKER")
-MQTT_PORT = int(os.getenv("MQTT_PORT")) #Default to 8883 if not set
 MQTT_COMMAND_TOPIC = "door/commands"
 MQTT_SCHEDULE_TOPIC = "door/schedule"
 
@@ -35,8 +33,8 @@ app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", "supersecretkey")
 
 # Flask-MQTT Configuration
-app.config['MQTT_BROKER_URL'] = os.getenv("MQTT_BROKER_URL")
-app.config['MQTT_BROKER_PORT'] = 8883
+app.config['MQTT_BROKER_URL'] = os.getenv("MQTT_BROKER")
+app.config['MQTT_BROKER_PORT'] = os.getenv("MQTT_PORT")
 app.config['MQTT_TLS_VERSION'] = ssl.PROTOCOL_TLSv1_2
 app.config['MQTT_TLS_ENABLED'] = True
 app.config['MQTT_TLS_CA_CERTS'] = os.getenv("CA_CERT")
