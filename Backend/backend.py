@@ -56,16 +56,13 @@ class AccessLog(db.Model):
     user = db.Column(db.String(50), nullable=True)
     method = db.Column(db.String(50), nullable=False)
     status = db.Column(db.String(20), nullable=False)
-<<<<<<< HEAD
-=======
     timestamp = db.Column(db.DateTime, default=datetime.timezone.utc)
->>>>>>> 0d97bfe219852f975cd66a1b5b2c46d62b79577e
     def __repr__(self):
         return f"<AccessLog {self.user} - {self.status}>"
 
-## User database model
+## Admin database model
 
-class User(db.Model):
+class Admin(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(50), unique=True, nullable=False)
     password_hash = db.Column(db.String(128), nullable=False)
@@ -76,6 +73,14 @@ class User(db.Model):
 
     def check_password(self, password: str) -> bool:
         return bcrypt.check_password_hash(self.password_hash, password)
+
+## User database model
+
+class User(db.Model):
+    id = db.Column(db.Integer, primary_key = True)
+    phone_number = db.Column(db.String(20), unique=True, nullable=False)
+    is_allowed = db.Column(db.Boolean,default=False)
+    face_data = db.Column(db.LargeBinary, nullable=True) # Assuming face data is stored as binary
 
 ## Door schedule database model
 
@@ -100,7 +105,7 @@ class Schedule(db.Model):
 with app.app_context():
     db.create_all()
 
-# Handles login request. Checks username and password
+# Handles login request for admin. Checks username and password
 class LoginResource(Resource):
     def post(self):
         data = request.get_json()
@@ -110,19 +115,19 @@ class LoginResource(Resource):
         if not username or not password:
             return {"error": "Username and password required"}, 400
         # Check credentials
-        user = User.query.filter_by(username=username).first()
-        if not user or not user.check_password(password):
+        admin = Admin.query.filter_by(username=username).first()
+        if not admin or not admin.check_password(password):
             return {"error": "Invalid credentials"}, 401
         # Credentials are valid, send OTP to user's phone
         try:
             verification = client.verify.v2.services(TWILIO_VERIFY_SID) \
                 .verifications \
-                .create(to=user.phone_number, channel="sms")
+                .create(to=admin.phone_number, channel="sms")
             # Return OK to let client proceed 
             return {
                 "status": "OK",
                 "message": "OTP sent to user",
-                "phone_number": user.phone_number,
+                "phone_number": admin.phone_number,
                 "verification_status": verification.status
             }, 200
         except Exception as e:
@@ -138,17 +143,17 @@ class CheckVerification(Resource):
         if not username or not code:
             return {"error": "username and code are required"}, 400
 
-        user = User.query.filter_by(username=username).first()
-        if not user:
+        admin = Admin.query.filter_by(username=username).first()
+        if not admin:
             return {"error": "User not found"}, 404
 
         try:
             verification_check = client.verify.v2.services(TWILIO_VERIFY_SID) \
                 .verification_checks \
-                .create(to=user.phone_number, code=code)
+                .create(to=admin.phone_number, code=code)
 
             if verification_check.status == "approved":
-                access_token = create_access_token(identity=user.id)
+                access_token = create_access_token(identity=admin.id)
                 return {"status": "approved", "token": access_token}, 200
             else:
                 return {"status": verification_check.status}, 200
