@@ -49,22 +49,27 @@ def unlock_door(duration=10):
     print("Door locked")
 
 def verify_otp_mqtt(phone_number, otp_code):
-    #Publish OTP verification request via MQTT and wait for response
+    # Create an event to wait for the response
     event = threading.Event()
     pending_verifications[phone_number] = {"event": event, "result": None}
 
-    #Publish the verification request on a dedicated topic
+    # Create payload and print it for debugging
     payload = json.dumps({"phone_number": phone_number, "otp_code": otp_code})
-    mqtt.publish("door/otp/verify", payload, qos=1)
+    print(f"[DEBUG] Publishing OTP verification request: {payload}")
 
-    #Wait for a response (timeout after 30 seconds)
+    # Publish the verification request to MQTT topic
+    mqtt.publish("door/otp/verify", payload, qos=1)
+    
+    # Wait for a response (timeout after 30 seconds)
+    print(f"[DEBUG] Waiting for OTP verification response for {phone_number}")
     if not event.wait(timeout=30):
-        #Timeout reached, cleanup and return error
-        pending_verifications.pop(phone_number,None)
+        print(f"[DEBUG] Timeout waiting for OTP verification response for {phone_number}")
+        pending_verifications.pop(phone_number, None)
         return {"status": "error", "message": "Verification timeout"}
     
-    #Retrieve the result
+    # Retrieve and print the result before returning it
     result = pending_verifications.pop(phone_number)["result"]
+    print(f"[DEBUG] Received OTP verification response for {phone_number}: {result}")
     return result
 
 def check_schedule():
