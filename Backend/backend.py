@@ -23,7 +23,6 @@ JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY")
 twilio_client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
 
 TWILIO_VERIFY_SID = "VA1c1c5d9906340e1c187f83dbc26057a0"
-####
 
 app = Flask(__name__)
 api = Api(app)
@@ -94,7 +93,6 @@ class Schedule(db.Model):
     force_unlocked = db.Column(db.Boolean, default=False)  # True means door is forced unlocked
 
     def to_dict(self):
-        # Return forceUnlocked as the inverse of force_locked.
         return {
             "day": self.day,
             "open_time": self.open_time.strftime("%H:%M") if self.open_time else None,
@@ -173,7 +171,6 @@ class CheckVerification(Resource):
         except Exception as e:
             return {"error": str(e)}, 500
 
-
 # Function to send OTP code
 def send_otp(phone_number):
     try:
@@ -219,7 +216,7 @@ class StartVerificationRPI(Resource):
                 # Schedule the OTP sending
                 schedule_time = datetime.strptime(schedule_time, "%Y-%m-%dT%H:%M%S")
                 scheduler.add_job(send_otp, DateTrigger(run_date=schedule_time), args=[phone_number])
-                return{"status": "OTP scheduled"}, 200
+                return {"status": "OTP scheduled"}, 200
             else:
                 # Send the OTP immediately
                 return send_otp(phone_number)
@@ -249,7 +246,7 @@ class CheckVerificationRPI(Resource):
             if verification_check.status == "approved":
                 return {"status": "approved"}, 200
             else:
-                return{"status": verification_check.status}, 400
+                return {"status": verification_check.status}, 400
             
         except Exception as e:
             return {"error": str(e)},500
@@ -279,8 +276,7 @@ class DoorEntryAPI(Resource):
             new_user = User(phone_number=phone_number, is_allowed=False)
             db.session.add(new_user)
             db.session.commit()
-            return{"status": "pending", "message": "Number added. Your access is now pending review."}, 200                
-        
+            return {"status": "pending", "message": "Number added. Your access is now pending review."}, 200                
 
 # Resource to retrieve all logs
 class GetAccessLogs(Resource):
@@ -304,7 +300,6 @@ class ScheduleAPI(Resource):
         schedule_list = [entry.to_dict() for entry in schedule]
         print(f"Schedule data: {schedule_list}")  # Add logging
         return jsonify(schedule_list)
-
 
     def put(self):
         data = request.get_json()
@@ -360,7 +355,7 @@ class UserManagementAPI(Resource):
         if new_permission is None:
             return {"error": "is_allowed field is required"}, 400
         user.is_allowed = new_permission
-        # Optionally update teh user name if provided
+        # Optionally update the user name if provided
         if "name" in data:
             user.name = data["name"]
         db.session.commit()
@@ -405,17 +400,14 @@ def handle_connect(client, userdata, flags, rc):
 @mqtt.on_disconnect()
 def handle_disconnect(client, userdata, rc):
     print(f"[DEBUG] Disconnected from MQTT broker with code {rc}")
-
-
-    # Add this to see all MQTT client logs
-    @mqtt.on_log()
-    def handle_logging(client, userdata, level, buf):
-        print(f"[MQTT LOG] {buf}")
-
     try:
         mqtt._connect()  # Force connection attempt
     except Exception as e:
         print(f"[ERROR] Failed to connect to MQTT: {e}")
+
+@mqtt.on_log()
+def handle_logging(client, userdata, level, buf):
+    print(f"[MQTT LOG] {buf}")
 
 # MQTT Handler for OTP verification requests
 @mqtt.on_message()
@@ -460,7 +452,6 @@ class LockDoor(Resource):
     def post(self):
         data = request.get_json()
         command = data.get("command", "lock_door")
-        # Fixing typo in topic name: 'door/commmands' -> 'door/commands'
         mqtt.publish("door/commands", command, qos=1)
         return {"status": f"Door command '{command}' sent"}, 200
 
@@ -479,7 +470,6 @@ api.add_resource(UpdateUserNameAPI, "/update-user-name")
 if __name__ == '__main__':
     try:
         mqtt._connect()
-        app.run(debug=True, use_reloader = False)
+        app.run(debug=True, use_reloader=False)
     except Exception as e:
         print(f"[ERROR] failed to start application:{e}")
-
