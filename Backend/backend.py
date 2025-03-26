@@ -387,6 +387,7 @@ class UpdateUserNameAPI(Resource):
 
 @mqtt.on_connect()
 def handle_connect(client, userdata, flags, rc):
+    print(f"[DEBUG] handle_connect triggered with rc: {rc}")
     rc_codes = {
         0: "Connected successfully",
         1: "Incorrect protocol version",
@@ -404,6 +405,8 @@ def handle_connect(client, userdata, flags, rc):
             (f"door/otp/response/+", 1)
         ])
         print("[DEBUG] Successfully subscribed to MQTT topics")
+    else:
+        print(f"[ERROR] MQTT connection failed with rc: {rc}")
 
 @mqtt.on_subscribe()
 def handle_subscribe(client, userdata, mid, granted_qos):
