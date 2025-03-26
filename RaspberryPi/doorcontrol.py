@@ -9,6 +9,7 @@ import json
 from flask_mqtt import Mqtt
 import ssl
 import os
+import atexit
 
 # Load environment variables
 load_dotenv()
@@ -38,6 +39,11 @@ app.config['MQTT_BROKER_PORT'] = int(os.getenv("MQTT_PORT"))
 app.config['MQTT_TLS_VERSION'] = ssl.PROTOCOL_TLSv1_2
 app.config['MQTT_TLS_ENABLED'] = True
 app.config['MQTT_TLS_CA_CERTS'] = os.getenv("CA_CERT")
+
+required_env_vars = ["MQTT_BROKER", "MQTT_PORT", "CA_CERT", "BACKEND_URL"]
+for var in required_env_vars:
+    if not os.getenv(var):
+        raise EnvironmentError(f"Missing required environment variable: {var}")
 
 mqtt = Mqtt(app)
 
@@ -128,9 +134,12 @@ def verify():
         flash("OTP verified, door unlocked", "success")
         time.sleep(10)
         return redirect(url_for('index'))
+    elif response.get("status") == "error":
+        flash(response.get("message", "An error occurred during verification"), "danger")
+        return render_template("otp.html", phone_number=phone_number)
     else:
-        flash(response.get("message", "Invalid OTP"), "danger")
-        return render_template("otp.html", phone_number = phone_number)
+        flash("Invalid OTP or unexpected response", "danger")
+        return render_template("otp.html", phone_number=phone_number)
 
 @app.route('/update_schedule', methods=['POST'])
 def update_schedule():
@@ -231,6 +240,16 @@ def handle_mqtt_message(client,userdata,message):
 
     except Exception as e:
         print(f"[DEBUG] Error handling MQTT message: {str(e)}")
+
+@mqtt.on_subscribe()
+def handle_subscribe(client, userdata, mid, granted_qos):
+    print(f"[DEBUG] Subscribed to topic with mid: {mid}, granted QoS: {granted_qos}")
+
+def cleanup_gpio():
+    GPIO.cleanup()
+    print("[DEBUG] GPIO cleanup completed")
+
+atexit.register(cleanup_gpio)
     
 if __name__ == '__main__':
     # Start the schedule checking in a separate thread
