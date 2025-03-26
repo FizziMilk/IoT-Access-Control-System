@@ -386,8 +386,9 @@ class UpdateUserNameAPI(Resource):
 def handle_connect(mqtt, userdata, flags, rc):
     if rc == 0:
         print("Connected to MQTT broker!:")
-        mqtt.subscribe("door/responses")
-        mqtt.subscribe("door/otp/verify")
+        
+        mqtt.subscribe("door/otp/verify", qos =1 )
+        print("Subscribed to door/otp/verfiy")
     else:
         print("Failed to connect, return code %d\n", rc)
 
