@@ -12,6 +12,9 @@
     <div class="alert alert-warning mt-4">
       Your phone number is pending review. Please provide your name so the admin can easily identify you.
     </div>
+    {% if error_message %}
+    <div class="alert alert-danger">{{ error_message }}</div>
+    {% endif %}
     <form method="POST" action="{{ url_for('update_name') }}">
       <input type="hidden" name="phone_number" value="{{ phone_number }}">
       <div class="form-group">
