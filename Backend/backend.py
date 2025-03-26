@@ -386,8 +386,8 @@ class UpdateUserNameAPI(Resource):
 def handle_connect(mqtt_client, userdata, flags, rc):
     if rc == 0:
         print("Connected to MQTT broker!:")
-        mqtt.subscribe("door/responses")
-        mqtt.subscribe("door/otp/verify")
+        mqtt_client.subscribe("door/responses")
+        mqtt_client.subscribe("door/otp/verify")
     else:
         print("Failed to connect, return code %d\n", rc)
 
@@ -418,7 +418,7 @@ def handle_otp_verification(mqtt_client, userdata, message):
 
         # Publish the verification response to a topic specific to the phone number.
         response_topic = f"door/otp/response/{phone_number}"
-        mqtt.publish(response_topic,json.dumps(res), qos=1)
+        mqtt_client.publish(response_topic,json.dumps(res), qos=1)
         print(f"Published OTP verification result for {phone_number} on topic {response_topic}")
     
 # MQTT Resource to unlock door with RPI
