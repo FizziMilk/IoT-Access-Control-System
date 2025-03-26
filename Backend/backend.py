@@ -383,14 +383,24 @@ class UpdateUserNameAPI(Resource):
 
 ## Event fires when app connects (debug purposes)
 @mqtt.on_connect()
-def handle_connect(mqtt, userdata, flags, rc):
+def handle_connect(client, userdata, flags, rc):
+    """
+    rc values:
+    0: Connection successful
+    1: Connection refused - incorrect protocol version
+    2: Connection refused - invalid client identifier
+    3: Connection refused - server unavailable
+    4: Connection refused - bad username or password
+    5: Connection refused - not authorised
+    """
+    print(f"[DEBUG] MQTT Connect callback executed with code {rc}")
     if rc == 0:
-        print("Connected to MQTT broker!:")
-        
-        mqtt.subscribe("door/otp/verify", qos =1 )
-        print("Subscribed to door/otp/verfiy")
+        print("[DEBUG] Successfully connected to MQTT broker")
+        # Subscribe to topics
+        mqtt.subscribe("door/otp/verify", qos=1)
+        print("[DEBUG] Subscribed to door/otp/verify")
     else:
-        print("Failed to connect, return code %d\n", rc)
+        print(f"[ERROR] Failed to connect to MQTT broker with code {rc}")
 
 # MQTT Handler for OTP verification requests
 @mqtt.on_message()
