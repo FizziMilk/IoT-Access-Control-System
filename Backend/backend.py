@@ -382,35 +382,30 @@ class UpdateUserNameAPI(Resource):
 
 ## MQTT Resources
 
-@app.before_first_request
-def initialize_mqtt():
-    print("[DEBUG] Initializing MQTT connection...")
-    # Add error callback
-    @mqtt.on_connect()
-    def handle_connect(client, userdata, flags, rc):
-        rc_codes = {
-            0: "Connected successfully",
-            1: "Incorrect protocol version",
-            2: "Invalid client identifier",
-            3: "Server unavailable",
-            4: "Bad username or password",
-            5: "Not authorized"
-        }
-        if rc == 0:
-            print(f"[DEBUG] Connected to MQTT broker with result code {rc}")
-            mqtt.subscribe([
-                ("door/commands", 1),
-                ("door/schedule", 1),
-                ("door/otp/verify", 1),
-                (f"door/otp/response/+", 1)
-            ])
-            print("[DEBUG] Subscribed to all necessary topics")
-        else:
-            print(f"[ERROR] Failed to connect to MQTT broker: {rc_codes.get(rc, 'Unknown error')}")
+@mqtt.on_connect()
+def handle_connect(client, userdata, flags, rc):
+    rc_codes = {
+        0: "Connected successfully",
+        1: "Incorrect protocol version",
+        2: "Invalid client identifier",
+        3: "Server unavailable",
+        4: "Bad username or password",
+        5: "Not authorized"
+    }
+    print(f"[DEBUG] MQTT Connect callback with result code: {rc} ({rc_codes.get(rc, 'Unknown error')})")
+    if rc == 0:
+        mqtt.subscribe([
+            ("door/commands", 1),
+            ("door/schedule", 1),
+            ("door/otp/verify", 1),
+            (f"door/otp/response/+", 1)
+        ])
+        print("[DEBUG] Successfully subscribed to MQTT topics")
 
-    @mqtt.on_disconnect()
-    def handle_disconnect(client, userdata, rc):
-        print(f"[DEBUG] Disconnected from MQTT broker with code {rc}")
+@mqtt.on_disconnect()
+def handle_disconnect(client, userdata, rc):
+    print(f"[DEBUG] Disconnected from MQTT broker with code {rc}")
+
 
     # Add this to see all MQTT client logs
     @mqtt.on_log()
@@ -482,4 +477,9 @@ api.add_resource(UserManagementAPI, "/users")
 api.add_resource(UpdateUserNameAPI, "/update-user-name")
 
 if __name__ == '__main__':
-    app.run(debug=True, use_reloader = False)
+    try:
+        mqtt._connect()
+        app.run(debug=True, use_reloader = False)
+    except Exception as e:
+        print(f"[ERROR] failed to start application:{e}")
+
