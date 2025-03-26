@@ -13,6 +13,9 @@ import ssl
 import os
 import json
 from twilio.base.exceptions import TwilioRestException
+import logging
+
+logging.basicConfig(level=logging.DEBUG, format="%(asctime)s [%(levelname)s] %(message)s")
 
 # Twilio Setup
 load_dotenv("twilio.env")  # Load the Twilio environment file
