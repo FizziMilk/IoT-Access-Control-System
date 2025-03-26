@@ -215,10 +215,9 @@ def verify_otp_mqtt(phone_number, otp_code):
         payload = json.dumps({"phone_number": phone_number, "otp_code": otp_code})
         print(f"[DEBUG] Publishing OTP verification request: {payload}")
 
-        # Publish with error checking
-        result = mqtt.publish("door/otp/verify", payload, qos=1)
-        result.wait_for_publish()  # Wait for publish confirmation
-        print(f"[DEBUG] Message published successfully: {result.is_published()}")
+        # Publish without waiting (Flask-MQTT handles QoS internally)
+        mqtt.publish("door/otp/verify", payload, qos=1)
+        print(f"[DEBUG] OTP verification request published")
         
         # Wait for a response (timeout after 30 seconds)
         print(f"[DEBUG] Waiting for OTP verification response for {phone_number}")
@@ -234,7 +233,7 @@ def verify_otp_mqtt(phone_number, otp_code):
     except Exception as e:
         print(f"[DEBUG] Error in verify_otp_mqtt: {str(e)}")
         return {"status": "error", "message": f"MQTT error: {str(e)}"}
-
+    
 if __name__ == '__main__':
     # Start the schedule checking in a separate thread
     schedule_thread = threading.Thread(target=check_schedule)
