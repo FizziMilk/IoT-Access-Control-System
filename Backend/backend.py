@@ -365,6 +365,20 @@ class UserManagementAPI(Resource):
         db.session.commit()
         return {"message": "User updated successfully"}, 200    
 
+class UpdateUserNameAPI(Resource):
+    def post(self):
+        data = request.get_json()
+        phone_number = data.get("phone_number")
+        name = data.get("name")
+        if not phone_number or not name:
+            return {"error": "phone_number and name are required"}, 400
+        user = User.query.filter_by(phone_number=phone_number).first()
+        if not user:
+            return {"error": "User not found"}, 404
+        user.name = name
+        db.session.commit()
+        return {"status": "success", "message": "Name updated"}, 200
+
 ## MQTT Resources
 
 ## Event fires when app connects (debug purposes)
@@ -434,6 +448,7 @@ api.add_resource(ScheduleAPI, "/schedule")
 api.add_resource(GetAccessLogs, "/access-logs")
 api.add_resource(DoorEntryAPI, "/door-entry")
 api.add_resource(UserManagementAPI, "/users")
+api.add_resource(UpdateUserNameAPI, "/update-user-name")
 
 if __name__ == '__main__':
     app.run(debug=True)
