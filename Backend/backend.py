@@ -471,14 +471,6 @@ api.add_resource(UpdateUserNameAPI, "/update-user-name")
 
 if __name__ == '__main__':
     try:
-        mqtt._connect()  # Force MQTT connection
-        mqtt.subscribe([
-            ("door/commands", 1),
-            ("door/schedule", 1),
-            ("door/otp/verify", 1),
-            (f"door/otp/response/+", 1)
-        ])
-        print("[DEBUG] Forced subscription to MQTT topics")
         app.run(debug=True, use_reloader=False)
     except Exception as e:
         print(f"[ERROR] Failed to start application: {e}")
