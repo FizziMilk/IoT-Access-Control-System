@@ -205,6 +205,31 @@ def handle_connect(client, userdata, flags, rc):
     else:
         print(f"[DEBUG] Connection failed with code {rc}")
 
+@mqtt.on_message()
+def handle_mqtt_message(client,userdata,message):
+    print(f"[DEBUG] Received message on topic: {message.topic}")
+    try:
+        if message.topic.startswith("door/otp/response/"):
+            # Extract phone number from topic
+            phone_number = message.topic.split('/')[-1]
+            if phone_number in pending_verifications:
+                payload = json.loads(message.payload.decode())
+                print(f"[DEBUG] OTP response payload: {payload}")
+                pending_verifications[phone_number]["result"] = payload
+                pending_verifications[phone_number]["event"].set()
+
+        elif message.topic == "door/commands":
+            command = message.payload.decode()
+            if command == "unlock_door":
+                unlock_door()
+            elif command == "lock_door":
+                GPIO.output(DOOR_PIN,GPIO.LOW)
+        elif message.topic == "door/schedule":
+            schedule_data = json.loads(message.payload.decode())
+            update_schedule(schedule_data)
+    except Exception as e:
+        print(f"[DEBUG] Error handling MQTT message: {str(e)}")
+
 def verify_otp_mqtt(phone_number, otp_code):
     try:
         # Create an event to wait for the response
