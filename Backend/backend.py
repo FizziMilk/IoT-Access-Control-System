@@ -397,6 +397,10 @@ def handle_connect(client, userdata, flags, rc):
         ])
         print("[DEBUG] Successfully subscribed to MQTT topics")
 
+@mqtt.on_subscribe()
+def handle_subscribe(client, userdata, mid, granted_qos):
+    print(f"[DEBUG] Subscribed to topic with mid: {mid}, granted QoS: {granted_qos}")
+
 @mqtt.on_disconnect()
 def handle_disconnect(client, userdata, rc):
     print(f"[DEBUG] Disconnected from MQTT broker with code {rc}")
