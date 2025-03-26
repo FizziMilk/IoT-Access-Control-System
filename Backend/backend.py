@@ -20,7 +20,7 @@ TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
 # Other secrets
 MQTT_BROKER_URL = os.getenv("MQTT_BROKER_URL")
 JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY")
-client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+twilio_client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
 
 TWILIO_VERIFY_SID = "VA1c1c5d9906340e1c187f83dbc26057a0"
 ####
@@ -36,6 +36,7 @@ app.config['MQTT_TLS_VERSION'] = ssl.PROTOCOL_TLSv1_2
 app.config['MQTT_TLS_ENABLED'] = True
 app.config['MQTT_TLS_CA_CERTS'] = '/etc/mosquitto/ca_certificates/ca.crt'
 
+print(f"[DEBUG] Attempting to connect to MQTT broker at {MQTT_BROKER_URL}: {app.config['MQTT_BROKER_PORT']}")
 mqtt = Mqtt(app)
 
 ## JWT Setup
@@ -130,7 +131,7 @@ class LoginResource(Resource):
             return {"error": "Invalid credentials"}, 401
         # Credentials are valid, send OTP to user's phone
         try:
-            verification = client.verify.v2.services(TWILIO_VERIFY_SID) \
+            verification = twilio_client.verify.v2.services(TWILIO_VERIFY_SID) \
                 .verifications \
                 .create(to=admin.phone_number, channel="sms")
             # Return OK to let client proceed 
@@ -159,7 +160,7 @@ class CheckVerification(Resource):
             return {"error": "User not found"}, 404
 
         try:
-            verification_check = client.verify.v2.services(TWILIO_VERIFY_SID) \
+            verification_check = twilio_client.verify.v2.services(TWILIO_VERIFY_SID) \
                 .verification_checks \
                 .create(to=admin.phone_number, code=code)
 
@@ -177,7 +178,7 @@ class CheckVerification(Resource):
 def send_otp(phone_number):
     try:
         # Send the OTP code via Twilio Verify
-        verification = client.verify.v2.services(TWILIO_VERIFY_SID) \
+        verification = twilio_client.verify.v2.services(TWILIO_VERIFY_SID) \
             .verifications \
             .create(to=phone_number, channel ="sms")
 
@@ -241,7 +242,7 @@ class CheckVerificationRPI(Resource):
             return {"error": "phone_number and otp_code are required"}, 400
         
         try:
-            verification_check = client.verify.v2.services(TWILIO_VERIFY_SID) \
+            verification_check = twilio_client.verify.v2.services(TWILIO_VERIFY_SID) \
                 .verification_checks \
                 .create(to=phone_number, code=otp_code)
             
@@ -384,24 +385,15 @@ class UpdateUserNameAPI(Resource):
 ## Event fires when app connects (debug purposes)
 @mqtt.on_connect()
 def handle_connect(client, userdata, flags, rc):
-    """
-    rc values:
-    0: Connection successful
-    1: Connection refused - incorrect protocol version
-    2: Connection refused - invalid client identifier
-    3: Connection refused - server unavailable
-    4: Connection refused - bad username or password
-    5: Connection refused - not authorised
-    """
-    print(f"[DEBUG] MQTT Connect callback executed with code {rc}")
     if rc == 0:
-        print("[DEBUG] Successfully connected to MQTT broker")
-        # Subscribe to topics
-        
-        mqtt.subscribe("door/otp/verify", qos=1)
-        print("[DEBUG] Subscribed to door/otp/verify")
-    else:
-        print(f"[ERROR] Failed to connect to MQTT broker with code {rc}")
+        print(f"[DEBUG] Connected to MQTT broker with result code {rc}")
+        mqtt.subscribe([
+            ("door/commands", 1),
+            ("door/schedule", 1),
+            (f"door/otp/response/+", 1),  # Use + wildcard for phone numbers
+            ("door/otp/verify",1)
+        ])
+        print("[DEBUG] Subscribed to all necessary topics")
 
 # MQTT Handler for OTP verification requests
 @mqtt.on_message()
@@ -415,7 +407,7 @@ def handle_otp_verification(client, userdata, message):
             print(f"[DEBUG] Received OTP verification request for {phone_number}")
 
             # Use Twilio Verify to check OTP
-            verification_check = client.verify.v2.services(TWILIO_VERIFY_SID) \
+            verification_check = twilio_client.verify.v2.services(TWILIO_VERIFY_SID) \
                 .verification_checks \
                 .create(to=phone_number, code=otp_code)
              
