@@ -1,5 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useCallback } from 'react';
 import { View, Text, TextInput, Button,Switch, FlatList, Alert, StyleSheet } from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
 
 const backendIP = process.env.EXPO_PUBLIC_BACKEND_IP;
 
@@ -14,16 +15,22 @@ export default function Management() {
     const [phoneNumber, setPhoneNumber ] = useState('');
     const [users, setUsers] = useState<User[]>([]);
 
-    // Fetch users from the backend when the component mounts
-    useEffect(() => {
+    const fetchUsers = () => {
         fetch(`${backendIP}/users`)
-        .then(res => res.json())
-        .then((data:User[]) => setUsers(data))
-        .catch(err => {
+          .then(res => res.json())
+          .then((data: User[]) => setUsers(data))
+          .catch(err => {
             console.error("Error fetching users:", err);
-            Alert.alert("Error", "Failed to fetch users");    
-        });
-    }, []);
+            Alert.alert("Error", "Failed to fetch users");
+          });
+      };
+    
+      // Fetch users when the screen comes into focus
+      useFocusEffect(
+        useCallback(() => {
+          fetchUsers();
+        }, [])
+      );
 
     // Update a user's permission via the backend
     const updateUserPermission = (userId: number, newPermission: boolean) => {
