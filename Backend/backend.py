@@ -244,7 +244,7 @@ class CheckVerificationRPI(Resource):
                 return {"status": verification_check.status}, 400
             
         except Exception as e:
-            return {"error": str(e)},500
+            return {"error": str(e)}, 500
         
 # Door entry API resource
 class DoorEntryAPI(Resource):
