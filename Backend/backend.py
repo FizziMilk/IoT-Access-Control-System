@@ -12,6 +12,7 @@ from apscheduler.triggers.date import DateTrigger
 import ssl
 import os
 import json
+from twilio.base.exceptions import TwilioRestException
 
 # Twilio Setup
 load_dotenv("twilio.env")  # Load the Twilio environment file
@@ -188,6 +189,10 @@ def send_otp(phone_number):
         db.session.commit()
         
         return {"status": "OTP sent"},200
+
+    except TwilioRestException as e:
+        print(f"[ERROR] Twilio error: {e}")
+        return {"error": f"Twilio error: {e.msg}"}, 500
 
     except Exception as e:
         # Log failure if Twilio call fails
@@ -432,7 +437,7 @@ def handle_otp_verification(client, userdata, message):
             if verification_check.status == "approved":
                 res = {"phone_number": phone_number, "status": "approved"}
             else:
-                res = {"phone_number": phone_number, "status": verification_check.status}
+                res = {"phone_number": phone_number, "status": "denied"}
 
         except Exception as e:
             res = {"phone_number": phone_number, "status": "error", "message": str(e)}
@@ -442,7 +447,7 @@ def handle_otp_verification(client, userdata, message):
         response_topic = f"door/otp/response/{phone_number}"
         mqtt.publish(response_topic, json.dumps(res), qos=1)
         print(f"[DEBUG] Published OTP verification result to {response_topic}")
-    
+        
 # MQTT Resource to unlock door with RPI
 class UnlockDoor(Resource):
     def post(self):
@@ -472,18 +477,7 @@ api.add_resource(UserManagementAPI, "/users")
 api.add_resource(UpdateUserNameAPI, "/update-user-name")
 
 if __name__ == '__main__':
-    try:
-        mqtt._connect()
-        mqtt.subscribe([
-        ("door/commands", 1),
-        ("door/schedule", 1),
-        ("door/otp/verify", 1),
-        (f"door/otp/response/+", 1)])
-    except Exception as e:
-        print("[DEBUG] Forced subscription to MQTT topics")
-
         app.run(debug=True, use_reloader=False)
-    
-    
-        
-    
+
+
+
