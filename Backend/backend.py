@@ -7,8 +7,6 @@ from twilio.rest import Client
 from dotenv import load_dotenv
 from flask_bcrypt import Bcrypt
 from flask_jwt_extended import JWTManager, create_access_token
-from apscheduler.schedulers.background import BackgroundScheduler
-from apscheduler.triggers.date import DateTrigger
 import ssl
 import os
 import json
@@ -220,22 +218,11 @@ class StartVerificationRPI(Resource):
             return {"error": "phone_number is required"}, 400
 
         try:
-            if schedule_time:
-                # Schedule the OTP sending
-                schedule_time = datetime.strptime(schedule_time, "%Y-%m-%dT%H:%M%S")
-                scheduler.add_job(send_otp, DateTrigger(run_date=schedule_time), args=[phone_number])
-                return {"status": "OTP scheduled"}, 200
-            else:
-                # Send the OTP immediately
-                return send_otp(phone_number)
+            send_otp(phone_number)
             
         except Exception as e:
             return {"error": str(e)}, 500
         
-# Initialize the scheduler
-scheduler = BackgroundScheduler()
-scheduler.start()
-
 # Twilio Verification Check for users at the door
 class CheckVerificationRPI(Resource):
     def post(self):
@@ -483,7 +470,18 @@ api.add_resource(UserManagementAPI, "/users")
 api.add_resource(UpdateUserNameAPI, "/update-user-name")
 
 if __name__ == '__main__':
+    try:
+        mqtt._connect()  # Force MQTT connection
+        mqtt.subscribe([
+            ("door/commands", 1),
+            ("door/schedule", 1),
+            ("door/otp/verify", 1),
+            (f"door/otp/response/+", 1)
+        ])
+        print("[DEBUG] Forced subscription to MQTT topics")
         app.run(debug=True, use_reloader=False)
+    except Exception as e:
+        print(f"[ERROR] Failed to start application: {e}")
 
 
 
