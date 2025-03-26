@@ -397,6 +397,7 @@ def handle_connect(client, userdata, flags, rc):
     if rc == 0:
         print("[DEBUG] Successfully connected to MQTT broker")
         # Subscribe to topics
+        
         mqtt.subscribe("door/otp/verify", qos=1)
         print("[DEBUG] Subscribed to door/otp/verify")
     else:
@@ -404,19 +405,19 @@ def handle_connect(client, userdata, flags, rc):
 
 # MQTT Handler for OTP verification requests
 @mqtt.on_message()
-def handle_otp_verification(mqtt, userdata, message):
+def handle_otp_verification(client, userdata, message):
     if message.topic == "door/otp/verify":
         try:
             payload = message.payload.decode()
             data = json.loads(payload)
             phone_number = data.get("phone_number")
             otp_code = data.get("otp_code")
-            print(f"Received OTP verification request for {phone_number}")
+            print(f"[DEBUG] Received OTP verification request for {phone_number}")
 
-            # Use Twilio Verify to check OTP:
+            # Use Twilio Verify to check OTP
             verification_check = client.verify.v2.services(TWILIO_VERIFY_SID) \
                 .verification_checks \
-                .create(to=phone_number,code = otp_code)
+                .create(to=phone_number, code=otp_code)
              
             if verification_check.status == "approved":
                 res = {"phone_number": phone_number, "status": "approved"}
@@ -425,12 +426,12 @@ def handle_otp_verification(mqtt, userdata, message):
 
         except Exception as e:
             res = {"phone_number": phone_number, "status": "error", "message": str(e)}
-            print(f"Error during OTP verification for {phone_number}: {e}")
+            print(f"[DEBUG] Error during OTP verification for {phone_number}: {e}")
 
-        # Publish the verification response to a topic specific to the phone number.
+        # Publish the verification response
         response_topic = f"door/otp/response/{phone_number}"
-        mqtt.publish(response_topic,json.dumps(res), qos=1)
-        print(f"Published OTP verification result for {phone_number} on topic {response_topic}")
+        mqtt.publish(response_topic, json.dumps(res), qos=1)
+        print(f"[DEBUG] Published OTP verification result to {response_topic}")
     
 # MQTT Resource to unlock door with RPI
 class UnlockDoor(Resource):
