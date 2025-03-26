@@ -78,6 +78,7 @@ class Admin(db.Model):
 
 class User(db.Model):
     id = db.Column(db.Integer, primary_key = True)
+    name = db.Column(db.String(50), nullable = True)
     phone_number = db.Column(db.String(20), unique=True, nullable=False)
     is_allowed = db.Column(db.Boolean,default=False)
     face_data = db.Column(db.LargeBinary, nullable=True) # Assuming face data is stored as binary
@@ -331,6 +332,38 @@ class ScheduleAPI(Resource):
         mqtt.publish("door/schedule", mqtt_payload)
 
         return {"message": "Schedule updated successfully"}, 200
+    
+# API resource to manage users
+class UserManagementAPI(Resource):
+    def get(self):
+        users = User.query.all()
+        user_list = []
+        for user in users:
+            user_list.append({
+                "id": user.id,
+                "name": user.name,
+                "phone_number": user.phone_number,
+                "is_allowed": user.is_allowed
+            })
+        return user_list, 200
+    
+    def put(self):
+        data = request.get_json()
+        user_id = data.get("id")
+        if not user_id:
+            return {"error": "User id required"}, 400
+        user = User.query.get(user_id)
+        if not user:
+            return {"error": "User not found"}, 404
+        new_permission = data.get("is_allowed")
+        if new_permission is None:
+            return {"error": "is_allowed field is required"}, 400
+        user.is_allowed = new_permission
+        # Optionally update teh user name if provided
+        if "name" in data:
+            user.name = data["name"]
+        db.session.commit()
+        return {"message": "User updated successfully"}, 200    
 
 ## MQTT Resources
 
@@ -400,6 +433,7 @@ api.add_resource(UnlockDoor, '/unlock')
 api.add_resource(ScheduleAPI, "/schedule")
 api.add_resource(GetAccessLogs, "/access-logs")
 api.add_resource(DoorEntryAPI, "/door-entry")
+api.add_resource(UserManagementAPI, "/users")
 
 if __name__ == '__main__':
     app.run(debug=True)
