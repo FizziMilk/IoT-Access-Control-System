@@ -55,7 +55,7 @@ def verify_otp_mqtt(phone_number, otp_code):
 
     #Publish the verification request on a dedicated topic
     payload = json.dumps({"phone_number": phone_number, "otp_code": otp_code})
-    mqtt.publish("/door/otp/verify", payload, qos=1)
+    mqtt.publish("door/otp/verify", payload, qos=1)
 
     #Wait for a response (timeout after 30 seconds)
     if not event.wait(timeout=30):
@@ -180,7 +180,7 @@ def update_name():
         if data.get("status") == "success":
             flash("Name updated succesffuly. Please wait for admin approval.", "info")
         else:
-            flask(data.get("error", "Error updating name"), "danger")
+            flash(data.get("error", "Error updating name"), "danger")
     except Exception as e:
         flash("Error connecting to backend.", "danger")
     return redirect(url_for("door_entry"))
