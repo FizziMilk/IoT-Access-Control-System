@@ -387,7 +387,7 @@ def handle_connect(mqtt_client, userdata, flags, rc):
     if rc == 0:
         print("Connected to MQTT broker!:")
         mqtt.subscribe('door/responses')
-        mqtt.subscribe("door/otp/verify")
+        mqtt.subscribe('door/otp/verify')
     else:
         print("Failed to connect, return code %d\n", rc)
 
