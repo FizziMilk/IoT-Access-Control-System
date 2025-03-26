@@ -54,32 +54,23 @@ def unlock_door(duration=10):
     GPIO.output(DOOR_PIN, GPIO.LOW)  # Deactivate door relay
     print("Door locked")
 
-def verify_otp_mqtt(phone_number, otp_code):
+def verify_otp_rest(phone_number, otp_code):
     try:
-        event = threading.Event()
-        pending_verifications[phone_number] = {"event": event, "result": None}
+        payload = {"phone_number": phone_number, "otp_code": otp_code}
+        print(f"[DEBUG] Sending OTP verification request to backend: {payload}")
         
-        payload = json.dumps({"phone_number": phone_number, "otp_code": otp_code})
-        print(f"[DEBUG] Publishing verification request: {payload}")
+        # Send the request to the backend
+        response = requests.post(f"{BACKEND_URL}/check-verification-RPI", json=payload)
+        print(f"[DEBUG] Backend response: {response.status_code} - {response.text}")
         
-        # Publish and verify it was sent
-        publish_result = mqtt.publish("door/otp/verify", payload, qos=1)
-        print(f"[DEBUG] Publish result: {publish_result}")
-        
-        print(f"[DEBUG] Waiting for verification response for {phone_number}")
-        if not event.wait(timeout=30):
-            print(f"[DEBUG] Timeout waiting for response")
-            pending_verifications.pop(phone_number, None)
-            return {"status": "error", "message": "Verification timeout"}
-        
-        result = pending_verifications.pop(phone_number)["result"]
-        print(f"[DEBUG] Got verification response: {result}")
-        return result
-        
+        if response.status_code == 200:
+            return response.json()
+        else:
+            return {"status": "error", "message": response.json().get("error", "Unknown error")}
     except Exception as e:
-        print(f"[DEBUG] Error in verify_otp_mqtt: {str(e)}")
+        print(f"[DEBUG] Error in verify_otp_rest: {str(e)}")
         return {"status": "error", "message": str(e)}
-
+    
 def check_schedule():
     while True:
         now = datetime.now()
@@ -128,7 +119,7 @@ def index():
 def verify():
     phone_number = request.form['phone_number']
     otp_code = request.form['otp_code']
-    response = verify_otp_mqtt(phone_number, otp_code)
+    response = verify_otp_rest(phone_number, otp_code)
     if response.get("status") == "approved":
         unlock_door()
         flash("OTP verified, door unlocked", "success")
