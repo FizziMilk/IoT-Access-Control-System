@@ -119,9 +119,11 @@ def verify():
     if response.get("status") == "approved":
         unlock_door()
         flash("OTP verified, door unlocked", "success")
+        time.sleep(10)
+        return redirect(url_for('index'))
     else:
-        flash("Invalid OTP", "danger")
-    return redirect(url_for('index'))
+        flash(response.get("message", "Invalid OTP"), "danger")
+        return render_template("otp.html", phone_number = phone_number)
 
 @app.route('/update_schedule', methods=['POST'])
 def update_schedule():
@@ -228,6 +230,7 @@ def handle_mqtt_message(client, userdata, message):
         try:
             response_payload = json.loads(payload)
             phone_number = response_payload.get("phone_number")
+            print(f"OTP response for {phone_number}: {response_payload}")
             if phone_number in pending_verifications:
                 pending_verifications[phone_number]["result"] = response_payload
                 pending_verifications[phone_number]["event"].set()
