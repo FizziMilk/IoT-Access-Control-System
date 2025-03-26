@@ -10,8 +10,16 @@
   <div class="container mt-5">
     <h1 class="text-center">Access Pending</h1>
     <div class="alert alert-warning mt-4">
-      Your phone number is pending review. Please try again later.
+      Your phone number is pending review. Please provide your name so the admin can easily identify you.
     </div>
+    <form method="POST" action="{{ url_for('update_name') }}">
+      <input type="hidden" name="phone_number" value="{{ phone_number }}">
+      <div class="form-group">
+        <label for="name">Your Name:</label>
+        <input type="text" class="form-control" id="name" name="name" placeholder="Enter your name" required>
+      </div>
+      <button type="submit" class="btn btn-primary">Submit Name</button>
+    </form>
   </div>
 </body>
 </html>

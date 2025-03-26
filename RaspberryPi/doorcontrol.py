@@ -159,11 +159,29 @@ def door_entry():
             return render_template("otp.html", phone_number=phone_number)
         elif data.get("status") == "pending":
             flash(data.get("message", "Access pending."), "warning")
-            return render_template("pending.html")
+            return render_template("pending.html", phone_number=phone_number)
         else:
             flash(data.get("error", "An error occurred."), "danger")
             return redirect(url_for("door_entry"))
     return render_template("door_entry.html")
+
+@app.route('/update-name', methods=['POST'])
+def update_name():
+    phone_number = request.form.get('phone_number')
+    name = request.form.get('name')
+    if not phone_number or not name:
+        flash("Name and phone number are required.", "danger")
+        return redirect(url_for("door_entry"))
+    try:
+        resp = requests.post(f"{BACKEND_URL}/update-user-name", json={"phone_number": phone_number, "name": name})
+        data = resp.json()
+        if data.get("status") == "success":
+            flash("Name updated succesffuly. Please wait for admin approval.", "info")
+        else:
+            flask(data.get("error", "Error updating name"), "danger")
+    except Exception as e:
+        flash("Error connecting to backend.", "danger")
+    return redirect(url_for("door_entry"))
     
 ## MQTT Handling
     
