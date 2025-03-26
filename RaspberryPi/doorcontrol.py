@@ -198,7 +198,7 @@ def handle_connect(client, userdata, flags, rc):
         print("Connected successfully")
         mqtt.subscribe("door/commands")
         mqtt.subscribe("door/schedule")
-        mqtt.subscribe("door/otp")
+        mqtt.subscribe("door/otp/verify")
     else:
         print(f"Connection failed with code {rc}")
 
