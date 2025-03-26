@@ -271,7 +271,7 @@ class DoorEntryAPI(Resource):
                     return otp_result, status
             else:
                 #User exists but not allowed yet.
-                return {"status": "pending", "message": "Your number is pending review."},
+                return {"status": "pending", "message": "Your number is pending review."}, 200
         else:
             #Not found - add to user database pending review.
             new_user = User(phone_number=phone_number, is_allowed=False)
