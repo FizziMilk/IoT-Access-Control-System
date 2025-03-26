@@ -195,52 +195,45 @@ def update_name():
 @mqtt.on_connect()
 def handle_connect(client, userdata, flags, rc):
     if rc == 0:
-        print("Connected successfully")
-        mqtt.subscribe("door/commands")
-        mqtt.subscribe("door/schedule")
-        mqtt.subscribe("door/otp/verify")
+        print("[DEBUG] Connected successfully to MQTT broker")
+        # Subscribe to necessary topics
+        mqtt.subscribe("door/commands", qos=1)
+        mqtt.subscribe("door/schedule", qos=1)
+        # Subscribe to OTP response topic pattern
+        mqtt.subscribe("door/otp/response/#", qos=1)  # Added wildcard subscription
+        print("[DEBUG] Subscribed to MQTT topics")
     else:
-        print(f"Connection failed with code {rc}")
+        print(f"[DEBUG] Connection failed with code {rc}")
 
-@mqtt.on_message()
-def handle_mqtt_message(client, userdata, message):
-    global schedule
-    topic = message.topic
-    payload = message.payload.decode()
-    print(f"Received message on {topic}: {payload}")
-    # Handle commands for the door
-    if topic == "door/commands":
-        if payload == "unlock_door":
-            unlock_door()  # Use the unlock_door function
-        elif payload == "lock_door":
-            GPIO.output(DOOR_PIN, GPIO.LOW)  # Deactivate door relay
-            print("Door locked")
-    # Update schedule
-    elif topic == "door/schedule":
-        try:
-            # Parse the raw JSON received (expected as an array)
-            raw = json.loads(payload)
-            # Convert array to a dict keyed by day
-            new_schedule = {}
-            for entry in raw:
-                day = entry.get("day")
-                if day:
-                    new_schedule[day] = entry
-            schedule = new_schedule
-            print(f"Updated schedule: {schedule}")
-        except json.JSONDecodeError:
-            print("Invalid schedule format received")
-    # OTP verification responses
-    elif topic.startswith("door/otp/response/"):
-        try:
-            response_payload = json.loads(payload)
-            phone_number = response_payload.get("phone_number")
-            print(f"OTP response for {phone_number}: {response_payload}")
-            if phone_number in pending_verifications:
-                pending_verifications[phone_number]["result"] = response_payload
-                pending_verifications[phone_number]["event"].set()
-        except Exception as e:
-            print(f"Error processing OTP response: {e}")
+def verify_otp_mqtt(phone_number, otp_code):
+    try:
+        # Create an event to wait for the response
+        event = threading.Event()
+        pending_verifications[phone_number] = {"event": event, "result": None}
+
+        # Create payload and print it for debugging
+        payload = json.dumps({"phone_number": phone_number, "otp_code": otp_code})
+        print(f"[DEBUG] Publishing OTP verification request: {payload}")
+
+        # Publish with error checking
+        result = mqtt.publish("door/otp/verify", payload, qos=1)
+        result.wait_for_publish()  # Wait for publish confirmation
+        print(f"[DEBUG] Message published successfully: {result.is_published()}")
+        
+        # Wait for a response (timeout after 30 seconds)
+        print(f"[DEBUG] Waiting for OTP verification response for {phone_number}")
+        if not event.wait(timeout=30):
+            print(f"[DEBUG] Timeout waiting for OTP verification response for {phone_number}")
+            pending_verifications.pop(phone_number, None)
+            return {"status": "error", "message": "Verification timeout"}
+        
+        # Retrieve and print the result before returning it
+        result = pending_verifications.pop(phone_number)["result"]
+        print(f"[DEBUG] Received OTP verification response for {phone_number}: {result}")
+        return result
+    except Exception as e:
+        print(f"[DEBUG] Error in verify_otp_mqtt: {str(e)}")
+        return {"status": "error", "message": f"MQTT error: {str(e)}"}
 
 if __name__ == '__main__':
     # Start the schedule checking in a separate thread
