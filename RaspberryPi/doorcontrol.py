@@ -49,28 +49,30 @@ def unlock_door(duration=10):
     print("Door locked")
 
 def verify_otp_mqtt(phone_number, otp_code):
-    # Create an event to wait for the response
-    event = threading.Event()
-    pending_verifications[phone_number] = {"event": event, "result": None}
-
-    # Create payload and print it for debugging
-    payload = json.dumps({"phone_number": phone_number, "otp_code": otp_code})
-    print(f"[DEBUG] Publishing OTP verification request: {payload}")
-
-    # Publish the verification request to MQTT topic
-    mqtt.publish("door/otp/verify", payload, qos=1)
-    
-    # Wait for a response (timeout after 30 seconds)
-    print(f"[DEBUG] Waiting for OTP verification response for {phone_number}")
-    if not event.wait(timeout=30):
-        print(f"[DEBUG] Timeout waiting for OTP verification response for {phone_number}")
-        pending_verifications.pop(phone_number, None)
-        return {"status": "error", "message": "Verification timeout"}
-    
-    # Retrieve and print the result before returning it
-    result = pending_verifications.pop(phone_number)["result"]
-    print(f"[DEBUG] Received OTP verification response for {phone_number}: {result}")
-    return result
+    try:
+        event = threading.Event()
+        pending_verifications[phone_number] = {"event": event, "result": None}
+        
+        payload = json.dumps({"phone_number": phone_number, "otp_code": otp_code})
+        print(f"[DEBUG] Publishing verification request: {payload}")
+        
+        # Publish and verify it was sent
+        publish_result = mqtt.publish("door/otp/verify", payload, qos=1)
+        print(f"[DEBUG] Publish result: {publish_result}")
+        
+        print(f"[DEBUG] Waiting for verification response for {phone_number}")
+        if not event.wait(timeout=30):
+            print(f"[DEBUG] Timeout waiting for response")
+            pending_verifications.pop(phone_number, None)
+            return {"status": "error", "message": "Verification timeout"}
+        
+        result = pending_verifications.pop(phone_number)["result"]
+        print(f"[DEBUG] Got verification response: {result}")
+        return result
+        
+    except Exception as e:
+        print(f"[DEBUG] Error in verify_otp_mqtt: {str(e)}")
+        return {"status": "error", "message": str(e)}
 
 def check_schedule():
     while True:
@@ -195,15 +197,13 @@ def update_name():
 @mqtt.on_connect()
 def handle_connect(client, userdata, flags, rc):
     if rc == 0:
-        print("[DEBUG] Connected successfully to MQTT broker")
-        # Subscribe to necessary topics
-        mqtt.subscribe("door/commands", qos=1)
-        mqtt.subscribe("door/schedule", qos=1)
-        # Subscribe to OTP response topic pattern
-        mqtt.subscribe("door/otp/response/#", qos=1)  # Added wildcard subscription
-        print("[DEBUG] Subscribed to MQTT topics")
-    else:
-        print(f"[DEBUG] Connection failed with code {rc}")
+        print(f"[DEBUG] Connected to MQTT broker with result code {rc}")
+        mqtt.subscribe([
+            ("door/commands", 1),
+            ("door/schedule", 1),
+            (f"door/otp/response/+", 1)  # Use + wildcard for phone numbers
+        ])
+        print("[DEBUG] Subscribed to all necessary topics")
 
 @mqtt.on_message()
 def handle_mqtt_message(client,userdata,message):
@@ -224,40 +224,13 @@ def handle_mqtt_message(client,userdata,message):
                 unlock_door()
             elif command == "lock_door":
                 GPIO.output(DOOR_PIN,GPIO.LOW)
+
         elif message.topic == "door/schedule":
             schedule_data = json.loads(message.payload.decode())
             update_schedule(schedule_data)
+
     except Exception as e:
         print(f"[DEBUG] Error handling MQTT message: {str(e)}")
-
-def verify_otp_mqtt(phone_number, otp_code):
-    try:
-        # Create an event to wait for the response
-        event = threading.Event()
-        pending_verifications[phone_number] = {"event": event, "result": None}
-
-        # Create payload and print it for debugging
-        payload = json.dumps({"phone_number": phone_number, "otp_code": otp_code})
-        print(f"[DEBUG] Publishing OTP verification request: {payload}")
-
-        # Publish without waiting (Flask-MQTT handles QoS internally)
-        mqtt.publish("door/otp/verify", payload, qos=1)
-        print(f"[DEBUG] OTP verification request published")
-        
-        # Wait for a response (timeout after 30 seconds)
-        print(f"[DEBUG] Waiting for OTP verification response for {phone_number}")
-        if not event.wait(timeout=30):
-            print(f"[DEBUG] Timeout waiting for OTP verification response for {phone_number}")
-            pending_verifications.pop(phone_number, None)
-            return {"status": "error", "message": "Verification timeout"}
-        
-        # Retrieve and print the result before returning it
-        result = pending_verifications.pop(phone_number)["result"]
-        print(f"[DEBUG] Received OTP verification response for {phone_number}: {result}")
-        return result
-    except Exception as e:
-        print(f"[DEBUG] Error in verify_otp_mqtt: {str(e)}")
-        return {"status": "error", "message": f"MQTT error: {str(e)}"}
     
 if __name__ == '__main__':
     # Start the schedule checking in a separate thread
