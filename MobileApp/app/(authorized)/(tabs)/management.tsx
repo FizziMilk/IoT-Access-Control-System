@@ -1,5 +1,5 @@
 import React, { useState, useCallback } from 'react';
-import { View, Text, TextInput, Button,Switch, FlatList, Alert, StyleSheet } from 'react-native';
+import { View, Text, TextInput, Button,Switch, FlatList, Alert, StyleSheet, TouchableOpacity } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 
 const backendIP = process.env.EXPO_PUBLIC_BACKEND_IP;
@@ -13,6 +13,7 @@ interface User {
 
 export default function Management() {
     const [phoneNumber, setPhoneNumber ] = useState('');
+    const [name, setName] = useState('');
     const [users, setUsers] = useState<User[]>([]);
 
     const fetchUsers = () => {
@@ -31,6 +32,53 @@ export default function Management() {
           fetchUsers();
         }, [])
       );
+
+    
+      const addUser = async () => {
+        if (!phoneNumber) {
+            Alert.alert("Error", "Phone number is required");
+            return;
+        }
+        try{
+            const response = await fetch(`${backendIP}/users`,{
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ name,phone_number: phoneNumber}),
+            });
+            const data = await response.json();
+            if (response.ok) {
+                Alert.alert("Success", "User added successfully");
+                setUsers(prev => [...prev, { id: data.id, name, phone_number: phoneNumber, is_allowed: false}]);
+                setName('');
+                setPhoneNumber('');
+            } else {
+                Alert.alert("Error", data.error || "Failed to add user");
+            }
+        } catch (error) {
+            const err = error as Error;
+            Alert.alert("Error", err.message);
+        }
+    };
+
+        const removeUser = async (userId: number) => {
+            try {
+                const response = await fetch(`${backendIP}/users`,{
+                    method: 'DELETE',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({id: userId}),
+                });
+                const data = await response.json();
+                if (response.ok) {
+                    Alert.alert("Success", "User removed successfully");
+                    setUsers(prev => prev.filter(user => user.id !== userId));
+                } else {
+                    Alert.alert("Error",data.error || "Failed to remove user");
+                }
+            } catch(error){
+                const err = error as Error;
+                Alert.alert("Error", err.message);
+            }
+        }
 
     // Update a user's permission via the backend
     const updateUserPermission = (userId: number, newPermission: boolean) => {
@@ -56,6 +104,7 @@ export default function Management() {
             });
     };
 
+    /* Legacy code to send a user an OTP, not in use currently
     const handleSendOTP = async () => {
         try {
             const response = await fetch(`${backendIP}/start-verification`, {
@@ -73,18 +122,24 @@ export default function Management() {
             const err = error as Error;
             Alert.alert('Error', err.message);
         }
-    };
+    }; */
     return (
         <View style = {styles.container}>
-            <Text style = {styles.title}>Send OTP</Text>
+            <Text style = {styles.title}>Add User</Text>
             <TextInput
                 style={styles.input}
-                placeholder="Phone Number"
+                placeholder="Name (optional)"
+                value={name}
+                onChangeText={setName}
+            />
+            <TextInput
+                style={styles.input}
+                placeholder="Phone Number (With country code)"
                 value={phoneNumber}
                 onChangeText={setPhoneNumber}
                 keyboardType="phone-pad"
             />
-            <Button title= "Send OTP Now" onPress={handleSendOTP}/>
+            <Button title= "Add User" onPress={addUser}/>
 
             {/* User Management Section */}
             <Text style={[styles.title, {fontSize: 20, marginTop: 32}]}> User Management</Text>
@@ -93,7 +148,14 @@ export default function Management() {
                 keyExtractor= {(item) => item.id.toString()}
                 renderItem = {({ item }) => (
                     <View style = {styles.userRow}>
-                        <Text style = {styles.userText}>{item.name ? item.name : item.phone_number}</Text>
+                        
+                    <TouchableOpacity
+                        style={styles.removeButton}
+                        onPress={() => removeUser(item.id)}
+                    >
+                        <Text style = {styles.removeButtonText}>Remove</Text>
+                    </TouchableOpacity>
+                    <Text style = {styles.userText}>{item.name ? item.name : item.phone_number}</Text>
                         <Switch
                             value={item.is_allowed}
                             onValueChange={(value) => updateUserPermission(item.id,value)}
@@ -122,6 +184,7 @@ const styles = StyleSheet.create({
     userRow: {
         flexDirection: 'row',
         alignItems: 'center',
+        justifyContent: 'space-between',
         marginVertical: 8,
     },
     userText: {
@@ -131,5 +194,17 @@ const styles = StyleSheet.create({
     permissionText: {
         marginLeft: 8,
         fontSize: 16,
+    },
+    removeButton: {
+        backgroundColor: 'red',
+        paddingVertical: 4,
+        paddingHorizontal: 8,
+        borderRadius: 8,
+        marginRight: 8,
+    },
+    removeButtonText: {
+        color: 'white',
+        fontSize: 12,
+        textAlign: 'center',
     },
 });
