@@ -367,7 +367,10 @@ class UserManagementAPI(Resource):
         new_user = User(name=name, phone_number=phone_number, is_allowed=False)
         db.session.add(new_user)
         db.session.commit()
-        return {"message": "User added successfully"}, 201
+        return {"id": new_user.id,
+                "name": new_user.name,
+                "phone_number": new_user.phone_number,
+                "is_allowed": new_user.is_allowed}, 201
     
     def delete(self):
         data = request.get_json()
