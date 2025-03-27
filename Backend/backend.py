@@ -355,6 +355,31 @@ class UserManagementAPI(Resource):
             user.name = data["name"]
         db.session.commit()
         return {"message": "User updated successfully"}, 200    
+    
+    def post(self):
+        data = request.get_json()
+        name = data.get("name")
+        phone_number = data.get("phone_number")
+        if not phone_number:
+            return {"error": "Phone number is required"}, 400
+        if User.query.filter_by(phone_number = phone_number).first():
+            return {"error": "User with this phone number already exists"}, 400
+        new_user = User(name=name, phone_number=phone_number, is_allowed=False)
+        db.session.add(new_user)
+        db.session.commit()
+        return {"message": "User added successfully"}, 201
+    
+    def delete(self):
+        data = request.get_json()
+        user_id = data.get("id")
+        if not user_id:
+            return {"error": "User id is required"}, 400
+        user = User.query.get(user_id)
+        if not user:
+            return {"error": "User not found"}, 404
+        db.session.delete(user)
+        db.session.commit()
+        return{"message": "User deleted successfully"}, 200
 
 class UpdateUserNameAPI(Resource):
     def post(self):
