@@ -2,6 +2,7 @@ import json
 from flask_mqtt import Mqtt
 import ssl
 import os
+import requests
 
 class MQTTHandler:
     def __init__(self, app, door_controller):
@@ -28,7 +29,8 @@ class MQTTHandler:
                 self.mqtt.subscribe([
                     ("door/commands", 1),
                     ("door/schedule", 1),
-                    (f"door/otp/response/+", 1)
+                    (f"door/otp/response/+", 1),
+                    ("door/otp/verify", 1)
                 ])
                 print("[DEBUG] Subscribed to all necessary topics")
 
@@ -54,6 +56,47 @@ class MQTTHandler:
                 elif message.topic == "door/schedule":
                     schedule_data = json.loads(message.payload.decode())
                     self.update_schedule(schedule_data)
+
+                elif message.topic == "door/otp/verify":
+                    try:
+                        payload = json.loads(message.payload.decode())
+                        phone_number = payload.get("phone_number")
+                        otp_code = payload.get("otp_code")
+                        print(f"[DEBUG] Received OTP verification request for {phone_number}")
+
+                        # Send verification request to backend
+                        response = requests.post(
+                            f"{os.getenv('BACKEND_URL')}/check-verification-RPI",
+                            json={"phone_number": phone_number, "otp_code": otp_code}
+                        )
+                        response_data = response.json()
+                        print(f"[DEBUG] Backend verification response: {response_data}")
+
+                        # Handle different access scenarios
+                        if response_data.get("status") == "approved":
+                            # Door is unlocked (either globally or through verification)
+                            self.door_controller.unlock_door()
+                            # Publish success response
+                            client.publish(f"door/otp/response/{phone_number}", json.dumps({
+                                "phone_number": phone_number,
+                                "status": "approved",
+                                "message": response_data.get("message", "Door unlocked")
+                            }))
+                        else:
+                            # Access denied
+                            client.publish(f"door/otp/response/{phone_number}", json.dumps({
+                                "phone_number": phone_number,
+                                "status": "denied",
+                                "message": response_data.get("message", "Access denied")
+                            }))
+
+                    except Exception as e:
+                        print(f"[ERROR] Error handling OTP verification: {e}")
+                        client.publish(f"door/otp/response/{phone_number}", json.dumps({
+                            "phone_number": phone_number,
+                            "status": "error",
+                            "message": str(e)
+                        }))
 
             except Exception as e:
                 print(f"[DEBUG] Error handling MQTT message: {str(e)}")

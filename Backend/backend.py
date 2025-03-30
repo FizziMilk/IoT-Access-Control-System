@@ -56,6 +56,7 @@ db = SQLAlchemy(app)
 class AccessLog(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     user = db.Column(db.String(50), nullable=True)
+    user_name = db.Column(db.String(100), nullable=True)  # Add user_name field
     method = db.Column(db.String(50), nullable=False)
     status = db.Column(db.String(20), nullable=False)
     timestamp = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
@@ -101,6 +102,17 @@ class Schedule(db.Model):
             "close_time": self.close_time.strftime("%H:%M") if self.close_time else None,
             "forceUnlocked": self.force_unlocked, 
         }
+
+## User schedule database model
+class UserSchedule(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    start_date = db.Column(db.DateTime, nullable=False)
+    end_date = db.Column(db.DateTime, nullable=False)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    
+    def __repr__(self):
+        return f"<UserSchedule {self.user_id} {self.start_date} to {self.end_date}>"
 
 # Create the database tables if they don't exist
 with app.app_context():
@@ -181,8 +193,13 @@ def send_otp(phone_number):
             .verifications \
             .create(to=phone_number, channel ="sms")
 
+        # Get user name if available
+        user = User.query.filter_by(phone_number=phone_number).first()
+        user_name = user.name if user else None
+
         new_log = AccessLog(
             user=phone_number,
+            user_name=user_name,
             method="SMS OTP",
             status="Started"
         )
@@ -199,6 +216,7 @@ def send_otp(phone_number):
         # Log failure if Twilio call fails
         new_log = AccessLog(
             user=phone_number or "Unknown",
+            user_name=None,
             method="SMS OTP",
             status="Failed"
         )
@@ -281,6 +299,7 @@ class GetAccessLogs(Resource):
             log_list = [
                 {
                     "user": log.user,
+                    "user_name": log.user_name,  # Include user_name in response
                     "method": log.method,
                     "status": log.status,
                     "timestamp": log.timestamp.isoformat()
@@ -454,15 +473,101 @@ def handle_otp_verification(client, userdata, message):
             otp_code = data.get("otp_code")
             print(f"[DEBUG] Received OTP verification request for {phone_number}")
 
-            # Use Twilio Verify to check OTP
-            verification_check = twilio_client.verify.v2.services(TWILIO_VERIFY_SID) \
-                .verification_checks \
-                .create(to=phone_number, code=otp_code)
-             
-            if verification_check.status == "approved":
-                res = {"phone_number": phone_number, "status": "approved"}
+            # Get user name if available
+            user = User.query.filter_by(phone_number=phone_number).first()
+            if not user:
+                res = {"phone_number": phone_number, "status": "denied", "message": "User not found"}
+                mqtt.publish(f"door/otp/response/{phone_number}", json.dumps(res), qos=1)
+                return
+
+            user_name = user.name if user else None
+
+            # 1. Check global schedule first
+            current_time = datetime.now(timezone.utc)
+            current_day = current_time.strftime("%A")  # Get current day name
+            global_schedule = Schedule.query.filter_by(day=current_day).first()
+            
+            # If door is force unlocked globally, allow direct access
+            if global_schedule and global_schedule.force_unlocked:
+                # Log the access attempt
+                new_log = AccessLog(
+                    user=phone_number,
+                    user_name=user_name,
+                    method="Global Force Unlock",
+                    status="Door Unlocked"
+                )
+                db.session.add(new_log)
+                db.session.commit()
+                res = {"phone_number": phone_number, "status": "approved", "message": "Door is globally unlocked"}
+                mqtt.publish(f"door/otp/response/{phone_number}", json.dumps(res), qos=1)
+                return
+
+            # If within global schedule hours, allow direct access
+            if global_schedule and global_schedule.open_time and global_schedule.close_time:
+                current_time_only = current_time.time()
+                if global_schedule.open_time <= current_time_only <= global_schedule.close_time:
+                    # Log the access attempt
+                    new_log = AccessLog(
+                        user=phone_number,
+                        user_name=user_name,
+                        method="Global Schedule Hours",
+                        status="Door Unlocked"
+                    )
+                    db.session.add(new_log)
+                    db.session.commit()
+                    res = {"phone_number": phone_number, "status": "approved", "message": "Within global schedule hours"}
+                    mqtt.publish(f"door/otp/response/{phone_number}", json.dumps(res), qos=1)
+                    return
+
+            # 2. If not globally accessible, check if user is allowed
+            if user.is_allowed:
+                # User is allowed, require OTP verification
+                verification_check = twilio_client.verify.v2.services(TWILIO_VERIFY_SID) \
+                    .verification_checks \
+                    .create(to=phone_number, code=otp_code)
+                
+                if verification_check.status == "approved":
+                    new_log = AccessLog(
+                        user=phone_number,
+                        user_name=user_name,
+                        method="SMS OTP",
+                        status="Door Unlocked"
+                    )
+                    db.session.add(new_log)
+                    db.session.commit()
+                    res = {"phone_number": phone_number, "status": "approved", "message": "OTP verified"}
+                else:
+                    res = {"phone_number": phone_number, "status": "denied", "message": "Invalid OTP"}
+                mqtt.publish(f"door/otp/response/{phone_number}", json.dumps(res), qos=1)
+                return
+
+            # 3. If user is not allowed, check their schedule
+            user_schedule = UserSchedule.query.filter(
+                UserSchedule.user_id == user.id,
+                UserSchedule.start_date <= current_time,
+                UserSchedule.end_date >= current_time
+            ).first()
+
+            if user_schedule:
+                # User has valid schedule, require OTP verification
+                verification_check = twilio_client.verify.v2.services(TWILIO_VERIFY_SID) \
+                    .verification_checks \
+                    .create(to=phone_number, code=otp_code)
+                
+                if verification_check.status == "approved":
+                    new_log = AccessLog(
+                        user=phone_number,
+                        user_name=user_name,
+                        method="SMS OTP",
+                        status="Door Unlocked"
+                    )
+                    db.session.add(new_log)
+                    db.session.commit()
+                    res = {"phone_number": phone_number, "status": "approved", "message": "OTP verified"}
+                else:
+                    res = {"phone_number": phone_number, "status": "denied", "message": "Invalid OTP"}
             else:
-                res = {"phone_number": phone_number, "status": "denied"}
+                res = {"phone_number": phone_number, "status": "denied", "message": "No valid schedule found"}
 
         except Exception as e:
             res = {"phone_number": phone_number, "status": "error", "message": str(e)}
@@ -472,6 +577,89 @@ def handle_otp_verification(client, userdata, message):
         response_topic = f"door/otp/response/{phone_number}"
         mqtt.publish(response_topic, json.dumps(res), qos=1)
         print(f"[DEBUG] Published OTP verification result to {response_topic}")
+
+# Resource to manage user schedules
+class UserScheduleAPI(Resource):
+    def get(self):
+        try:
+            schedules = UserSchedule.query.all()
+            schedule_list = [
+                {
+                    "id": schedule.id,
+                    "user_id": schedule.user_id,
+                    "start_date": schedule.start_date.isoformat(),
+                    "end_date": schedule.end_date.isoformat(),
+                    "created_at": schedule.created_at.isoformat()
+                }
+                for schedule in schedules
+            ]
+            return jsonify(schedule_list)
+        except Exception as e:
+            return {"error": str(e)}, 500
+
+    def post(self):
+        try:
+            data = request.get_json()
+            user_id = data.get("user_id")
+            start_date = datetime.fromisoformat(data.get("start_date"))
+            end_date = datetime.fromisoformat(data.get("end_date"))
+
+            if not all([user_id, start_date, end_date]):
+                return {"error": "Missing required fields"}, 400
+
+            # Check if user exists
+            user = User.query.get(user_id)
+            if not user:
+                return {"error": "User not found"}, 404
+
+            # Check for overlapping schedules
+            existing_schedule = UserSchedule.query.filter(
+                UserSchedule.user_id == user_id,
+                UserSchedule.start_date <= end_date,
+                UserSchedule.end_date >= start_date
+            ).first()
+
+            if existing_schedule:
+                return {"error": "Schedule overlaps with existing schedule"}, 400
+
+            new_schedule = UserSchedule(
+                user_id=user_id,
+                start_date=start_date,
+                end_date=end_date
+            )
+            db.session.add(new_schedule)
+            db.session.commit()
+
+            return {
+                "id": new_schedule.id,
+                "user_id": new_schedule.user_id,
+                "start_date": new_schedule.start_date.isoformat(),
+                "end_date": new_schedule.end_date.isoformat(),
+                "created_at": new_schedule.created_at.isoformat()
+            }, 201
+
+        except Exception as e:
+            return {"error": str(e)}, 500
+
+    def delete(self):
+        try:
+            data = request.get_json()
+            schedule_id = data.get("id")
+
+            if not schedule_id:
+                return {"error": "Schedule ID is required"}, 400
+
+            schedule = UserSchedule.query.get(schedule_id)
+            if not schedule:
+                return {"error": "Schedule not found"}, 404
+
+            db.session.delete(schedule)
+            db.session.commit()
+
+            return {"message": "Schedule deleted successfully"}, 200
+
+        except Exception as e:
+            return {"error": str(e)}, 500
         
 # MQTT Resource to unlock door with RPI
 class UnlockDoor(Resource):
@@ -500,6 +688,7 @@ api.add_resource(GetAccessLogs, "/access-logs")
 api.add_resource(DoorEntryAPI, "/door-entry")
 api.add_resource(UserManagementAPI, "/users")
 api.add_resource(UpdateUserNameAPI, "/update-user-name")
+api.add_resource(UserScheduleAPI, '/user-schedule')
 
 if __name__ == '__main__':
     try:

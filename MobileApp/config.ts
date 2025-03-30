@@ -1,0 +1,1 @@
+export const backendIP = process.env.EXPO_PUBLIC_BACKEND_IP; 

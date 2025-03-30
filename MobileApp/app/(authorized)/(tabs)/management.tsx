@@ -1,8 +1,8 @@
 import React, { useState, useCallback } from 'react';
-import { View, Text, TextInput, Button,Switch, FlatList, Alert, StyleSheet, TouchableOpacity } from 'react-native';
+import { View, Text, TextInput, Button,Switch, FlatList, Alert, StyleSheet, TouchableOpacity, ActivityIndicator } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
-
-const backendIP = process.env.EXPO_PUBLIC_BACKEND_IP;
+import { backendIP } from "../../../config";
+import SchedulePicker from "../../../components/SchedulePicker";
 
 interface User {
     id: number;
@@ -15,26 +15,33 @@ export default function Management() {
     const [phoneNumber, setPhoneNumber ] = useState('');
     const [name, setName] = useState('');
     const [users, setUsers] = useState<User[]>([]);
+    const [loading, setLoading] = useState(true);
+    const [selectedUser, setSelectedUser] = useState<User | null>(null);
+    const [showSchedulePicker, setShowSchedulePicker] = useState(false);
 
-    const fetchUsers = () => {
-        fetch(`${backendIP}/users`)
-          .then(res => res.json())
-          .then((data: User[]) => setUsers(data))
-          .catch(err => {
-            console.error("Error fetching users:", err);
-            Alert.alert("Error", "Failed to fetch users");
-          });
-      };
+    const fetchUsers = async () => {
+        try {
+            const response = await fetch(`${backendIP}/users`);
+            if (!response.ok) {
+                throw new Error("Failed to fetch users");
+            }
+            const data = await response.json();
+            setUsers(data);
+        } catch (error) {
+            Alert.alert("Error", "Failed to load users");
+        } finally {
+            setLoading(false);
+        }
+    };
     
-      // Fetch users when the screen comes into focus
-      useFocusEffect(
-        useCallback(() => {
-          fetchUsers();
+    // Fetch users when the screen comes into focus
+    useFocusEffect(
+        React.useCallback(() => {
+            fetchUsers();
         }, [])
-      );
+    );
 
-    
-      const addUser = async () => {
+    const addUser = async () => {
         if (!phoneNumber) {
             Alert.alert("Error", "Phone number is required");
             return;
@@ -60,72 +67,74 @@ export default function Management() {
         }
     };
 
-        const removeUser = async (userId: number) => {
-            try {
-                const response = await fetch(`${backendIP}/users`,{
-                    method: 'DELETE',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({id: userId}),
-                });
-                const data = await response.json();
-                if (response.ok) {
-                    Alert.alert("Success", "User removed successfully");
-                    setUsers(prev => prev.filter(user => user.id !== userId));
-                } else {
-                    Alert.alert("Error",data.error || "Failed to remove user");
-                }
-            } catch(error){
-                const err = error as Error;
-                Alert.alert("Error", err.message);
-            }
-        }
-
-    // Update a user's permission via the backend
-    const updateUserPermission = (userId: number, newPermission: boolean) => {
-        fetch(`${backendIP}/users`,{
-            method: 'PUT',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({id: userId, is_allowed: newPermission}),
-        })
-            .then(res => res.json())
-            .then(data => {
-                Alert.alert("Success", "User updated successfully");
-                setUsers(prev =>
-                    prev.map(user =>
-                        user.id == userId ? { ...user, is_allowed: newPermission } : user
-                    )
-                );
-            })
-            .catch(err => {
-                console.error("Error updating user:", err);
-                Alert.alert("Error", "Failed to update user");
-            });
-    };
-
-    /* Legacy code to send a user an OTP, not in use currently
-    const handleSendOTP = async () => {
+    const removeUser = async (userId: number) => {
         try {
-            const response = await fetch(`${backendIP}/start-verification`, {
-                method: 'POST',
+            const response = await fetch(`${backendIP}/users`,{
+                method: 'DELETE',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ phone_number: phoneNumber}),
+                body: JSON.stringify({id: userId}),
             });
             const data = await response.json();
-            if (response.ok){
-                Alert.alert('OTP Sent', 'OTP has been sent to the specified phone number.');
+            if (response.ok) {
+                Alert.alert("Success", "User removed successfully");
+                setUsers(prev => prev.filter(user => user.id !== userId));
             } else {
-            Alert.alert('Error', data.error || 'Unknown error');
+                Alert.alert("Error",data.error || "Failed to remove user");
             }
-        } catch (error) {
+        } catch(error){
             const err = error as Error;
-            Alert.alert('Error', err.message);
+            Alert.alert("Error", err.message);
         }
-    }; */
+    }
+
+    const toggleUserAccess = async (userId: number, currentStatus: boolean) => {
+        try {
+            const response = await fetch(`${backendIP}/users`, {
+                method: "PUT",
+                headers: {
+                    "Content-Type": "application/json",
+                },
+                body: JSON.stringify({
+                    id: userId,
+                    is_allowed: !currentStatus,
+                }),
+            });
+
+            if (!response.ok) {
+                throw new Error("Failed to update user access");
+            }
+
+            // Update local state
+            setUsers((prevUsers) =>
+                prevUsers.map((user) =>
+                    user.id === userId
+                        ? { ...user, is_allowed: !currentStatus }
+                        : user
+                )
+            );
+
+            Alert.alert("Success", "User access updated successfully");
+        } catch (error) {
+            Alert.alert("Error", "Failed to update user access");
+        }
+    };
+
+    const handleScheduleCreated = () => {
+        setShowSchedulePicker(false);
+        fetchUsers(); // Refresh the user list
+    };
+
+    if (loading) {
+        return (
+            <View style={styles.center}>
+                <ActivityIndicator size="large" color="#0000ff" />
+            </View>
+        );
+    }
+
     return (
-        <View style = {styles.container}>
-            <Text style = {styles.title}>Add User</Text>
+        <View style={styles.container}>
+            <Text style={styles.title}>Add User</Text>
             <TextInput
                 style={styles.input}
                 placeholder="Name (optional)"
@@ -145,29 +154,48 @@ export default function Management() {
             <Text style={[styles.title, {fontSize: 20, marginTop: 32}]}> User Management</Text>
             <FlatList
                 data={users}
-                keyExtractor= {(item) => item.id.toString()}
-                renderItem = {({ item }) => (
-                    <View style = {styles.userRow}>
-                        
-                    <TouchableOpacity
-                        style={styles.removeButton}
-                        onPress={() => removeUser(item.id)}
-                    >
-                        <Text style = {styles.removeButtonText}>Remove</Text>
-                    </TouchableOpacity>
-                    <Text style = {styles.userText}>{item.name ? item.name : item.phone_number}</Text>
-                        <Switch
-                            value={item.is_allowed}
-                            onValueChange={(value) => updateUserPermission(item.id,value)}
-                    />
-                    <Text style ={styles.permissionText}>
-                        {item.is_allowed ? "Allowed" : "Not Allowed"}
-                    </Text>
-                </View>
+                keyExtractor={(item) => item.id.toString()}
+                renderItem={({ item }) => (
+                    <View style={styles.userItem}>
+                        <View style={styles.userInfo}>
+                            <Text style={styles.userName}>
+                                {item.name || "Unnamed User"}
+                            </Text>
+                            <Text style={styles.phoneNumber}>{item.phone_number}</Text>
+                        </View>
+                        <View style={styles.actions}>
+                            <TouchableOpacity
+                                style={[
+                                    styles.accessButton,
+                                    item.is_allowed ? styles.allowed : styles.notAllowed,
+                                ]}
+                                onPress={() => toggleUserAccess(item.id, item.is_allowed)}
+                            >
+                                <Text style={styles.buttonText}>
+                                    {item.is_allowed ? "Revoke Access" : "Grant Access"}
+                                </Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                                style={styles.scheduleButton}
+                                onPress={() => {
+                                    setSelectedUser(item);
+                                    setShowSchedulePicker(true);
+                                }}
+                            >
+                                <Text style={styles.buttonText}>Set Schedule</Text>
+                            </TouchableOpacity>
+                        </View>
+                    </View>
+                )}
+            />
+            {showSchedulePicker && selectedUser && (
+                <SchedulePicker
+                    userId={selectedUser.id}
+                    onScheduleCreated={handleScheduleCreated}
+                />
             )}
-        />
-    </View>
-);
+        </View>
+    );
 }
 
 const styles = StyleSheet.create({
@@ -181,30 +209,55 @@ const styles = StyleSheet.create({
         marginBottom:16,
         borderRadius: 4,
     },
-    userRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        marginVertical: 8,
-    },
-    userText: {
-        flex: 1,
-        fontSize: 16,
-    },
-    permissionText: {
-        marginLeft: 8,
-        fontSize: 16,
-    },
-    removeButton: {
-        backgroundColor: 'red',
-        paddingVertical: 4,
-        paddingHorizontal: 8,
+    userItem: {
+        backgroundColor: "#f9f9f9",
+        padding: 16,
         borderRadius: 8,
-        marginRight: 8,
+        marginBottom: 12,
     },
-    removeButtonText: {
-        color: 'white',
-        fontSize: 12,
-        textAlign: 'center',
+    userInfo: {
+        marginBottom: 8,
+    },
+    userName: {
+        fontSize: 16,
+        fontWeight: "bold",
+    },
+    phoneNumber: {
+        fontSize: 14,
+        color: "#666",
+    },
+    actions: {
+        flexDirection: "row",
+        justifyContent: "space-between",
+        gap: 8,
+    },
+    accessButton: {
+        flex: 1,
+        padding: 8,
+        borderRadius: 4,
+        alignItems: "center",
+    },
+    allowed: {
+        backgroundColor: "#ff3b30",
+    },
+    notAllowed: {
+        backgroundColor: "#34c759",
+    },
+    scheduleButton: {
+        flex: 1,
+        padding: 8,
+        backgroundColor: "#007AFF",
+        borderRadius: 4,
+        alignItems: "center",
+    },
+    buttonText: {
+        color: "#fff",
+        fontSize: 14,
+        fontWeight: "bold",
+    },
+    center: {
+        flex: 1,
+        justifyContent: "center",
+        alignItems: "center",
     },
 });
