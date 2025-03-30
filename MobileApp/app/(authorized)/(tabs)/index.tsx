@@ -21,7 +21,7 @@ export default function Index() {
       method: 'POST',
       headers: {'Content-Type': 'application/json'
       },
-      body: JSON.stringify({ command: 'open_door'})
+      body: JSON.stringify({ command: 'unlock_door'})
   })
     .then(response => response.json())
     .then(data => {
