@@ -146,10 +146,12 @@ def verify():
         return render_template("otp.html", phone_number=phone_number)
 
 @app.route('/update_schedule', methods=['POST'])
-def update_schedule():
+def update_schedule(data = None):
     global schedule
     try:
-        data = request.get_json()
+        if data is None:
+            data = request.get_json()
+            
         # Convert array to a dict keyed by day
         new_schedule = {}
         for entry in data:
