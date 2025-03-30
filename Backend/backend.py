@@ -287,7 +287,7 @@ class GetAccessLogs(Resource):
                 }
                 for log in logs
             ]
-            return jsonify(log_list), 200
+            return jsonify(log_list)
         except Exception as e:
             return {"error": str(e)}, 500
 
