@@ -16,8 +16,7 @@ def setup_routes(app, door_controller, mqtt_handler, session, backend_url):
         if response.get("status") == "approved":
             door_controller.unlock_door()
             flash("OTP verified, door unlocked", "success")
-            time.sleep(10)
-            return redirect(url_for('index'))
+            return render_template("door_unlocked.html")
         elif response.get("status") == "error":
             flash(response.get("message", "An error occurred during verification"), "danger")
             return render_template("otp.html", phone_number=phone_number)
