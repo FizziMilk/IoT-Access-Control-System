@@ -138,9 +138,16 @@ def door_entry():
         # Check if the current time is within the schedule
         if weekday in schedule:
             entry = schedule[weekday]
+            print(f"[DEBUG] Schedule entry for {weekday}: {entry}")
             open_time_str = entry.get("open_time")
             close_time_str = entry.get("close_time")
             force_unlocked = entry.get("forceUnlocked", False)
+
+            if force_unlocked:
+                print("[DEBUG] Force unlock is enabled. Unlocking door.")
+                unlock_door()
+                flash("Door unlocked based on schedule.", "success")
+                return redirect(url_for("index"))
 
             if open_time_str and close_time_str:
                 try:
