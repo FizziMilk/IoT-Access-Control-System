@@ -7,6 +7,7 @@ const logsURL = `${backendIP}/access-logs`;
 
 type AccessLog = {
   user: string;
+  user_name: string | null;
   method: string;
   status: string;
   timestamp: string;
@@ -46,7 +47,7 @@ export default function AccessLogs() {
         keyExtractor={(item, index) => index.toString()}
         renderItem={({ item }) => (
           <View style={styles.logItem}>
-            <Text style={styles.user}>{item.user}</Text>
+            <Text style={styles.user}>{item.user_name || item.user}</Text>
             <Text style={styles.details}>
               {item.method} - {item.status}
             </Text>
