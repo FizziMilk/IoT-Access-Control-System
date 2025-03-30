@@ -9,9 +9,10 @@
 <body>
   <div class="container mt-5 text-center">
     <h1>Welcome</h1>
-    <!-- Future facial recognition integration button can be added here -->
-    <p>Press "Enter" to begin door entry process.</p>
-    <a href="{{ url_for('door_entry') }}" class="btn btn-primary btn-lg">Enter</a>
+    <p>Press "Enter" to begin the door entry process.</p>
+    <form action="{{ url_for('door_entry') }}" method="POST">
+      <button type="submit" class="btn btn-primary btn-lg">Enter</button>
+    </form>
   </div>
 </body>
 </html>
