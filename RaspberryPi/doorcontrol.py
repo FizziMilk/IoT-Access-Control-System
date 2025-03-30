@@ -10,6 +10,9 @@ from flask_mqtt import Mqtt
 import ssl
 import os
 import atexit
+from requests.adapters import HTTPAdapter
+from urllib3.util.ssl_ import create_urllib3_context
+
 
 # Load environment variables
 load_dotenv()
@@ -20,6 +23,16 @@ GPIO.setmode(GPIO.BCM)
 GPIO.setup(DOOR_PIN, GPIO.OUT)
 
 BACKEND_URL = os.getenv("BACKEND_URL")
+BACKEND_CA_CERT = os.getenv("CA_CERT")
+
+# Create a custom SSL context that trusts the backend cert
+ctx = create_urllib3_context()
+ctx.load_verify_locations(BACKEND_CA_CERT)
+
+# Create a persistent session
+session = requests.Session()
+session.mount("https://", HTTPAdapater(max_retries=3, pool_connections=10, pool_maxsize=100))
+session.verify = BACKEND_CA_CERT
 
 #Get MQTT broker IP from .env
 MQTT_COMMAND_TOPIC = "door/commands"
@@ -39,13 +52,6 @@ app.config['MQTT_BROKER_PORT'] = int(os.getenv("MQTT_PORT"))
 app.config['MQTT_TLS_VERSION'] = ssl.PROTOCOL_TLSv1_2
 app.config['MQTT_TLS_ENABLED'] = True
 app.config['MQTT_TLS_CA_CERTS'] = os.getenv("CA_CERT")
-CA_CERT = os.getenv("CA_CERT")
-
-print("CA_CERT path:", CA_CERT)
-if not os.path.exists(CA_CERT):
-    print("CA Cert not found!")
-
-print(BACKEND_URL)
 
 required_env_vars = ["MQTT_BROKER", "MQTT_PORT", "CA_CERT", "BACKEND_URL"]
 for var in required_env_vars:
@@ -67,7 +73,7 @@ def verify_otp_rest(phone_number, otp_code):
         print(f"[DEBUG] Sending OTP verification request to backend: {payload}")
         
         # Send the request to the backend
-        response = requests.post(f"{BACKEND_URL}/check-verification-RPI", json=payload)
+        response = session.post(f"{BACKEND_URL}/check-verification-RPI", json=payload)
         print(f"[DEBUG] Backend response: {response.status_code} - {response.text}")
         
         if response.status_code == 200:
@@ -163,7 +169,7 @@ def door_entry():
         try:
             ## This is semi-okay, will need to be hidden behind https or implemented with MQTT
             # May reveal the backend IP address
-            resp = requests.post(f"{BACKEND_URL}/door-entry",json={"phone_number":phone_number})
+            resp = session.post(f"{BACKEND_URL}/door-entry",json={"phone_number":phone_number})
             print("Status code:", resp.status_code)
             print("Response text:",resp.text)
             data = resp.json()
@@ -189,7 +195,7 @@ def update_name():
         flash("Name and phone number are required.", "danger")
         return redirect(url_for("door_entry"))
     try:
-        resp = requests.post(f"{BACKEND_URL}/update-user-name", json={"phone_number": phone_number, "name": name})
+        resp = session.post(f"{BACKEND_URL}/update-user-name", json={"phone_number": phone_number, "name": name})
         data = resp.json()
         if data.get("status") == "success":
             flash("Name updated succesffuly. Please wait for admin approval.", "info")
