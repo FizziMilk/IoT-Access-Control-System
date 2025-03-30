@@ -31,7 +31,7 @@ ctx.load_verify_locations(BACKEND_CA_CERT)
 
 # Create a persistent session
 session = requests.Session()
-session.mount("https://", HTTPAdapater(max_retries=3, pool_connections=10, pool_maxsize=100))
+session.mount("https://", HTTPAdapter(max_retries=3, pool_connections=10, pool_maxsize=100))
 session.verify = BACKEND_CA_CERT
 
 #Get MQTT broker IP from .env
