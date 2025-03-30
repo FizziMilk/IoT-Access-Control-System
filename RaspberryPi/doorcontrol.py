@@ -125,14 +125,18 @@ def update_schedule(data = None):
         print(f"Error updating schedule: {e}")
         return {"status": "error", "message": str(e)}, 500
     
-@app.route('/door-entry', methods=['GET','POST'])
+@app.route('/door-entry', methods=['GET', 'POST'])
 def door_entry():
     if request.method == "POST":
         now = datetime.now()
         weekday = now.strftime("%A")
 
+        print(f"[DEBUG] Current weekday: {weekday}")
+        print(f"[DEBUG] Current time: {now.time()}")
+        print(f"[DEBUG] Schedule: {schedule}")
+
         # Check if the current time is within the schedule
-        if weekday in schedule: 
+        if weekday in schedule:
             entry = schedule[weekday]
             open_time_str = entry.get("open_time")
             close_time_str = entry.get("close_time")
@@ -140,30 +144,36 @@ def door_entry():
 
             if open_time_str and close_time_str:
                 try:
-                    #Parse times from "HH:MM" strings
                     open_time = datetime.strptime(open_time_str, "%H:%M").time()
                     close_time = datetime.strptime(close_time_str, "%H:%M").time()
                 except ValueError as ve:
-                    flash("Schedule time format error.","danger")
+                    flash("Schedule time format error.", "danger")
+                    print(f"[DEBUG] Schedule time format error: {ve}")
                     return redirect(url_for("door_entry"))
-                current_time = now.time().replace(second=0,microsecond=0)
 
-                #If force unlocked or within schedule, unlock the door
+                current_time = now.time().replace(second=0, microsecond=0)
+
+                # If forced unlocked or within schedule, unlock the door
                 if force_unlocked or (open_time <= current_time <= close_time):
                     unlock_door()
                     flash("Door unlocked based on schedule.", "success")
                     return redirect(url_for("index"))
-                
+
         # Otherwise proceed with OTP verification
-        phone_number = request.form['phone_number']
+        phone_number = request.form.get('phone_number')
+        if not phone_number:
+            flash("Phone number is required for verification.", "danger")
+            return redirect(url_for("door_entry"))
+
         try:
-            resp = session.post(f"{BACKEND_URL}/door-entry",json={"phone_number":phone_number})
-            print("Status code:", resp.status_code)
-            print("Response text:",resp.text)
+            resp = session.post(f"{BACKEND_URL}/door-entry", json={"phone_number": phone_number})
+            print(f"[DEBUG] Backend response: {resp.status_code} - {resp.text}")
             data = resp.json()
         except Exception as e:
             flash("Error connecting to backend.", "danger")
+            print(f"[DEBUG] Error connecting to backend: {e}")
             return redirect(url_for("door_entry"))
+
         if data.get("status") == "OTP sent":
             flash("OTP sent to your phone. Please enter the OTP.", "success")
             return render_template("otp.html", phone_number=phone_number)
@@ -173,6 +183,7 @@ def door_entry():
         else:
             flash(data.get("error", "An error occurred."), "danger")
             return redirect(url_for("door_entry"))
+
     return render_template("door_entry.html")
 
 @app.route('/update-name', methods=['POST'])
