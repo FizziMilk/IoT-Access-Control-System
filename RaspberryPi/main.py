@@ -3,10 +3,10 @@ from dotenv import load_dotenv
 import os
 import atexit
 
-from .door_controller import DoorController
-from .mqtt_handler import MQTTHandler
-from .routes import setup_routes
-from .utils import create_backend_session
+from door_controller import DoorController
+from mqtt_handler import MQTTHandler
+from routes import setup_routes
+from utils import create_backend_session
 
 # Load environment variables
 load_dotenv()
