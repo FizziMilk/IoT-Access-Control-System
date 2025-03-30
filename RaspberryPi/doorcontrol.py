@@ -11,6 +11,7 @@ import os
 import atexit
 from requests.adapters import HTTPAdapter
 from urllib3.util.ssl_ import create_urllib3_context
+from threading import Timer
 
 
 # Load environment variables
@@ -60,11 +61,16 @@ for var in required_env_vars:
 mqtt = Mqtt(app)
 
 def unlock_door(duration=10):
+    print("[DEBUG] Unlocking door...")
     GPIO.output(DOOR_PIN, GPIO.HIGH)  # Activate door relay
-    print("Door unlocked")
-    time.sleep(duration)  # Keep the door unlocked for the specified duration
+    print("[DEBUG] Door unlocked")
+
+    # Schedule the door to lock after the specified duration
+    Timer(duration, lock_door).start()
+
+def lock_door():
     GPIO.output(DOOR_PIN, GPIO.LOW)  # Deactivate door relay
-    print("Door locked")
+    print("[DEBUG] Door locked")
 
 def verify_otp_rest(phone_number, otp_code):
     try:
