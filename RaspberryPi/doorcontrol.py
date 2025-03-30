@@ -4,7 +4,6 @@ import time
 import requests
 from dotenv import load_dotenv
 from datetime import datetime
-import threading
 import json
 from flask_mqtt import Mqtt
 import ssl
@@ -83,44 +82,6 @@ def verify_otp_rest(phone_number, otp_code):
     except Exception as e:
         print(f"[DEBUG] Error in verify_otp_rest: {str(e)}")
         return {"status": "error", "message": str(e)}
-    
-def check_schedule():
-    while True:
-        now = datetime.now()
-        weekday = now.strftime("%A")  # e.g., "Monday"
-
-        if weekday in schedule:
-            entry = schedule[weekday]
-            open_time_str = entry.get("open_time")
-            close_time_str = entry.get("close_time")
-            force_unlocked = entry.get("forceUnlocked", False)
-
-            if open_time_str and close_time_str:
-                try:
-                    # Parse times from "HH:MM" strings
-                    open_time = datetime.strptime(open_time_str, "%H:%M").time()
-                    close_time = datetime.strptime(close_time_str, "%H:%M").time()
-                except ValueError as ve:
-                    print(f"Time format error: {ve}")
-                    time.sleep(60)
-                    continue
-                current_time = now.time().replace(second=0, microsecond=0)
-
-                # If forced unlocked, ensure door is unlocked
-                if force_unlocked:
-                    GPIO.output(DOOR_PIN, GPIO.HIGH)
-                    print(f"Force Unlocked: {weekday} - Door unlocked")
-                # Else, if current time falls within open and close times, unlock
-                elif open_time <= current_time <= close_time:
-                    GPIO.output(DOOR_PIN, GPIO.HIGH)
-                    print(f"{weekday}: Door unlocked at {current_time.strftime('%H:%M')}")
-                else:
-                    GPIO.output(DOOR_PIN, GPIO.LOW)
-                    print(f"{weekday}: Door locked at {current_time.strftime('%H:%M')}")
-        else:
-            print(f"No schedule entry for {weekday}")
-
-        time.sleep(60)  # Check every minute
 
 ## Flask Routes
 
@@ -151,7 +112,7 @@ def update_schedule(data = None):
     try:
         if data is None:
             data = request.get_json()
-            
+
         # Convert array to a dict keyed by day
         new_schedule = {}
         for entry in data:
@@ -167,10 +128,35 @@ def update_schedule(data = None):
 @app.route('/door-entry', methods=['GET','POST'])
 def door_entry():
     if request.method == "POST":
+        now = datetime.now()
+        weekday = now.strftime("%A")
+
+        # Check if the current time is within the schedule
+        if weekday in schedule: 
+            entry = schedule[weekday]
+            open_time_str = entry.get("open_time")
+            close_time_str = entry.get("close_time")
+            force_unlocked = entry.get("forceUnlocked", False)
+
+            if open_time_str and close_time_str:
+                try:
+                    #Parse times from "HH:MM" strings
+                    open_time = datetime.strptime(open_time_str, "%H:%M").time()
+                    close_time = datetime.strptime(close_time_str, "%H:%M").time()
+                except ValueError as ve:
+                    flash("Schedule time format error.","danger")
+                    return redirect(url_for("door_entry"))
+                current_time = now.time().replace(second=0,microsecond=0)
+
+                #If force unlocked or within schedule, unlock the door
+                if force_unlocked or (open_time <= current_time <= close_time):
+                    unlock_door()
+                    flash("Door unlocked based on schedule.", "success")
+                    return redirect(url_for("index"))
+                
+        # Otherwise proceed with OTP verification
         phone_number = request.form['phone_number']
         try:
-            ## This is semi-okay, will need to be hidden behind https or implemented with MQTT
-            # May reveal the backend IP address
             resp = session.post(f"{BACKEND_URL}/door-entry",json={"phone_number":phone_number})
             print("Status code:", resp.status_code)
             print("Response text:",resp.text)
@@ -258,9 +244,4 @@ def cleanup_gpio():
 atexit.register(cleanup_gpio)
     
 if __name__ == '__main__':
-    # Start the schedule checking in a separate thread
-    schedule_thread = threading.Thread(target=check_schedule)
-    schedule_thread.daemon = True
-    schedule_thread.start()
-
     app.run(host='0.0.0.0', port=5000, debug=True)
