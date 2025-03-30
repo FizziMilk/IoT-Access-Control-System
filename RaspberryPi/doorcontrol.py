@@ -39,6 +39,13 @@ app.config['MQTT_BROKER_PORT'] = int(os.getenv("MQTT_PORT"))
 app.config['MQTT_TLS_VERSION'] = ssl.PROTOCOL_TLSv1_2
 app.config['MQTT_TLS_ENABLED'] = True
 app.config['MQTT_TLS_CA_CERTS'] = os.getenv("CA_CERT")
+CA_CERT = os.getenv("CA_CERT")
+
+print("CA_CERT path:", CA_CERT)
+if not os.path.exists(CA_CERT):
+    print("CA Cert not found!")
+
+print(BACKEND_URL)
 
 required_env_vars = ["MQTT_BROKER", "MQTT_PORT", "CA_CERT", "BACKEND_URL"]
 for var in required_env_vars:
