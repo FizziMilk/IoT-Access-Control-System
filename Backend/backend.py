@@ -308,7 +308,11 @@ class GetAccessLogs(Resource):
             ]
             return jsonify(log_list)
         except Exception as e:
-            return {"error": str(e)}, 500
+            print(f"[ERROR] Failed to fetch access logs: {str(e)}")  # Add logging
+            return {
+                "error": "Failed to fetch access logs",
+                "details": str(e)
+            }, 500
 
 
 ## Handles the setting of door schedule

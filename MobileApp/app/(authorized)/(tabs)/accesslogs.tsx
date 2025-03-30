@@ -20,11 +20,18 @@ export default function AccessLogs() {
   const fetchLogs = useCallback(() => {
     setLoading(true);
     fetch(logsURL)
-      .then((res) => res.json())
+      .then((res) => {
+        if (!res.ok) {
+          return res.json().then(err => {
+            throw new Error(err.details || `HTTP error! status: ${res.status}`);
+          });
+        }
+        return res.json();
+      })
       .then((data: AccessLog[]) => setLogs(data))
       .catch((err) => {
         console.error("Error fetching access logs:", err);
-        Alert.alert("Error", "Failed to load access logs.");
+        Alert.alert("Error", `Failed to load access logs: ${err.message}`);
       })
       .finally(() => setLoading(false));
   }, []);
