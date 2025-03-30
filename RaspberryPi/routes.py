@@ -1,15 +1,39 @@
-from flask import render_template, request, redirect, url_for, flash, jsonify
-from gpio import unlock_door
-from utils import verify_otp_rest, update_schedule
+from flask import render_template, request, redirect, url_for, flash
 from datetime import datetime
+import time
+from .utils import verify_otp_rest
 
-schedule = {}
-
-def register_routes(app, mqtt):
+def setup_routes(app, door_controller, mqtt_handler, session, backend_url):
     @app.route('/')
     def index():
         return render_template('index.html')
 
+    @app.route('/verify', methods=['POST'])
+    def verify():
+        phone_number = request.form['phone_number']
+        otp_code = request.form['otp_code']
+        response = verify_otp_rest(session, backend_url, phone_number, otp_code)
+        if response.get("status") == "approved":
+            door_controller.unlock_door()
+            flash("OTP verified, door unlocked", "success")
+            time.sleep(10)
+            return redirect(url_for('index'))
+        elif response.get("status") == "error":
+            flash(response.get("message", "An error occurred during verification"), "danger")
+            return render_template("otp.html", phone_number=phone_number)
+        else:
+            flash("Invalid OTP or unexpected response", "danger")
+            return render_template("otp.html", phone_number=phone_number)
+
+    @app.route('/update_schedule', methods=['POST'])
+    def update_schedule():
+        try:
+            data = request.get_json()
+            return mqtt_handler.update_schedule(data)
+        except Exception as e:
+            print(f"Error updating schedule: {e}")
+            return {"status": "error", "message": str(e)}, 500
+    
     @app.route('/door-entry', methods=['GET', 'POST'])
     def door_entry():
         if request.method == "POST":
@@ -17,14 +41,16 @@ def register_routes(app, mqtt):
             weekday = now.strftime("%A")
 
             # Check if the current time is within the schedule
-            if weekday in schedule:
-                entry = schedule[weekday]
+            if weekday in mqtt_handler.schedule:
+                entry = mqtt_handler.schedule[weekday]
+                print(f"[DEBUG] Schedule entry for {weekday}: {entry}")
                 open_time_str = entry.get("open_time")
                 close_time_str = entry.get("close_time")
                 force_unlocked = entry.get("forceUnlocked", False)
 
                 if force_unlocked:
-                    unlock_door()
+                    print("[DEBUG] Force unlock is enabled. Unlocking door.")
+                    door_controller.unlock_door()
                     flash("Door unlocked based on schedule.", "success")
                     return render_template("door_unlocked.html")
 
@@ -34,11 +60,13 @@ def register_routes(app, mqtt):
                         close_time = datetime.strptime(close_time_str, "%H:%M").time()
                     except ValueError as ve:
                         flash("Schedule time format error.", "danger")
+                        print(f"[DEBUG] Schedule time format error: {ve}")
                         return redirect(url_for("door_entry"))
 
                     current_time = now.time().replace(second=0, microsecond=0)
-                    if open_time <= current_time <= close_time:
-                        unlock_door()
+
+                    if force_unlocked or (open_time <= current_time <= close_time):
+                        door_controller.unlock_door()
                         flash("Door unlocked based on schedule.", "success")
                         return render_template("door_unlocked.html")
 
@@ -49,22 +77,40 @@ def register_routes(app, mqtt):
                 return redirect(url_for("door_entry"))
 
             try:
-                resp = verify_otp_rest(phone_number, None)
-                if resp.get("status") == "approved":
-                    unlock_door()
-                    flash("OTP verified, door unlocked", "success")
-                    return redirect(url_for('index'))
-                else:
-                    flash(resp.get("message", "Verification failed"), "danger")
+                resp = session.post(f"{backend_url}/door-entry", json={"phone_number": phone_number})
+                print(f"[DEBUG] Backend response: {resp.status_code} - {resp.text}")
+                data = resp.json()
             except Exception as e:
                 flash("Error connecting to backend.", "danger")
+                print(f"[DEBUG] Error connecting to backend: {e}")
+                return redirect(url_for("door_entry"))
+
+            if data.get("status") == "OTP sent":
+                flash("OTP sent to your phone. Please enter the OTP.", "success")
+                return render_template("otp.html", phone_number=phone_number)
+            elif data.get("status") == "pending":
+                flash(data.get("message", "Access pending."), "warning")
+                return render_template("pending.html", phone_number=phone_number)
+            else:
+                flash(data.get("error", "An error occurred."), "danger")
                 return redirect(url_for("door_entry"))
 
         return render_template("door_entry.html")
 
-    @app.route('/update_schedule', methods=['POST'])
-    def update_schedule_route():
-        global schedule
-        data = request.get_json()
-        schedule = update_schedule(data)
-        return jsonify({"status": "success"}), 200
+    @app.route('/update-name', methods=['POST'])
+    def update_name():
+        phone_number = request.form.get('phone_number')
+        name = request.form.get('name')
+        if not phone_number or not name:
+            flash("Name and phone number are required.", "danger")
+            return redirect(url_for("door_entry"))
+        try:
+            resp = session.post(f"{backend_url}/update-user-name", json={"phone_number": phone_number, "name": name})
+            data = resp.json()
+            if data.get("status") == "success":
+                flash("Name updated succesffuly. Please wait for admin approval.", "info")
+            else:
+                flash(data.get("error", "Error updating name"), "danger")
+        except Exception as e:
+            flash("Error connecting to backend.", "danger")
+        return redirect(url_for("door_entry")) 
