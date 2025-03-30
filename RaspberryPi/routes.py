@@ -1,7 +1,7 @@
 from flask import render_template, request, redirect, url_for, flash
 from datetime import datetime
 import time
-from .utils import verify_otp_rest
+from utils import verify_otp_rest
 
 def setup_routes(app, door_controller, mqtt_handler, session, backend_url):
     @app.route('/')
