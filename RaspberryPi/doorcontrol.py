@@ -127,9 +127,11 @@ def update_schedule(data = None):
     
 @app.route('/door-entry', methods=['GET', 'POST'])
 def door_entry():
+    print("[DEBUG] Enter button clicked, door_entry route triggered.")
     if request.method == "POST":
         now = datetime.now()
         weekday = now.strftime("%A")
+        print("[DEBUG] Enter button clicked,if has triggered")
 
         print(f"[DEBUG] Current weekday: {weekday}")
         print(f"[DEBUG] Current time: {now.time()}")
