@@ -143,7 +143,7 @@ def door_entry():
                 print("[DEBUG] Force unlock is enabled. Unlocking door.")
                 unlock_door()
                 flash("Door unlocked based on schedule.", "success")
-                return redirect(url_for("index"))
+                return render_template("door_unlocked.html")  # Render the new page
 
             if open_time_str and close_time_str:
                 try:
@@ -160,7 +160,7 @@ def door_entry():
                 if force_unlocked or (open_time <= current_time <= close_time):
                     unlock_door()
                     flash("Door unlocked based on schedule.", "success")
-                    return redirect(url_for("index"))
+                    return render_template("door_unlocked.html")  # Render the new page
 
         # Otherwise proceed with OTP verification
         phone_number = request.form.get('phone_number')
