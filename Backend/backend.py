@@ -276,17 +276,21 @@ class DoorEntryAPI(Resource):
 # Resource to retrieve all logs
 class GetAccessLogs(Resource):
     def get(self):
-        logs = AccessLog.query.all()
-        results = []
-        for log in logs:
-            results.append({
-                "id": log.id,
-                "user": log.user,
-                "method": log.method,
-                "status": log.status,
-                "timestamp": log.timestamp.isoformat()
-            })
-        return results, 200
+        try:
+            logs = AccessLog.query.order_by(AccessLog.timestamp.desc()).all()
+            log_list = [
+                {
+                    "user": log.user,
+                    "method": log.method,
+                    "status": log.status,
+                    "timestamp": log.timestamp.isoformat()
+                }
+                for log in logs
+            ]
+            return jsonify(log_list), 200
+        except Exception as e:
+            return {"error": str(e)}, 500
+
 
 ## Handles the setting of door schedule
 class ScheduleAPI(Resource):
