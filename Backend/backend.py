@@ -35,7 +35,7 @@ app.config['MQTT_BROKER_URL'] = MQTT_BROKER_URL
 app.config['MQTT_BROKER_PORT'] = 8883
 app.config['MQTT_TLS_VERSION'] = ssl.PROTOCOL_TLSv1_2
 app.config['MQTT_TLS_ENABLED'] = True
-app.config['MQTT_TLS_CA_CERTS'] = '/etc/mosquitto/ca_certificates/ca.crt'
+app.config['MQTT_TLS_CA_CERTS'] = '/etc/mosquitto/ca_certificates/cert.pem'
 
 print(f"[DEBUG] Attempting to connect to MQTT broker at {MQTT_BROKER_URL}: {app.config['MQTT_BROKER_PORT']}")
 mqtt = Mqtt(app)
