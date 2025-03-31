@@ -40,13 +40,17 @@ Create EC2 instance and setup networking settings to allow HTTPS communication
  * (Include IP address and Hostname of EC2 instance in SAN field of certificates)
  * Setup nginx to route all traffic to HTTPS in /etc/nginx/sites-available/backend
  * Setup mosquitto, store certificates inside /etc/mosquitto/certs, setup conf.d file for TLS, point to certs
+ * Create admin user with a python script ![Screenshot 2025-03-31 111330](https://github.com/user-attachments/assets/83fcccc8-00f7-4a83-a96f-308190f392ec)
  * run startupscript.sh with Bash, and/or add to crontab -e with @reboot command
+   
 Set up Ubuntu on Raspberry Pi(Requires atleast 2GB of RAM for functional Facial Recognition)
  * Install all dependencies
  * Copy certificate from local computer to Raspberry Pi and add to trusted certificate store
  * Set up mosquitto conf.d, set up nginx 
  * run main.py or set up autorun
- * navigate to localhost:5000 for User Interface
-Set up Expo mobile app, currently with the npx expo start command (Still development mode)
+ * navigate to localhost:5000 for User Interface  
+
+Set up Expo mobile app
  * Install all dependencies
  * create .env file with Backend IP
+ * Run using npx expo start or build and deploy
