@@ -32,6 +32,7 @@
      
    
 Deployment Steps:  
+
 Create EC2 instance and setup networking settings to allow HTTPS communication  
  * Install all dependencies(Based on import, might make an import file later)
  * Create .env file to house Twilio tokens, mqtt_broker url, and JWT secret key
