@@ -10,6 +10,67 @@ MobileApp/web-build/
 MobileApp/expo-env.d.ts
 
 # Native
+# Environment files
+.env
+twilio.env
+backend/twilio.env
+Backend/twilio.env
+RaspberryPi/.env
+MobileApp/.env
+MobileApp/.env*.local
+
+# Database files
+*.db
+access_logs.db
+Backend/access_logs.db
+Backend/instance/access_logs.db
+instance/access_logs.db
+
+# Log files
+*.log
+.log
+nohup.out
+Backend/*.log
+Backend/flask_app.log
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
+env/
+ENV/
+Backend/__pycache__/
+Backend/venv/
+Backend/*.pyc
+Backend/*.pyo
+Backend/*.pyd
+
+# Node
+MobileApp/node_modules/
+MobileApp/.expo/
+MobileApp/dist/
+MobileApp/web-build/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Certificates and keys
+*.pem
+*.key
+*.crt
+*.csr
+*.srl
+
+# Build files
 *.orig.*
 *.jks
 *.p8
@@ -41,3 +102,22 @@ MobileApp/app-example
 RaspberryPi/.env
 
 .env
+*.mobileprovision
+
+# Debug files
+MobileApp/npm-debug.*
+MobileApp/yarn-debug.*
+MobileApp/yarn-error.*
+MobileApp/.metro-health-check*
+
+# Example files
+MobileApp/app-example/
+
+# TypeScript
+*.tsbuildinfo
+
+# Backend specific
+Backend/*.py.save
+Backend/hello.py
+Backend/mqtt_publish_test.py
+Backend/start_verification.sh

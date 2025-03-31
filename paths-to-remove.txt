@@ -1,0 +1,15 @@
+Backend/access_logs.db
+Backend/twilio.env
+*.log
+nohup.out
+__pycache__
+*.pyc
+venv
+.env
+*.db
+*.key
+*.crt
+*.pem
+MobileApp/.env
+RaspberryPi/.env
+Backend/backend.py:TWILIO_VERIFY_SID 
