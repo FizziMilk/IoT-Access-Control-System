@@ -46,7 +46,7 @@ Create EC2 instance and setup networking settings to allow HTTPS communication
 Set up Ubuntu on Raspberry Pi(Requires atleast 2GB of RAM for functional Facial Recognition)
  * Install all dependencies
  * Copy certificate from local computer to Raspberry Pi and add to trusted certificate store
- * Set up mosquitto conf.d, set up nginx 
+ * Set up /etc/mosquitto/configs/conf.d, /etc/nginx/sites-available/rpi, .env file
  * run main.py or set up autorun
  * navigate to localhost:5000 for User Interface  
 
