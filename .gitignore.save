@@ -1,5 +1,3 @@
-# Environment files
-.env
 twilio.env
 backend/twilio.env
 
@@ -73,12 +71,11 @@ Thumbs.db
 *.srl
 
 # Build files
+
 *.orig.*
 *.jks
 *.p8
-*.p12
-<<<<<<< HEAD
-*.key
+*.p12*.key
 *.mobileprovision
 
 # Metro
@@ -123,6 +120,4 @@ MobileApp/app-example/
 Backend/*.py.save
 Backend/hello.py
 Backend/mqtt_publish_test.py
-
-Backend/start_verification.sh
 Backend/start_verification.sh
