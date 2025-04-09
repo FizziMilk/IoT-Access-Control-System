@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from twilio.rest import Client
 from dotenv import load_dotenv
 from flask_bcrypt import Bcrypt
-from flask_jwt_extended import JWTManager, create_access_token
+from flask_jwt_extended import JWTManager, create_access_token, get_jwt_identity
 import ssl
 import os
 import json
@@ -176,9 +176,29 @@ class CheckVerification(Resource):
                 .create(to=admin.phone_number, code=code)
 
             if verification_check.status == "approved":
+                # Log successful admin login
+                new_log = AccessLog(
+                    user=admin.username,
+                    user_name=admin.username,
+                    method="Admin Login",
+                    status="Successful"
+                )
+                db.session.add(new_log)
+                db.session.commit()
+                
                 access_token = create_access_token(identity=admin.id)
                 return {"status": "approved", "token": access_token}, 200
             else:
+                # Log failed admin login attempt
+                new_log = AccessLog(
+                    user=admin.username,
+                    user_name=admin.username,
+                    method="Admin Login",
+                    status="Invalid OTP"
+                )
+                db.session.add(new_log)
+                db.session.commit()
+                
                 return {"status": verification_check.status}, 200
 
         except Exception as e:
@@ -271,6 +291,19 @@ class CheckVerificationRPI(Resource):
                 
                 return {"status": "approved"}, 200
             else:
+                # Log invalid OTP attempt
+                user = User.query.filter_by(phone_number=phone_number).first()
+                user_name = user.name if user else None
+                
+                new_log = AccessLog(
+                    user=phone_number,
+                    user_name=user_name,
+                    method="SMS OTP",
+                    status="Invalid Code"
+                )
+                db.session.add(new_log)
+                db.session.commit()
+                
                 return {"status": verification_check.status}, 400
             
         except Exception as e:
@@ -553,6 +586,15 @@ def handle_otp_verification(client, userdata, message):
                     db.session.commit()
                     res = {"phone_number": phone_number, "status": "approved", "message": "OTP verified"}
                 else:
+                    # Log invalid OTP attempt for users with schedules
+                    new_log = AccessLog(
+                        user=phone_number,
+                        user_name=user_name,
+                        method="SMS OTP",
+                        status="Invalid Code"
+                    )
+                    db.session.add(new_log)
+                    db.session.commit()
                     res = {"phone_number": phone_number, "status": "denied", "message": "Invalid OTP"}
                 mqtt.publish(f"door/otp/response/{phone_number}", json.dumps(res), qos=1)
                 return
@@ -682,6 +724,25 @@ class UnlockDoor(Resource):
     def post(self):
         data = request.get_json()
         command = data.get("command", "unlock_door")
+        
+        # Log admin unlock action
+        try:
+            admin_id = get_jwt_identity()
+            admin = Admin.query.get(admin_id)
+            admin_name = admin.username if admin else "Unknown Admin"
+            
+            new_log = AccessLog(
+                user=admin_name,
+                user_name=admin_name,
+                method="Admin App",
+                status="Door Unlocked"
+            )
+            db.session.add(new_log)
+            db.session.commit()
+        except Exception as e:
+            print(f"[ERROR] Failed to log admin door unlock: {str(e)}")
+        
+        # Send the command to unlock the door
         mqtt.publish("door/commands", command, qos=1)
         return {"status": f"Door command '{command}' sent"}, 200
 

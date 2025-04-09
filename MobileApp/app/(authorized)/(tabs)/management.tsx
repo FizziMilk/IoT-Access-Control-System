@@ -18,6 +18,8 @@ export default function Management() {
     const [loading, setLoading] = useState(true);
     const [selectedUser, setSelectedUser] = useState<User | null>(null);
     const [showSchedulePicker, setShowSchedulePicker] = useState(false);
+    const [editingUser, setEditingUser] = useState<number | null>(null);
+    const [editName, setEditName] = useState('');
 
     const fetchUsers = async () => {
         try {
@@ -124,6 +126,39 @@ export default function Management() {
         fetchUsers(); // Refresh the user list
     };
 
+    const updateUserName = async (userId: number, newName: string) => {
+        try {
+            const response = await fetch(`${backendIP}/users`, {
+                method: "PUT",
+                headers: {
+                    "Content-Type": "application/json",
+                },
+                body: JSON.stringify({
+                    id: userId,
+                    name: newName
+                }),
+            });
+
+            if (!response.ok) {
+                throw new Error("Failed to update user name");
+            }
+
+            // Update local state
+            setUsers((prevUsers) =>
+                prevUsers.map((user) =>
+                    user.id === userId
+                        ? { ...user, name: newName }
+                        : user
+                )
+            );
+
+            setEditingUser(null);
+            Alert.alert("Success", "User name updated successfully");
+        } catch (error) {
+            Alert.alert("Error", "Failed to update user name");
+        }
+    };
+
     if (loading) {
         return (
             <View style={styles.center}>
@@ -157,10 +192,61 @@ export default function Management() {
                 keyExtractor={(item) => item.id.toString()}
                 renderItem={({ item }) => (
                     <View style={styles.userItem}>
+                        <TouchableOpacity 
+                            style={styles.deleteButton}
+                            onPress={() => {
+                                Alert.alert(
+                                    "Confirm Deletion",
+                                    `Are you sure you want to remove ${item.name || "this user"}?`,
+                                    [
+                                        { text: "Cancel", style: "cancel" },
+                                        { 
+                                            text: "Delete", 
+                                            style: "destructive",
+                                            onPress: () => removeUser(item.id) 
+                                        }
+                                    ]
+                                );
+                            }}
+                        >
+                            <Text style={styles.deleteButtonText}>×</Text>
+                        </TouchableOpacity>
                         <View style={styles.userInfo}>
-                            <Text style={styles.userName}>
-                                {item.name || "Unnamed User"}
-                            </Text>
+                            {editingUser === item.id ? (
+                                <View style={styles.editNameContainer}>
+                                    <TextInput 
+                                        style={styles.editNameInput}
+                                        value={editName}
+                                        onChangeText={setEditName}
+                                        autoFocus
+                                    />
+                                    <View style={styles.editNameButtons}>
+                                        <TouchableOpacity
+                                            style={[styles.editNameButton, styles.cancelButton]}
+                                            onPress={() => setEditingUser(null)}
+                                        >
+                                            <Text style={styles.editButtonText}>Cancel</Text>
+                                        </TouchableOpacity>
+                                        <TouchableOpacity
+                                            style={[styles.editNameButton, styles.saveButton]}
+                                            onPress={() => updateUserName(item.id, editName)}
+                                        >
+                                            <Text style={styles.editButtonText}>Save</Text>
+                                        </TouchableOpacity>
+                                    </View>
+                                </View>
+                            ) : (
+                                <TouchableOpacity 
+                                    onPress={() => {
+                                        setEditingUser(item.id);
+                                        setEditName(item.name || '');
+                                    }}
+                                >
+                                    <Text style={styles.userName}>
+                                        {item.name || "Unnamed User"}
+                                    </Text>
+                                </TouchableOpacity>
+                            )}
                             <Text style={styles.phoneNumber}>{item.phone_number}</Text>
                         </View>
                         <View style={styles.actions}>
@@ -259,5 +345,60 @@ const styles = StyleSheet.create({
         flex: 1,
         justifyContent: "center",
         alignItems: "center",
+    },
+    deleteButton: {
+        position: 'absolute',
+        top: 8,
+        right: 8,
+        width: 24,
+        height: 24,
+        borderRadius: 12,
+        backgroundColor: '#f8f8f8',
+        justifyContent: 'center',
+        alignItems: 'center',
+        zIndex: 10,
+        elevation: 2,
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 1 },
+        shadowOpacity: 0.2,
+        shadowRadius: 1,
+    },
+    deleteButtonText: {
+        fontSize: 20,
+        fontWeight: "bold",
+        color: "#ff3b30",
+        textAlign: 'center',
+        marginTop: -2,
+    },
+    editNameContainer: {
+        marginBottom: 8,
+    },
+    editNameInput: {
+        borderWidth: 1,
+        borderColor: '#ccc',
+        borderRadius: 4,
+        padding: 6,
+        fontSize: 16,
+    },
+    editNameButtons: {
+        flexDirection: 'row',
+        justifyContent: 'flex-end',
+        marginTop: 4,
+    },
+    editNameButton: {
+        paddingVertical: 4,
+        paddingHorizontal: 8,
+        borderRadius: 4,
+        marginLeft: 8,
+    },
+    cancelButton: {
+        backgroundColor: '#ccc',
+    },
+    saveButton: {
+        backgroundColor: '#34c759',
+    },
+    editButtonText: {
+        color: '#fff',
+        fontWeight: 'bold',
     },
 });
