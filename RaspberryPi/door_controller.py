@@ -12,6 +12,7 @@ class DoorController:
         self.relay_pin = relay_pin
         self.schedule_file = 'door_schedule.json'
         self.schedule = self.load_schedule()
+        self.unlock_callback = None
         
         # Setup GPIO
         GPIO.setmode(GPIO.BCM)
@@ -19,6 +20,11 @@ class DoorController:
         GPIO.output(self.relay_pin, GPIO.HIGH)  # Door is locked by default
         
         logger.info(f"Door controller initialized on pin {relay_pin}")
+
+    def set_unlock_callback(self, callback):
+        """Set the callback function to be called when the door is unlocked."""
+        self.unlock_callback = callback
+        logger.info("Unlock callback set")
 
     def load_schedule(self):
         """Load the door schedule from file."""
@@ -67,6 +73,10 @@ class DoorController:
             
             # Activate the relay (LOW signal to unlock)
             GPIO.output(self.relay_pin, GPIO.LOW)
+            
+            # Call the unlock callback if set
+            if self.unlock_callback:
+                self.unlock_callback(phone_number, reason)
             
             # Wait for 5 seconds
             import time
