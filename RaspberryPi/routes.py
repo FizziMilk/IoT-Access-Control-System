@@ -89,10 +89,10 @@ def setup_routes(app, door_controller, mqtt_handler, session, backend_url):
                 
             return render_template("door_unlocked.html")
         elif response.get("status") == "error":
-            flash(response.get("message", "An error occurred during verification"), "danger")
+            flash(response.get("message", "Incorrect OTP code. Please try again."), "danger")
             return render_template("otp.html", phone_number=phone_number)
         else:
-            flash("Invalid OTP or unexpected response", "danger")
+            flash("Incorrect OTP code. Please try again.", "danger")
             return render_template("otp.html", phone_number=phone_number)
 
     @app.route('/update_schedule', methods=['POST'])

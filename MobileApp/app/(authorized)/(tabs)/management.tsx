@@ -1,5 +1,5 @@
-import React, { useState, useCallback } from 'react';
-import { View, Text, TextInput, Button,Switch, FlatList, Alert, StyleSheet, TouchableOpacity, ActivityIndicator } from 'react-native';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
+import { View, Text, TextInput, Button, Switch, FlatList, Alert, StyleSheet, TouchableOpacity, ActivityIndicator, KeyboardAvoidingView, Platform, ScrollView, Keyboard, findNodeHandle } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { backendIP } from "../../../config";
 import SchedulePicker from "../../../components/SchedulePicker";
@@ -20,6 +20,10 @@ export default function Management() {
     const [showSchedulePicker, setShowSchedulePicker] = useState(false);
     const [editingUser, setEditingUser] = useState<number | null>(null);
     const [editName, setEditName] = useState('');
+    const flatListRef = useRef<FlatList>(null);
+    const scrollViewRef = useRef<ScrollView>(null);
+    const itemRefs = useRef<{[key: string]: any}>({});
+    const [keyboardVisible, setKeyboardVisible] = useState(false);
 
     const fetchUsers = async () => {
         try {
@@ -128,6 +132,12 @@ export default function Management() {
 
     const updateUserName = async (userId: number, newName: string) => {
         try {
+            // Find the current user to get their is_allowed status
+            const currentUser = users.find(user => user.id === userId);
+            if (!currentUser) {
+                throw new Error("User not found");
+            }
+
             const response = await fetch(`${backendIP}/users`, {
                 method: "PUT",
                 headers: {
@@ -135,7 +145,8 @@ export default function Management() {
                 },
                 body: JSON.stringify({
                     id: userId,
-                    name: newName
+                    name: newName,
+                    is_allowed: currentUser.is_allowed // Include current is_allowed status
                 }),
             });
 
@@ -158,6 +169,67 @@ export default function Management() {
             Alert.alert("Error", "Failed to update user name");
         }
     };
+    
+    // Add keyboard listeners
+    useEffect(() => {
+        const showListener = Keyboard.addListener(
+            Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow',
+            () => {
+                setKeyboardVisible(true);
+                // Re-scroll when keyboard appears to ensure edit field is visible
+                if (editingUser !== null) {
+                    setTimeout(() => scrollToEditingItem(editingUser), 100);
+                }
+            }
+        );
+        
+        const hideListener = Keyboard.addListener(
+            Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide',
+            () => {
+                setKeyboardVisible(false);
+            }
+        );
+        
+        return () => {
+            showListener.remove();
+            hideListener.remove();
+        };
+    }, [editingUser]);
+
+    // Function to scroll to editing item
+    const scrollToEditingItem = (userId: number) => {
+        if (scrollViewRef.current && itemRefs.current[userId.toString()]) {
+            // Find the y-position of the editing item
+            const node = findNodeHandle(itemRefs.current[userId.toString()]);
+            if (node) {
+                // Calculate position to scroll to (adjust the 150 value as needed)
+                scrollViewRef.current.scrollTo({
+                    y: getItemPosition(userId) - 150,
+                    animated: true
+                });
+            }
+        }
+    };
+
+    // Helper function to estimate item position
+    const getItemPosition = (userId: number) => {
+        // Estimate position based on index
+        const index = users.findIndex(user => user.id === userId);
+        // Assuming each item is approximately 180px tall on average
+        // Adjust the 180 and other values based on your actual UI
+        return index * 180 + 250; // 250 accounts for the Add User section and padding
+    };
+
+    // Updated edit name press handler
+    const handleEditNamePress = (user: User) => {
+        setEditingUser(user.id);
+        setEditName(user.name || '');
+        
+        // Wait a bit for state to update then scroll
+        setTimeout(() => {
+            scrollToEditingItem(user.id);
+        }, 50);
+    };
 
     if (loading) {
         return (
@@ -168,30 +240,42 @@ export default function Management() {
     }
 
     return (
-        <View style={styles.container}>
-            <Text style={styles.title}>Add User</Text>
-            <TextInput
-                style={styles.input}
-                placeholder="Name (optional)"
-                value={name}
-                onChangeText={setName}
-            />
-            <TextInput
-                style={styles.input}
-                placeholder="Phone Number (With country code)"
-                value={phoneNumber}
-                onChangeText={setPhoneNumber}
-                keyboardType="phone-pad"
-            />
-            <Button title= "Add User" onPress={addUser}/>
+        <KeyboardAvoidingView 
+            style={{ flex: 1 }}
+            behavior={Platform.OS === "ios" ? "padding" : "height"}
+            keyboardVerticalOffset={Platform.OS === "ios" ? 90 : 20}
+        >
+            <ScrollView 
+                ref={scrollViewRef}
+                style={styles.scrollContainer}
+                contentContainerStyle={styles.scrollContent}
+                keyboardShouldPersistTaps="handled"
+            >
+                <View style={styles.addUserSection}>
+                    <Text style={styles.title}>Add User</Text>
+                    <TextInput
+                        style={styles.input}
+                        placeholder="Name (optional)"
+                        value={name}
+                        onChangeText={setName}
+                    />
+                    <TextInput
+                        style={styles.input}
+                        placeholder="Phone Number (With country code)"
+                        value={phoneNumber}
+                        onChangeText={setPhoneNumber}
+                        keyboardType="phone-pad"
+                    />
+                    <Button title="Add User" onPress={addUser}/>
+                </View>
 
-            {/* User Management Section */}
-            <Text style={[styles.title, {fontSize: 20, marginTop: 32}]}> User Management</Text>
-            <FlatList
-                data={users}
-                keyExtractor={(item) => item.id.toString()}
-                renderItem={({ item }) => (
-                    <View style={styles.userItem}>
+                {/* User Management Section */}
+                <Text style={[styles.title, {fontSize: 20, marginTop: 32}]}> User Management</Text>
+                {users.map((item) => (
+                    <View 
+                        key={item.id.toString()} 
+                        style={styles.userItem}
+                    >
                         <TouchableOpacity 
                             style={styles.deleteButton}
                             onPress={() => {
@@ -213,7 +297,12 @@ export default function Management() {
                         </TouchableOpacity>
                         <View style={styles.userInfo}>
                             {editingUser === item.id ? (
-                                <View style={styles.editNameContainer}>
+                                <View 
+                                    style={styles.editNameContainer}
+                                    ref={ref => {
+                                        itemRefs.current[item.id.toString()] = ref;
+                                    }}
+                                >
                                     <TextInput 
                                         style={styles.editNameInput}
                                         value={editName}
@@ -237,10 +326,10 @@ export default function Management() {
                                 </View>
                             ) : (
                                 <TouchableOpacity 
-                                    onPress={() => {
-                                        setEditingUser(item.id);
-                                        setEditName(item.name || '');
+                                    ref={ref => {
+                                        itemRefs.current[item.id.toString()] = ref;
                                     }}
+                                    onPress={() => handleEditNamePress(item)}
                                 >
                                     <Text style={styles.userName}>
                                         {item.name || "Unnamed User"}
@@ -272,15 +361,18 @@ export default function Management() {
                             </TouchableOpacity>
                         </View>
                     </View>
+                ))}
+                {/* Add more padding at the bottom for keyboard */}
+                <View style={{height: 200}} />
+                
+                {showSchedulePicker && selectedUser && (
+                    <SchedulePicker
+                        userId={selectedUser.id}
+                        onScheduleCreated={handleScheduleCreated}
+                    />
                 )}
-            />
-            {showSchedulePicker && selectedUser && (
-                <SchedulePicker
-                    userId={selectedUser.id}
-                    onScheduleCreated={handleScheduleCreated}
-                />
-            )}
-        </View>
+            </ScrollView>
+        </KeyboardAvoidingView>
     );
 }
 
@@ -400,5 +492,14 @@ const styles = StyleSheet.create({
     editButtonText: {
         color: '#fff',
         fontWeight: 'bold',
+    },
+    scrollContainer: {
+        flex: 1,
+    },
+    scrollContent: {
+        padding: 16,
+    },
+    addUserSection: {
+        marginBottom: 16,
     },
 });

@@ -34,7 +34,7 @@ def verify_otp_rest(session, backend_url, phone_number, otp_code):
             else:
                 return {"status": "error", "message": "Incorrect OTP code. Please try again."}
         else:
-            return {"status": "error", "message": response.json().get("error", "Unknown error")}
+            return {"status": "error", "message": response.json().get("error", "Incorrect OTP code. Please try again.")}
     except Exception as e:
         print(f"[DEBUG] Error in verify_otp_rest: {str(e)}")
         return {"status": "error", "message": str(e)} 
