@@ -64,6 +64,17 @@ def unlock_door(duration=10):
     print("[DEBUG] Unlocking door...")
     GPIO.output(DOOR_PIN, GPIO.HIGH)  # Activate door relay
     print("[DEBUG] Door unlocked")
+    
+    # Send confirmation to backend
+    try:
+        response = session.post(f"{BACKEND_URL}/door-unlock-confirmation", json={
+            "status": "unlocked",
+            "method": "schedule",  # This will be overridden by the actual method
+            "timestamp": datetime.now().isoformat()
+        })
+        print(f"[DEBUG] Door unlock confirmation sent: {response.status_code}")
+    except Exception as e:
+        print(f"[ERROR] Failed to send door unlock confirmation: {e}")
 
     # Schedule the door to lock after the specified duration
     Timer(duration, lock_door).start()
@@ -102,6 +113,16 @@ def verify():
     response = verify_otp_rest(phone_number, otp_code)
     if response.get("status") == "approved":
         unlock_door()
+        # Send OTP-specific confirmation
+        try:
+            session.post(f"{BACKEND_URL}/door-unlock-confirmation", json={
+                "status": "unlocked",
+                "method": "SMS OTP",
+                "phone_number": phone_number,
+                "timestamp": datetime.now().isoformat()
+            })
+        except Exception as e:
+            print(f"[ERROR] Failed to send OTP unlock confirmation: {e}")
         flash("OTP verified, door unlocked", "success")
         time.sleep(10)
         return redirect(url_for('index'))

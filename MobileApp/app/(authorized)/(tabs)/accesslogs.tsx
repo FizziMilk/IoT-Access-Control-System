@@ -28,7 +28,27 @@ export default function AccessLogs() {
         }
         return res.json();
       })
-      .then((data: AccessLog[]) => setLogs(data))
+      .then((data: AccessLog[]) => {
+        console.log("Raw logs data:", data); // Debug raw data
+        const processedLogs = data.map(log => {
+          console.log("Processing log:", log); // Debug individual log
+          try {
+            const date = new Date(log.timestamp);
+            console.log("Parsed date:", date); // Debug parsed date
+            return {
+              ...log,
+              formattedTimestamp: date.toLocaleString()
+            };
+          } catch (error) {
+            console.error("Error parsing timestamp:", error, "for log:", log);
+            return {
+              ...log,
+              formattedTimestamp: "Invalid timestamp"
+            };
+          }
+        });
+        setLogs(processedLogs);
+      })
       .catch((err) => {
         console.error("Error fetching access logs:", err);
         Alert.alert("Error", `Failed to load access logs: ${err.message}`);
@@ -58,7 +78,7 @@ export default function AccessLogs() {
             <Text style={styles.details}>
               {item.method} - {item.status}
             </Text>
-            <Text style={styles.timestamp}>{new Date(item.timestamp).toLocaleString()}</Text>
+            <Text style={styles.timestamp}>{item.formattedTimestamp}</Text>
           </View>
         )}
       />

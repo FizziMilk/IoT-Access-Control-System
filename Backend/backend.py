@@ -680,6 +680,33 @@ class LockDoor(Resource):
         mqtt.publish("door/commands", command, qos=1)
         return {"status": f"Door command '{command}' sent"}, 200
 
+# Resource to handle door unlock confirmations from Raspberry Pi
+class DoorUnlockConfirmation(Resource):
+    def post(self):
+        try:
+            data = request.get_json()
+            method = data.get("method")
+            phone_number = data.get("phone_number")
+            
+            # Get user name if available
+            user = User.query.filter_by(phone_number=phone_number).first() if phone_number else None
+            user_name = user.name if user else None
+            
+            # Create log entry
+            new_log = AccessLog(
+                user=phone_number if phone_number else "System",
+                user_name=user_name,
+                method=method,
+                status="Door Unlocked"
+            )
+            db.session.add(new_log)
+            db.session.commit()
+            
+            return {"status": "success"}, 200
+        except Exception as e:
+            print(f"[ERROR] Failed to process door unlock confirmation: {e}")
+            return {"error": str(e)}, 500
+
 ## Exposing RESTful API endpoints
 api.add_resource(LoginResource, "/login")
 api.add_resource(CheckVerification, "/verify-otp")
@@ -692,6 +719,7 @@ api.add_resource(DoorEntryAPI, "/door-entry")
 api.add_resource(UserManagementAPI, "/users")
 api.add_resource(UpdateUserNameAPI, "/update-user-name")
 api.add_resource(UserScheduleAPI, '/user-schedule')
+api.add_resource(DoorUnlockConfirmation, "/door-unlock-confirmation")
 
 if __name__ == '__main__':
     try:
