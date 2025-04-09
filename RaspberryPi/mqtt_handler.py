@@ -12,7 +12,7 @@ class MQTTHandler:
         self.pending_verifications = {}
         
         # MQTT Configuration
-        self.app.config['MQTT_BROKER_URL'] = os.getenv("MQTT_BROKER")
+        self.app.config['MQTT_BROKER_URL'] = os.getenv("MQTT_BROKER_URL")
         self.app.config['MQTT_BROKER_PORT'] = int(os.getenv("MQTT_PORT"))
         self.app.config['MQTT_TLS_VERSION'] = ssl.PROTOCOL_TLSv1_2
         self.app.config['MQTT_TLS_ENABLED'] = True

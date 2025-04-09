@@ -16,7 +16,7 @@ app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", "supersecretkey")
 
 # Check required environment variables
-required_env_vars = ["MQTT_BROKER", "MQTT_PORT", "CA_CERT", "BACKEND_URL"]
+required_env_vars = ["MQTT_BROKER_URL", "MQTT_PORT", "CA_CERT", "BACKEND_URL"]
 for var in required_env_vars:
     if not os.getenv(var):
         raise EnvironmentError(f"Missing required environment variable: {var}")
