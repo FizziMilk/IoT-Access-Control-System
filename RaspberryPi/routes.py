@@ -83,28 +83,19 @@ def setup_routes(app, door_controller, mqtt_handler, session, backend_url):
                 return redirect(url_for("door_entry"))
 
             try:
-                # First check if user is allowed or has a valid schedule
-                resp = session.post(f"{backend_url}/check-access", json={"phone_number": phone_number})
-                print(f"[DEBUG] Access check response: {resp.status_code} - {resp.text}")
+                # Send request to door-entry endpoint
+                resp = session.post(f"{backend_url}/door-entry", json={"phone_number": phone_number})
+                print(f"[DEBUG] Backend response: {resp.status_code} - {resp.text}")
                 data = resp.json()
 
-                if data.get("status") == "approved":
-                    # User is allowed or has valid schedule, proceed with OTP verification
-                    resp = session.post(f"{backend_url}/door-entry", json={"phone_number": phone_number})
-                    print(f"[DEBUG] Backend response: {resp.status_code} - {resp.text}")
-                    data = resp.json()
-
-                    if data.get("status") == "OTP sent":
-                        flash("OTP sent to your phone. Please enter the OTP.", "success")
-                        return render_template("otp.html", phone_number=phone_number)
-                    elif data.get("status") == "pending":
-                        flash(data.get("message", "Access pending."), "warning")
-                        return render_template("pending.html", phone_number=phone_number)
-                    else:
-                        flash(data.get("error", "An error occurred."), "danger")
-                        return redirect(url_for("door_entry"))
+                if data.get("status") == "OTP sent":
+                    flash("OTP sent to your phone. Please enter the OTP.", "success")
+                    return render_template("otp.html", phone_number=phone_number)
+                elif data.get("status") == "pending":
+                    flash(data.get("message", "Access pending."), "warning")
+                    return render_template("pending.html", phone_number=phone_number)
                 else:
-                    flash(data.get("message", "Access denied."), "danger")
+                    flash(data.get("error", "An error occurred."), "danger")
                     return redirect(url_for("door_entry"))
 
             except Exception as e:
