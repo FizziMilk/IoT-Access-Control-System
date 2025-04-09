@@ -1,46 +1,10 @@
 <<<<<<< HEAD
+<<<<<<< HEAD
 twilio.env
 =======
 >>>>>>> 8f236dbc19220929f20c903de293c40a4d557b5b
 # Environment variables
+=======
+>>>>>>> b4b94dedbe3032bba1b6cd7bdefbdf010e9737c3
 twilio.env
-.env
-*.env
-
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-venv/
-.venv/
-env/
-ENV/
-
-# Database
-instance/
-*.db
-access_logs.db
-instance/access_logs.db
-
-# Logs
-*.log
-flask_app.log
-nohup.out
-
-# Temporary files
-*.py.save
-*.pyc
-*.pyo
-*.pyd
-
-# Test files
-hello.py
-mqtt_publish_test.py
-start_verification.sh
-
-# Certificates
-*.pem
-*.key
-*.crt
-*.csr
-*.srl
+add_user.py

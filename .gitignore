@@ -2,6 +2,7 @@
 .env
 twilio.env
 backend/twilio.env
+<<<<<<< HEAD
 
 MobileApp/node_modules/
 
@@ -17,6 +18,8 @@ MobileApp/expo-env.d.ts
 twilio.env
 backend/twilio.env
 Backend/twilio.env
+=======
+>>>>>>> b4b94dedbe3032bba1b6cd7bdefbdf010e9737c3
 RaspberryPi/.env
 MobileApp/.env
 MobileApp/.env*.local
@@ -24,16 +27,12 @@ MobileApp/.env*.local
 # Database files
 *.db
 access_logs.db
-Backend/access_logs.db
-Backend/instance/access_logs.db
-instance/access_logs.db
+backend/access_logs.db
 
 # Log files
 *.log
 .log
 nohup.out
-Backend/*.log
-Backend/flask_app.log
 
 # Python
 __pycache__/
@@ -43,11 +42,6 @@ venv/
 .venv/
 env/
 ENV/
-Backend/__pycache__/
-Backend/venv/
-Backend/*.pyc
-Backend/*.pyo
-Backend/*.pyd
 
 # Node
 MobileApp/node_modules/
@@ -117,6 +111,7 @@ MobileApp/.metro-health-check*
 MobileApp/app-example/
 
 # TypeScript
+<<<<<<< HEAD
 *.tsbuildinfo
 
 # Backend specific
@@ -126,3 +121,6 @@ Backend/mqtt_publish_test.py
 
 Backend/start_verification.sh
 Backend/start_verification.sh
+=======
+*.tsbuildinfo
+>>>>>>> b4b94dedbe3032bba1b6cd7bdefbdf010e9737c3
