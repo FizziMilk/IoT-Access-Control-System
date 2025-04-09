@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from twilio.rest import Client
 from dotenv import load_dotenv
 from flask_bcrypt import Bcrypt
-from flask_jwt_extended import JWTManager, create_access_token, get_jwt_identity
+from flask_jwt_extended import JWTManager, create_access_token, get_jwt_identity, jwt_required
 import ssl
 import os
 import json
@@ -721,6 +721,7 @@ class UserScheduleAPI(Resource):
         
 # MQTT Resource to unlock door with RPI
 class UnlockDoor(Resource):
+    @jwt_required()  # Require JWT authentication
     def post(self):
         data = request.get_json()
         command = data.get("command", "unlock_door")

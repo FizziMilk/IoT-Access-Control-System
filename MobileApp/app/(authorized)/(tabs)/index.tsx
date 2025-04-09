@@ -1,7 +1,8 @@
-import { StyleSheet, View, Button, Pressable, Text } from 'react-native';
+import { StyleSheet, View, Button, Pressable, Text, Alert } from 'react-native';
 import { useRouter } from 'expo-router';
 import ImageViewer from '@/components/ImageViewer';
 import { useAuth } from '@/providers/auth';
+import * as SecureStore from 'expo-secure-store';
 
 const PlaceholderImage = require("@/assets/images/background-image.png");
 const backendIP = process.env.EXPO_PUBLIC_BACKEND_IP;
@@ -17,19 +18,34 @@ export default function Index() {
 
   //Sends a POST to the webserver to unlock the door
   const unlockDoor = async () => {
-    fetch(`${backendIP}/unlock`, {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({ command: 'unlock_door'})
-  })
-    .then(response => response.json())
-    .then(data => {
+    try {
+      // Get the JWT token from secure storage
+      const token = await SecureStore.getItemAsync('accessToken');
+      
+      if (!token) {
+        Alert.alert('Error', 'Not authenticated. Please log in again.');
+        return;
+      }
+      
+      // Send the request with the auth token
+      const response = await fetch(`${backendIP}/unlock`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ command: 'unlock_door'})
+      });
+      
+      const data = await response.json();
       console.log('Unlock response:', data);
-    })
-    .catch(error => {
+      
+      // Show success message
+      Alert.alert('Success', 'Door unlock command sent');
+    } catch (error) {
       console.error('Error:', error);
-    });
+      Alert.alert('Error', 'Failed to send unlock command');
+    }
   }
 
   return (
