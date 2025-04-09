@@ -186,7 +186,10 @@ class CheckVerification(Resource):
                 db.session.add(new_log)
                 db.session.commit()
                 
+                # Create JWT token with admin ID as identity
+                print(f"[DEBUG] Creating access token for admin ID: {admin.id}")
                 access_token = create_access_token(identity=admin.id)
+                print(f"[DEBUG] Generated token length: {len(access_token)}")
                 return {"status": "approved", "token": access_token}, 200
             else:
                 # Log failed admin login attempt
@@ -726,11 +729,25 @@ class UnlockDoor(Resource):
         data = request.get_json()
         command = data.get("command", "unlock_door")
         
+        print(f"[DEBUG] Received unlock door request with command: {command}")
+        
         # Log admin unlock action
         try:
             admin_id = get_jwt_identity()
+            print(f"[DEBUG] JWT identity extracted: {admin_id}")
+            
+            if admin_id is None:
+                print("[ERROR] Failed to extract admin ID from JWT token")
+                raise ValueError("Invalid JWT token - could not extract admin ID")
+                
             admin = Admin.query.get(admin_id)
-            admin_name = admin.username if admin else "Unknown Admin"
+            if admin is None:
+                print(f"[ERROR] No admin found with ID: {admin_id}")
+                raise ValueError(f"Admin with ID {admin_id} not found in database")
+                
+            admin_name = admin.username
+            
+            print(f"[DEBUG] Admin authenticated: {admin_name} (ID: {admin_id})")
             
             new_log = AccessLog(
                 user=admin_name,
@@ -740,11 +757,20 @@ class UnlockDoor(Resource):
             )
             db.session.add(new_log)
             db.session.commit()
+            print(f"[DEBUG] Admin door unlock logged to database")
         except Exception as e:
             print(f"[ERROR] Failed to log admin door unlock: {str(e)}")
+            # Continue with door unlock even if logging fails
         
         # Send the command to unlock the door
-        mqtt.publish("door/commands", command, qos=1)
+        print(f"[DEBUG] Publishing MQTT message to topic 'door/commands': {command}")
+        try:
+            mqtt.publish("door/commands", command, qos=1)
+            print(f"[DEBUG] MQTT message published successfully")
+        except Exception as e:
+            print(f"[ERROR] Failed to publish MQTT message: {str(e)}")
+            return {"status": "error", "message": f"Failed to send door command: {str(e)}"}, 500
+            
         return {"status": f"Door command '{command}' sent"}, 200
 
 # MQTT Resource to lock door with RPI

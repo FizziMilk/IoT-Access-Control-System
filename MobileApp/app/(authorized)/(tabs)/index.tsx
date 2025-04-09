@@ -21,11 +21,15 @@ export default function Index() {
     try {
       // Get the JWT token from secure storage
       const token = await SecureStore.getItemAsync('accessToken');
+      console.log('[DEBUG] Retrieved token from secure storage, length:', token ? token.length : 'null');
       
       if (!token) {
         Alert.alert('Error', 'Not authenticated. Please log in again.');
         return;
       }
+      
+      console.log('[DEBUG] Sending request to:', `${backendIP}/unlock`);
+      console.log('[DEBUG] Using Authorization header:', `Bearer ${token.substring(0, 10)}...`);
       
       // Send the request with the auth token
       const response = await fetch(`${backendIP}/unlock`, {
@@ -37,13 +41,15 @@ export default function Index() {
         body: JSON.stringify({ command: 'unlock_door'})
       });
       
+      console.log('[DEBUG] Response status:', response.status);
+      
       const data = await response.json();
-      console.log('Unlock response:', data);
+      console.log('[DEBUG] Unlock response:', data);
       
       // Show success message
       Alert.alert('Success', 'Door unlock command sent');
     } catch (error) {
-      console.error('Error:', error);
+      console.error('[ERROR] Door unlock error:', error);
       Alert.alert('Error', 'Failed to send unlock command');
     }
   }

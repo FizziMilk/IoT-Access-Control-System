@@ -48,10 +48,17 @@ class MQTTHandler:
 
                 elif message.topic == "door/commands":
                     command = message.payload.decode()
+                    print(f"[DEBUG] Received door command: {command}")
                     if command == "unlock_door":
+                        print(f"[DEBUG] Executing unlock_door command")
                         self.door_controller.unlock_door()
+                        print(f"[DEBUG] Door unlock command executed successfully")
                     elif command == "lock_door":
+                        print(f"[DEBUG] Executing lock_door command")
                         self.door_controller.lock_door()
+                        print(f"[DEBUG] Door lock command executed successfully")
+                    else:
+                        print(f"[WARNING] Unknown door command received: {command}")
 
                 elif message.topic == "door/schedule":
                     schedule_data = json.loads(message.payload.decode())
