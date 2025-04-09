@@ -2,7 +2,6 @@
 .env
 twilio.env
 backend/twilio.env
-<<<<<<< HEAD
 
 MobileApp/node_modules/
 
@@ -18,8 +17,6 @@ MobileApp/expo-env.d.ts
 twilio.env
 backend/twilio.env
 Backend/twilio.env
-=======
->>>>>>> b4b94dedbe3032bba1b6cd7bdefbdf010e9737c3
 RaspberryPi/.env
 MobileApp/.env
 MobileApp/.env*.local
