@@ -19,12 +19,11 @@ logging.basicConfig(level=logging.DEBUG, format="%(asctime)s [%(levelname)s] %(m
 load_dotenv("twilio.env")  # Load the Twilio environment file
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
+TWILIO_VERIFY_SID = os.getenv("TWILIO_VERIFY_SID")
 # Other secrets
 MQTT_BROKER_URL = os.getenv("MQTT_BROKER_URL")
 JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY")
 twilio_client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
-
-TWILIO_VERIFY_SID = "VA1c1c5d9906340e1c187f83dbc26057a0"
 
 app = Flask(__name__)
 api = Api(app)
