@@ -65,7 +65,7 @@ class DoorController:
             'message': "Door is not scheduled to be unlocked"
         }
 
-    def unlock_door(self, reason, phone_number):
+    def unlock_door(self, reason=None, phone_number=None):
         """Unlock the door for a specified duration."""
         try:
             # Log the unlock attempt

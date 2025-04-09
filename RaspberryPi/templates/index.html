@@ -19,7 +19,10 @@
     <div class="container">
         <h1>Door Control System</h1>
         <div class="mt-4">
-            <a href="{{ url_for('door_entry') }}" class="btn btn-primary">Enter Door</a>
+            <form action="{{ url_for('door_entry') }}" method="post">
+                <input type="hidden" name="phone_number" value="default_phone_number">
+                <button type="submit" class="btn btn-primary">Enter Door</button>
+            </form>
         </div>
     </div>
 </body>
