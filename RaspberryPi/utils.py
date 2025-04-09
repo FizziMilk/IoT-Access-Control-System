@@ -28,7 +28,11 @@ def verify_otp_rest(session, backend_url, phone_number, otp_code):
         print(f"[DEBUG] Backend response: {response.status_code} - {response.text}")
         
         if response.status_code == 200:
-            return response.json()
+            data = response.json()
+            if data.get("status") == "approved":
+                return data
+            else:
+                return {"status": "error", "message": "Incorrect OTP code. Please try again."}
         else:
             return {"status": "error", "message": response.json().get("error", "Unknown error")}
     except Exception as e:

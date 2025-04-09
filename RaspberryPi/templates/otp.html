@@ -31,7 +31,10 @@
                 <label for="otp_code" class="form-label">Enter OTP</label>
                 <input type="text" class="form-control" id="otp_code" name="otp_code" required>
             </div>
-            <button type="submit" class="btn btn-primary">Verify OTP</button>
+            <div class="d-flex justify-content-between">
+                <a href="{{ url_for('index') }}" class="btn btn-secondary">Back to Home</a>
+                <button type="submit" class="btn btn-primary">Verify OTP</button>
+            </div>
         </form>
     </div>
 </body>
