@@ -188,7 +188,7 @@ class CheckVerification(Resource):
                 
                 # Create JWT token with admin ID as identity
                 print(f"[DEBUG] Creating access token for admin ID: {admin.id}")
-                access_token = create_access_token(identity=admin.id)
+                access_token = create_access_token(identity=str(admin.id))  # Convert ID to string
                 print(f"[DEBUG] Generated token length: {len(access_token)}")
                 return {"status": "approved", "token": access_token}, 200
             else:
@@ -734,20 +734,28 @@ class UnlockDoor(Resource):
         # Log admin unlock action
         try:
             admin_id = get_jwt_identity()
-            print(f"[DEBUG] JWT identity extracted: {admin_id}")
+            print(f"[DEBUG] JWT identity extracted: {admin_id}, type: {type(admin_id)}")
             
             if admin_id is None:
                 print("[ERROR] Failed to extract admin ID from JWT token")
                 raise ValueError("Invalid JWT token - could not extract admin ID")
+            
+            # Convert string ID back to integer for database lookup
+            try:
+                admin_id_int = int(admin_id)
+                print(f"[DEBUG] Converted admin_id to integer: {admin_id_int}")
+            except (ValueError, TypeError):
+                print(f"[ERROR] Could not convert admin_id '{admin_id}' to integer")
+                raise ValueError(f"Invalid admin ID format: {admin_id}")
                 
-            admin = Admin.query.get(admin_id)
+            admin = Admin.query.get(admin_id_int)
             if admin is None:
-                print(f"[ERROR] No admin found with ID: {admin_id}")
-                raise ValueError(f"Admin with ID {admin_id} not found in database")
+                print(f"[ERROR] No admin found with ID: {admin_id_int}")
+                raise ValueError(f"Admin with ID {admin_id_int} not found in database")
                 
             admin_name = admin.username
             
-            print(f"[DEBUG] Admin authenticated: {admin_name} (ID: {admin_id})")
+            print(f"[DEBUG] Admin authenticated: {admin_name} (ID: {admin_id_int})")
             
             new_log = AccessLog(
                 user=admin_name,
