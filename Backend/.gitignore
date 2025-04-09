@@ -1,10 +1,4 @@
-<<<<<<< HEAD
-<<<<<<< HEAD
-twilio.env
-=======
->>>>>>> 8f236dbc19220929f20c903de293c40a4d557b5b
-# Environment variables
-=======
->>>>>>> b4b94dedbe3032bba1b6cd7bdefbdf010e9737c3
+
 twilio.env
 add_user.py
+venv/
