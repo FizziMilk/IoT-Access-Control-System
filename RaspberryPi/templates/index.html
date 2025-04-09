@@ -19,33 +19,8 @@
     <div class="container">
         <h1>Door Control System</h1>
         <div class="mt-4">
-            <form id="doorEntryForm">
-                <input type="hidden" name="phone_number" value="default_phone_number">
-                <button type="submit" class="btn btn-primary">Enter Door</button>
-            </form>
+            <a href="{{ url_for('door_entry') }}" class="btn btn-primary">Enter Door</a>
         </div>
     </div>
-    <script>
-        document.getElementById('doorEntryForm').addEventListener('submit', function(event) {
-            event.preventDefault();
-            const formData = new FormData(this);
-            const data = Object.fromEntries(formData.entries());
-            fetch("{{ url_for('door_entry') }}", {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify(data)
-            })
-            .then(response => response.json())
-            .then(data => {
-                alert(data.message);
-            })
-            .catch((error) => {
-                console.error('Error:', error);
-                alert('An error occurred while processing your request.');
-            });
-        });
-    </script>
 </body>
 </html> 

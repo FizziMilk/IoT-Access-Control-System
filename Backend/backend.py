@@ -256,6 +256,19 @@ class CheckVerificationRPI(Resource):
                 .create(to=phone_number, code=otp_code)
             
             if verification_check.status == "approved":
+                # Log successful OTP verification
+                user = User.query.filter_by(phone_number=phone_number).first()
+                user_name = user.name if user else None
+                
+                new_log = AccessLog(
+                    user=phone_number,
+                    user_name=user_name,
+                    method="SMS OTP",
+                    status="Verified"
+                )
+                db.session.add(new_log)
+                db.session.commit()
+                
                 return {"status": "approved"}, 200
             else:
                 return {"status": verification_check.status}, 400
@@ -675,37 +688,43 @@ class UnlockDoor(Resource):
 # MQTT Resource to lock door with RPI
 class LockDoor(Resource):
     def post(self):
-        data = request.get_json()
-        command = data.get("command", "lock_door")
-        mqtt.publish("door/commands", command, qos=1)
-        return {"status": f"Door command '{command}' sent"}, 200
+        # Send the lock door command via MQTT
+        mqtt.publish("door/commands", "lock_door")
+        return {"message": "Lock door command sent"}, 200
 
-# Resource to handle door unlock confirmations from Raspberry Pi
-class DoorUnlockConfirmation(Resource):
+# New resource for logging door access events
+class LogDoorAccess(Resource):
     def post(self):
+        data = request.get_json()
+        
+        user = data.get("user", "Schedule System")
+        method = data.get("method", "Unknown")
+        status = data.get("status", "Unknown")
+        details = data.get("details", "")
+        
+        # Get user name if available and user is a phone number
+        user_name = None
+        if user != "Schedule System":
+            user_obj = User.query.filter_by(phone_number=user).first()
+            if user_obj:
+                user_name = user_obj.name
+        
+        # Create the log entry
+        new_log = AccessLog(
+            user=user,
+            user_name=user_name,
+            method=method,
+            status=status
+        )
+        
         try:
-            data = request.get_json()
-            method = data.get("method")
-            phone_number = data.get("phone_number")
-            
-            # Get user name if available
-            user = User.query.filter_by(phone_number=phone_number).first() if phone_number else None
-            user_name = user.name if user else None
-            
-            # Create log entry
-            new_log = AccessLog(
-                user=phone_number if phone_number else "System",
-                user_name=user_name,
-                method=method,
-                status="Door Unlocked"
-            )
             db.session.add(new_log)
             db.session.commit()
-            
-            return {"status": "success"}, 200
+            return {"status": "success", "message": "Door access logged"}, 200
         except Exception as e:
-            print(f"[ERROR] Failed to process door unlock confirmation: {e}")
-            return {"error": str(e)}, 500
+            db.session.rollback()
+            print(f"[ERROR] Failed to log door access: {str(e)}")
+            return {"status": "error", "message": str(e)}, 500
 
 ## Exposing RESTful API endpoints
 api.add_resource(LoginResource, "/login")
@@ -719,7 +738,8 @@ api.add_resource(DoorEntryAPI, "/door-entry")
 api.add_resource(UserManagementAPI, "/users")
 api.add_resource(UpdateUserNameAPI, "/update-user-name")
 api.add_resource(UserScheduleAPI, '/user-schedule')
-api.add_resource(DoorUnlockConfirmation, "/door-unlock-confirmation")
+api.add_resource(LockDoor, '/lock')
+api.add_resource(LogDoorAccess, '/log-door-access')
 
 if __name__ == '__main__':
     try:

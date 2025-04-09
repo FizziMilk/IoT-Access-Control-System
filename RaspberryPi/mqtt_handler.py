@@ -3,7 +3,6 @@ from flask_mqtt import Mqtt
 import ssl
 import os
 import requests
-from datetime import datetime
 
 class MQTTHandler:
     def __init__(self, app, door_controller):
@@ -21,25 +20,6 @@ class MQTTHandler:
 
         self.mqtt = Mqtt(self.app)
         self.setup_mqtt_handlers()
-        
-        # Set up door unlock callback
-        self.door_controller.set_unlock_callback(self.handle_door_unlock)
-
-    def handle_door_unlock(self, method, phone_number=None):
-        """Handle door unlock events by sending confirmation to backend"""
-        try:
-            response = requests.post(
-                f"{os.getenv('BACKEND_URL')}/door-unlock-confirmation",
-                json={
-                    "status": "unlocked",
-                    "method": method,
-                    "phone_number": phone_number,
-                    "timestamp": datetime.now().isoformat()
-                }
-            )
-            print(f"[DEBUG] Door unlock confirmation sent: {response.status_code}")
-        except Exception as e:
-            print(f"[ERROR] Failed to send door unlock confirmation: {e}")
 
     def setup_mqtt_handlers(self):
         @self.mqtt.on_connect()
@@ -69,7 +49,7 @@ class MQTTHandler:
                 elif message.topic == "door/commands":
                     command = message.payload.decode()
                     if command == "unlock_door":
-                        self.door_controller.unlock_door(method="command")
+                        self.door_controller.unlock_door()
                     elif command == "lock_door":
                         self.door_controller.lock_door()
 
@@ -95,7 +75,7 @@ class MQTTHandler:
                         # Handle different access scenarios
                         if response_data.get("status") == "approved":
                             # Door is unlocked (either globally or through verification)
-                            self.door_controller.unlock_door(method="SMS OTP", phone_number=phone_number)
+                            self.door_controller.unlock_door()
                             # Publish success response
                             client.publish(f"door/otp/response/{phone_number}", json.dumps({
                                 "phone_number": phone_number,
