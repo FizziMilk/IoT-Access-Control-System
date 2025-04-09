@@ -735,7 +735,7 @@ class UnlockDoor(Resource):
             new_log = AccessLog(
                 user=admin_name,
                 user_name=admin_name,
-                method="Admin App",
+                method="Mobile App",
                 status="Door Unlocked"
             )
             db.session.add(new_log)
