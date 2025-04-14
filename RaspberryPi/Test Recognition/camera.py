@@ -3,6 +3,7 @@ import time
 import face_recognition
 import numpy as np
 from collections import deque
+import random
 
 class CameraSystem:
     def __init__(self, camera_id=0, resolution=(640, 480)):
@@ -86,17 +87,44 @@ class CameraSystem:
             return None
             
         return frame
+    
+    def detect_texture(self, image):
+        """
+        Detect if the image is a print/photo based on texture analysis
+        Returns true if it appears to be a real face, false if it looks like a photo
+        """
+        # Convert to grayscale for texture analysis
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         
-    def detect_liveness(self, timeout=10):
-        """Perform liveness detection by detecting eye blinking
+        # Apply Laplacian for edge detection - photos typically have fewer fine details
+        laplacian = cv2.Laplacian(gray, cv2.CV_64F)
+        
+        # Calculate variance of laplacian - higher variance means more texture/detail
+        lap_variance = laplacian.var()
+        
+        # The threshold can be adjusted based on testing
+        # Usually real faces have more texture detail than printed photos
+        texture_threshold = 100
+        
+        # Debug output
+        print(f"Texture variance: {lap_variance:.2f} (threshold: {texture_threshold})")
+        
+        return lap_variance > texture_threshold
+    
+    def detect_liveness_multi(self, timeout=20):
+        """
+        Advanced liveness detection using multiple techniques:
+        1. Blink detection with higher thresholds
+        2. Random head movement challenges
+        3. Texture analysis to detect printed photos
         
         Args:
-            timeout: Maximum time in seconds to wait for a blink
+            timeout: Maximum time in seconds for the entire verification
             
         Returns:
-            tuple: (is_live, face_image) - is_live is boolean, face_image is the captured image if live
+            tuple: (is_live, face_image)
         """
-        print("Liveness detection started. Please blink naturally...")
+        print("Enhanced liveness detection started...")
         
         # Initialize camera
         cap = cv2.VideoCapture(self.camera_id)
@@ -106,16 +134,29 @@ class CameraSystem:
         # Wait for camera to initialize
         time.sleep(0.5)
         
-        # Parameters for blink detection
-        EYE_AR_THRESH = 0.3  # Eye aspect ratio threshold for blink detection
-        CONSEC_FRAMES = 2    # Number of consecutive frames eye must be below threshold
-        blink_detected = False
+        # Parameters for blink detection - more strict thresholds
+        EYE_AR_THRESH = 0.25  # Lower threshold makes it harder to trigger with printed photos
+        EYE_AR_CONSEC_FRAMES = 2
         
-        # Store eye aspect ratios for a few frames to detect blinks
-        ear_history = deque(maxlen=5)
+        # Create variables to track verification stages
+        stage_passed = {
+            "blink": False,
+            "texture": False,
+            "head_movement": False
+        }
+        
+        # Store eye aspect ratios for blink detection
+        ear_history = deque(maxlen=8)  # Longer history for better analysis
+        
+        # For head movement challenge
+        movement_type = random.choice(["left", "right", "up", "down"])
+        movement_start_time = None
+        movement_completed = False
+        movement_positions = []  # To track nose positions
         
         # Track progress and time
         start_time = time.time()
+        current_stage = "init"
         face_image = None
         
         # Function to calculate eye aspect ratio
@@ -127,10 +168,17 @@ class CameraSystem:
             # Calculate ratio
             ear = (A + B) / (2.0 * C)
             return ear
-            
+        
+        # Begin with texture analysis - this should happen first with a static face
+        print("Stage 1: Looking for a real face (not a printout)...")
+        current_stage = "texture"
+        texture_frames = 0
+        texture_passed_count = 0
+        
         while True:
-            # Check for timeout
-            if time.time() - start_time > timeout:
+            # Check for overall timeout
+            elapsed_time = time.time() - start_time
+            if elapsed_time > timeout:
                 print("Liveness detection timeout")
                 break
                 
@@ -146,14 +194,14 @@ class CameraSystem:
             # Process at a smaller size for speed
             small_frame = cv2.resize(rgb_frame, (0, 0), fx=0.5, fy=0.5)
             
-            # Detect face locations
-            face_locations = face_recognition.face_locations(small_frame)
-            
             # Display frame with overlays
             display_frame = frame.copy()
             
             # Calculate time remaining
-            time_left = max(0, timeout - (time.time() - start_time))
+            time_left = max(0, timeout - elapsed_time)
+            
+            # Detect face locations
+            face_locations = face_recognition.face_locations(small_frame)
             
             if face_locations:
                 # Scale back face location to full size
@@ -166,13 +214,29 @@ class CameraSystem:
                     
                     # Draw face rectangle
                     cv2.rectangle(display_frame, (left, top), (right, bottom), (0, 255, 0), 2)
+                    
+                    # Extract face region for texture analysis
+                    if current_stage == "texture" and texture_frames % 10 == 0:  # Check every 10 frames
+                        face_region = frame[top:bottom, left:right]
+                        if face_region.size > 0:  # Ensure the region is valid
+                            has_texture = self.detect_texture(face_region)
+                            if has_texture:
+                                texture_passed_count += 1
+                            # Require 3 passes to confirm it's a real face
+                            if texture_passed_count >= 3:
+                                stage_passed["texture"] = True
+                                print("✓ Texture check passed! It appears to be a real face.")
+                                # Move to blink detection
+                                current_stage = "blink"
+                                print("Stage 2: Please blink naturally...")
+                    texture_frames += 1
                 
-                # Get facial landmarks
+                # Get facial landmarks for further analysis
                 face_landmarks = face_recognition.face_landmarks(small_frame, face_locations)
                 
                 for landmarks in face_landmarks:
-                    # Check if eye landmarks exist
-                    if 'left_eye' in landmarks and 'right_eye' in landmarks:
+                    # Check if eye landmarks exist for blink detection
+                    if current_stage in ["blink", "head_movement"] and 'left_eye' in landmarks and 'right_eye' in landmarks:
                         # Convert landmarks to numpy arrays
                         left_eye = np.array(landmarks['left_eye'])
                         right_eye = np.array(landmarks['right_eye'])
@@ -182,52 +246,130 @@ class CameraSystem:
                         right_eye = right_eye * 2
                         
                         # Draw eyes
-                        for eye_point in left_eye:
-                            cv2.circle(display_frame, tuple(eye_point), 2, (0, 255, 255), -1)
-                        for eye_point in right_eye:
-                            cv2.circle(display_frame, tuple(eye_point), 2, (0, 255, 255), -1)
+                        if current_stage == "blink":
+                            for eye_point in left_eye:
+                                cv2.circle(display_frame, tuple(eye_point), 2, (0, 255, 255), -1)
+                            for eye_point in right_eye:
+                                cv2.circle(display_frame, tuple(eye_point), 2, (0, 255, 255), -1)
                             
-                        # Calculate eye aspect ratio
-                        left_ear = eye_aspect_ratio(left_eye)
-                        right_ear = eye_aspect_ratio(right_eye)
+                            # Calculate eye aspect ratio
+                            left_ear = eye_aspect_ratio(left_eye)
+                            right_ear = eye_aspect_ratio(right_eye)
+                            
+                            # Average the eye aspect ratio
+                            ear = (left_ear + right_ear) / 2.0
+                            ear_history.append(ear)
+                            
+                            # Display EAR value
+                            cv2.putText(display_frame, f"EAR: {ear:.2f}", 
+                                      (10, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
+                            
+                            # Check for blink - more stringent pattern matching
+                            if len(ear_history) >= 8:
+                                # Look for a clear pattern: open > partially closed > closed > partially open > open
+                                # This is much harder to fake with a photo
+                                if (ear_history[0] > EYE_AR_THRESH and
+                                    ear_history[1] > EYE_AR_THRESH and
+                                    ear_history[2] > EYE_AR_THRESH * 0.8 and
+                                    ear_history[3] < EYE_AR_THRESH and
+                                    ear_history[4] < EYE_AR_THRESH and
+                                    ear_history[5] < EYE_AR_THRESH * 1.2 and
+                                    ear_history[6] > EYE_AR_THRESH * 0.8 and
+                                    ear_history[7] > EYE_AR_THRESH):
+                                    stage_passed["blink"] = True
+                                    print("✓ Blink detected! Moving to head movement test.")
+                                    current_stage = "head_movement"
+                                    # Save the head position challenge type
+                                    print(f"Stage 3: Please move your head {movement_type.upper()}")
+                                    movement_start_time = time.time()
+                    
+                    # Track nose position for head movement challenge
+                    if current_stage == "head_movement" and 'nose_tip' in landmarks:
+                        nose_point = np.array(landmarks['nose_tip'][0]) * 2  # Scale back up
                         
-                        # Average the eye aspect ratio
-                        ear = (left_ear + right_ear) / 2.0
-                        ear_history.append(ear)
+                        # Draw nose point
+                        cv2.circle(display_frame, tuple(nose_point), 5, (0, 0, 255), -1)
                         
-                        # Check for blink
-                        if len(ear_history) >= 5:
-                            # A blink is when eye aspect ratio drops then rises again
-                            if (ear_history[2] < EYE_AR_THRESH and 
-                                ear_history[0] > EYE_AR_THRESH and 
-                                ear_history[4] > EYE_AR_THRESH):
-                                blink_detected = True
+                        # Track nose positions
+                        movement_positions.append(nose_point)
+                        
+                        # Only analyze after collecting enough positions
+                        if len(movement_positions) > 10:
+                            # Calculate movement direction
+                            start_pos = np.mean(movement_positions[:5], axis=0)
+                            current_pos = np.mean(movement_positions[-5:], axis=0)
+                            
+                            # Draw movement vector
+                            cv2.arrowedLine(display_frame, 
+                                          tuple(start_pos.astype(int)), 
+                                          tuple(current_pos.astype(int)),
+                                          (255, 0, 0), 2)
+                            
+                            # Calculate differences
+                            x_diff = current_pos[0] - start_pos[0]
+                            y_diff = current_pos[1] - start_pos[1]
+                            
+                            # Minimum pixel movement required
+                            min_movement = 30
+                            
+                            # Check if movement matches the required direction
+                            if movement_type == "left" and x_diff < -min_movement:
+                                movement_completed = True
+                            elif movement_type == "right" and x_diff > min_movement:
+                                movement_completed = True
+                            elif movement_type == "up" and y_diff < -min_movement:
+                                movement_completed = True
+                            elif movement_type == "down" and y_diff > min_movement:
+                                movement_completed = True
+                                
+                            if movement_completed:
+                                stage_passed["head_movement"] = True
                                 face_image = frame
-                                print("Blink detected! Person is live.")
-                        
-                        # Display EAR value
-                        cv2.putText(display_frame, f"EAR: {ear:.2f}", 
-                                  (10, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
+                                print(f"✓ Head movement {movement_type} detected! Liveness confirmed.")
             
-            # Display status and instructions
-            cv2.putText(display_frame, "Liveness Detection: Please blink naturally", 
-                      (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+            # Draw stage information
+            stages_info = [
+                f"1. Texture Analysis: {'✓' if stage_passed['texture'] else '...'}",
+                f"2. Blink Detection: {'✓' if stage_passed['blink'] else '...' if stage_passed['texture'] else 'Waiting'}",
+                f"3. Head Movement ({movement_type}): {'✓' if stage_passed['head_movement'] else '...' if stage_passed['blink'] else 'Waiting'}"
+            ]
+            
+            for i, info in enumerate(stages_info):
+                cv2.putText(display_frame, info, 
+                          (10, 150 + i*30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, 
+                          (0, 255, 0) if "✓" in info else (255, 255, 255), 1)
+            
+            # Display time remaining
             cv2.putText(display_frame, f"Time left: {int(time_left)}s", 
                       (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
             
-            if blink_detected:
-                cv2.putText(display_frame, "LIVE PERSON DETECTED!", 
-                          (10, 110), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+            # Display current instruction
+            instruction = ""
+            if current_stage == "texture":
+                instruction = "Hold still while we analyze your face"
+            elif current_stage == "blink":
+                instruction = "Please blink naturally"
+            elif current_stage == "head_movement":
+                instruction = f"Please move your head {movement_type.upper()}"
+                
+            cv2.putText(display_frame, instruction, 
+                      (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+            
+            # Check if all stages passed
+            all_passed = all(stage_passed.values())
+            if all_passed:
+                cv2.putText(display_frame, "LIVENESS CONFIRMED!", 
+                          (display_frame.shape[1]//2 - 150, 110), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
                 
             # Show the frame
             cv2.imshow("Liveness Detection", display_frame)
             
-            # Break if blink detected or ESC pressed
+            # Break if all stages passed or ESC pressed
             key = cv2.waitKey(1) & 0xFF
             if key == 27:  # ESC key
                 break
-            elif blink_detected:
-                # Wait a moment to show the "LIVE PERSON" message
+            elif all_passed:
+                # Wait a moment to show the success message
                 time.sleep(2)
                 break
                 
@@ -235,11 +377,19 @@ class CameraSystem:
         cap.release()
         cv2.destroyAllWindows()
         
-        return blink_detected, face_image
+        # Return the results
+        return all_passed, face_image
+    
+    def detect_liveness(self, timeout=10):
+        """
+        Legacy liveness detection method - now redirects to the more secure version
+        """
+        print("Using enhanced liveness detection for better security...")
+        return self.detect_liveness_multi(timeout)
         
     def capture_face_with_liveness(self):
         """Capture a face image with liveness verification"""
-        is_live, face_image = self.detect_liveness()
+        is_live, face_image = self.detect_liveness_multi()
         
         if not is_live:
             print("Liveness check failed. Please try again.")
