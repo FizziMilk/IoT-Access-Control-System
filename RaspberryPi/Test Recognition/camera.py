@@ -270,7 +270,31 @@ class CameraSystem:
         current_stage = "texture"
         texture_frames = 0
         texture_passed_count = 0
+        face_found = False
         
+        # Use these to control when current_stage and other globals are updated
+        # to avoid race conditions between updating state and using new state
+        should_transition_to_blink = False
+        should_transition_to_movement = False
+
+        # Function to safely transition between stages
+        def transition_to_stage(new_stage):
+            nonlocal current_stage, ear_history, movement_positions, movement_start_time
+            
+            # Clear previous stage data
+            ear_history.clear()
+            movement_positions = []
+            
+            # Set new stage
+            current_stage = new_stage
+            
+            # Initialize stage-specific variables
+            if new_stage == "blink":
+                print("Stage 2: Please blink naturally...")
+            elif new_stage == "head_movement":
+                print(f"Stage 3: Please move your head {movement_type.upper()}")
+                movement_start_time = time.time()
+                
         while True:
             # Check for overall timeout
             elapsed_time = time.time() - start_time
@@ -283,7 +307,15 @@ class CameraSystem:
             if not ret:
                 print("Failed to capture frame")
                 break
-                
+            
+            # Handle any pending stage transitions before processing the frame
+            if should_transition_to_blink:
+                transition_to_stage("blink")
+                should_transition_to_blink = False
+            elif should_transition_to_movement:
+                transition_to_stage("head_movement")
+                should_transition_to_movement = False
+            
             # Convert to RGB for face_recognition
             rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             
@@ -330,9 +362,8 @@ class CameraSystem:
                             if texture_passed_count >= 3:
                                 stage_passed["texture"] = True
                                 print("✓ Texture check passed! It appears to be a real face.")
-                                # Move to blink detection
-                                current_stage = "blink"
-                                print("Stage 2: Please blink naturally...")
+                                # Schedule transition to blink detection
+                                should_transition_to_blink = True
                     texture_frames += 1
                 
                 # Get facial landmarks for further analysis
@@ -368,11 +399,8 @@ class CameraSystem:
                             cv2.putText(display_frame, f"EAR: {ear:.2f}", 
                                       (10, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
                             
-                            # Check for blink - more stringent pattern matching
+                            # Check for blink - more robust pattern matching
                             if len(ear_history) >= 8:
-                                # Modified pattern detection for low framerates
-                                # We now look for ANY significant drop in EAR followed by a rise
-                                
                                 # Get min and max values in history
                                 min_ear = min(ear_history)
                                 max_ear = max(ear_history)
@@ -380,97 +408,134 @@ class CameraSystem:
                                 # Check for significant difference between min and max
                                 ear_diff = max_ear - min_ear
                                 
-                                # Check for any of these blink patterns:
-                                # 1. Original strict pattern (slightly relaxed)
-                                strict_pattern = (ear_history[0] > EYE_AR_THRESH * 0.9 and
-                                                 ear_history[1] > EYE_AR_THRESH * 0.9 and
-                                                 any(e < EYE_AR_THRESH * 0.8 for e in ear_history[2:5]) and
-                                                 ear_history[6] > EYE_AR_THRESH * 0.9 and
-                                                 ear_history[7] > EYE_AR_THRESH * 0.9)
+                                # Convert deque to list for safer indexing
+                                ear_list = list(ear_history)
+                                
+                                # 1. Strict pattern detection (without slices)
+                                strict_pattern = False
+                                if len(ear_list) >= 8:
+                                    # Check first two frames for open eyes
+                                    first_open = ear_list[0] > EYE_AR_THRESH * 0.9 and ear_list[1] > EYE_AR_THRESH * 0.9
+                                    
+                                    # Check middle frames for at least one closed eye
+                                    middle_closed = False
+                                    for i in range(2, 5):
+                                        if i < len(ear_list) and ear_list[i] < EYE_AR_THRESH * 0.8:
+                                            middle_closed = True
+                                            break
+                                    
+                                    # Check last two frames for open eyes
+                                    last_open = False
+                                    if len(ear_list) >= 7:
+                                        last_open = ear_list[6] > EYE_AR_THRESH * 0.9 and ear_list[7] > EYE_AR_THRESH * 0.9
+                                    
+                                    strict_pattern = first_open and middle_closed and last_open
                                 
                                 # 2. Simple drop and rise pattern
-                                drop_rise_pattern = (ear_diff > 0.1 and  # Significant EAR change
-                                                    min_ear < EYE_AR_THRESH and  # Eyes were closed at some point
-                                                    ear_history[0] > min_ear * 1.3 and  # Started relatively open
-                                                    ear_history[-1] > min_ear * 1.3)  # Ended relatively open
+                                drop_rise_pattern = False
+                                if len(ear_list) >= 2:
+                                    drop_rise_pattern = (ear_diff > 0.1 and  # Significant EAR change
+                                                       min_ear < EYE_AR_THRESH and  # Eyes were closed
+                                                       ear_list[0] > min_ear * 1.3 and  # Started open
+                                                       ear_list[-1] > min_ear * 1.3)  # Ended open
                                 
                                 # 3. Local minimum pattern (useful for slower framerates)
-                                # Find if there's a minimum flanked by higher values
                                 local_min_pattern = False
-                                for i in range(1, len(ear_history)-1):
-                                    if (ear_history[i] < EYE_AR_THRESH and
-                                        ear_history[i] < ear_history[i-1] * 0.8 and
-                                        ear_history[i] < ear_history[i+1] * 0.8):
+                                for i in range(1, len(ear_list)-1):
+                                    if (ear_list[i] < EYE_AR_THRESH and
+                                        ear_list[i] < ear_list[i-1] * 0.8 and
+                                        ear_list[i] < ear_list[i+1] * 0.8):
                                         local_min_pattern = True
                                         break
                                 
+                                # Debug output
                                 print(f"Blink patterns: strict={strict_pattern}, drop_rise={drop_rise_pattern}, local_min={local_min_pattern}")
-                                print(f"EAR history: {[round(e,2) for e in ear_history]}, min={min_ear:.2f}, max={max_ear:.2f}, diff={ear_diff:.2f}")
+                                print(f"EAR history: {[round(e,2) for e in ear_list]}, min={min_ear:.2f}, max={max_ear:.2f}, diff={ear_diff:.2f}")
                                 
                                 # If any pattern is detected, consider it a blink
                                 if strict_pattern or drop_rise_pattern or local_min_pattern:
                                     stage_passed["blink"] = True
                                     print("✓ Blink detected! Moving to head movement test.")
-                                    current_stage = "head_movement"
-                                    # Save the head position challenge type
-                                    print(f"Stage 3: Please move your head {movement_type.upper()}")
-                                    movement_start_time = time.time()
+                                    # Schedule transition to head movement
+                                    should_transition_to_movement = True
                     
                     # Track nose position for head movement challenge
                     if current_stage == "head_movement" and 'nose_tip' in landmarks:
-                        # Get nose point - handle it differently to avoid indexing errors
-                        nose_tip = np.array(landmarks['nose_tip'])
-                        # Use mean position of all nose points
-                        nose_point = np.mean(nose_tip, axis=0) * 2  # Scale back up
-                        
-                        # Draw nose point
-                        cv2.circle(display_frame, tuple(nose_point.astype(int)), 5, (0, 0, 255), -1)
-                        
-                        # Track nose positions
-                        movement_positions.append(nose_point)
-                        
-                        # Only analyze after collecting enough positions
-                        if len(movement_positions) > 10:
-                            # Calculate movement direction
-                            start_pos = np.mean(movement_positions[:5], axis=0)
-                            current_pos = np.mean(movement_positions[-5:], axis=0)
-                            
-                            # Ensure positions are integers for drawing
-                            start_point = tuple(start_pos.astype(int))
-                            current_point = tuple(current_pos.astype(int))
-                            
-                            # Draw movement vector (ensure coordinates are valid)
-                            if all(p >= 0 for p in start_point) and all(p >= 0 for p in current_point):
-                                cv2.arrowedLine(display_frame, 
-                                              start_point, 
-                                              current_point,
-                                              (255, 0, 0), 2)
-                            
-                            # Calculate differences
-                            x_diff = current_pos[0] - start_pos[0]
-                            y_diff = current_pos[1] - start_pos[1]
-                            
-                            # Minimum pixel movement required - reduced for low frame rates
-                            min_movement = 20  # Reduced from 30
-                            
-                            # Display movement values for debugging
-                            cv2.putText(display_frame, f"Movement: x={x_diff:.1f}, y={y_diff:.1f}", 
-                                      (10, 250), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
-                            
-                            # Check if movement matches the required direction
-                            if movement_type == "left" and x_diff < -min_movement:
-                                movement_completed = True
-                            elif movement_type == "right" and x_diff > min_movement:
-                                movement_completed = True
-                            elif movement_type == "up" and y_diff < -min_movement:
-                                movement_completed = True
-                            elif movement_type == "down" and y_diff > min_movement:
-                                movement_completed = True
+                        try:
+                            # Get nose point - convert to numpy array and handle it safely
+                            nose_points = np.array(landmarks['nose_tip'])
+                            if len(nose_points) > 0:
+                                # Use the mean position of all nose points
+                                nose_point = np.mean(nose_points, axis=0) * 2  # Scale back up
                                 
-                            if movement_completed:
-                                stage_passed["head_movement"] = True
-                                face_image = frame
-                                print(f"✓ Head movement {movement_type} detected! Liveness confirmed.")
+                                # Make sure it's a valid coordinate
+                                if not np.isnan(nose_point).any():
+                                    # Convert to integers for drawing
+                                    nose_x, nose_y = int(nose_point[0]), int(nose_point[1])
+                                    
+                                    # Draw nose point
+                                    cv2.circle(display_frame, (nose_x, nose_y), 5, (0, 0, 255), -1)
+                                    
+                                    # Track nose positions
+                                    movement_positions.append((nose_x, nose_y))
+                                    
+                                    # Only analyze after collecting enough positions
+                                    if len(movement_positions) > 10:
+                                        # Use tuple unpacking to avoid slice issues
+                                        # Get first few positions
+                                        first_positions = movement_positions[:5]
+                                        # Get recent positions
+                                        recent_positions = movement_positions[-5:]
+                                        
+                                        # Calculate mean positions
+                                        start_x = sum(p[0] for p in first_positions) / len(first_positions)
+                                        start_y = sum(p[1] for p in first_positions) / len(first_positions)
+                                        current_x = sum(p[0] for p in recent_positions) / len(recent_positions)
+                                        current_y = sum(p[1] for p in recent_positions) / len(recent_positions)
+                                        
+                                        # Convert to integers for drawing
+                                        start_point = (int(start_x), int(start_y))
+                                        current_point = (int(current_x), int(current_y))
+                                        
+                                        # Draw movement vector if points are valid
+                                        if (0 <= start_point[0] < display_frame.shape[1] and 
+                                            0 <= start_point[1] < display_frame.shape[0] and
+                                            0 <= current_point[0] < display_frame.shape[1] and
+                                            0 <= current_point[1] < display_frame.shape[0]):
+                                            cv2.arrowedLine(display_frame, 
+                                                          start_point, 
+                                                          current_point,
+                                                          (255, 0, 0), 2)
+                                        
+                                        # Calculate differences
+                                        x_diff = current_x - start_x
+                                        y_diff = current_y - start_y
+                                        
+                                        # Minimum pixel movement required
+                                        min_movement = 20  # Reduced for low frame rates
+                                        
+                                        # Display movement values for debugging
+                                        cv2.putText(display_frame, f"Movement: x={x_diff:.1f}, y={y_diff:.1f}", 
+                                                  (10, 250), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
+                                        
+                                        # Check if movement matches the required direction
+                                        if movement_type == "left" and x_diff < -min_movement:
+                                            movement_completed = True
+                                        elif movement_type == "right" and x_diff > min_movement:
+                                            movement_completed = True
+                                        elif movement_type == "up" and y_diff < -min_movement:
+                                            movement_completed = True
+                                        elif movement_type == "down" and y_diff > min_movement:
+                                            movement_completed = True
+                                        
+                                        if movement_completed:
+                                            stage_passed["head_movement"] = True
+                                            face_image = frame
+                                            print(f"✓ Head movement {movement_type} detected! Liveness confirmed.")
+                        except Exception as e:
+                            # Just log the error and continue - don't crash
+                            print(f"Error tracking nose position: {str(e)}")
+                            # This allows the system to continue even if there's an issue with movement tracking
             
             # Draw stage information
             stages_info = [
