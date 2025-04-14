@@ -9,8 +9,16 @@ class RecognitionSystem:
     def add_face(self, name, image):
         """Process image and add face to storage"""
         # Process the image to find face encodings
-        rgb_image = image[:, :, ::-1]  # Convert BGR to RGB
-        face_encodings = face_recognition.face_encodings(rgb_image)
+        # Ensure image is the correct format (RGB and uint8)
+        rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        
+        # Detect face locations first
+        face_locations = face_recognition.face_locations(rgb_image)
+        if not face_locations:
+            return False
+            
+        # Then get encodings using the located faces
+        face_encodings = face_recognition.face_encodings(rgb_image, face_locations)
         
         if not face_encodings:
             return False
@@ -27,8 +35,10 @@ class RecognitionSystem:
         if not known_face_encodings:
             return []
         
-        # Process the image
-        rgb_image = image[:, :, ::-1]  # Convert BGR to RGB
+        # Process the image - ensure correct format
+        rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        
+        # First get face locations
         face_locations = face_recognition.face_locations(rgb_image)
         
         if not face_locations:
@@ -84,7 +94,9 @@ class RecognitionSystem:
     def generate_encoding(self, image):
         """Generate face encoding from image for backend use"""
         # Process the image to find face encodings
-        rgb_image = image[:, :, ::-1]  # Convert BGR to RGB
+        rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        
+        # First get face locations
         face_locations = face_recognition.face_locations(rgb_image)
         
         if not face_locations:

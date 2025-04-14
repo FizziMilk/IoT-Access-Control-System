@@ -1,6 +1,7 @@
 import cv2
 import time
 import face_recognition
+import numpy as np
 
 class CameraSystem:
     def __init__(self, camera_id=0, resolution=(640, 480)):
@@ -30,9 +31,15 @@ class CameraSystem:
             # Show the frame
             display_frame = frame.copy()
             
-            # Try to find faces
+            # Try to find faces - ensure correct format
             small_frame = cv2.resize(frame, (0, 0), fx=0.25, fy=0.25)
-            rgb_small_frame = small_frame[:, :, ::-1]
+            rgb_small_frame = cv2.cvtColor(small_frame, cv2.COLOR_BGR2RGB)
+            
+            # Make sure the image is uint8 (0-255)
+            if rgb_small_frame.dtype != np.uint8:
+                rgb_small_frame = rgb_small_frame.astype(np.uint8)
+                
+            # Detect faces
             face_locations = face_recognition.face_locations(rgb_small_frame)
             
             # Draw rectangle around faces
