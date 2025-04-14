@@ -1,187 +1,17 @@
 import cv2
 import time
+import face_recognition
 import numpy as np
 from collections import deque
+import random
+import dlib
 import scipy.signal
 
-class Camera:
-    """
-    Core camera functionality for capturing and processing frames.
-    """
+class CameraSystem:
     def __init__(self, camera_id=0, resolution=(640, 480)):
-        """
-        Initialize camera with specified ID and resolution.
-        
-        Args:
-            camera_id: Camera device ID
-            resolution: Desired resolution (width, height)
-        """
         self.camera_id = camera_id
         self.resolution = resolution
-        self.face_detector = None
-        self.landmark_predictor = None
-        
-        # Initialize tracking variables for blink detection
-        self.eye_history = []
-        
-        # Initialize camera and detectors when needed
-        self._init_face_detection()
-        
-        # Test camera on initialization
-        if not self.test_camera():
-            print("WARNING: Camera initialization test failed")
     
-    def test_camera(self):
-        """Test if camera can be opened and read from"""
-        try:
-            cap = cv2.VideoCapture(self.camera_id)
-            
-            if not cap.isOpened():
-                print(f"ERROR: Could not open camera with ID {self.camera_id}")
-                return False
-            
-            # Set resolution
-            cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.resolution[0])
-            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.resolution[1])
-            
-            # Wait for camera to initialize
-            time.sleep(1.0)
-            
-            # Try to read a frame
-            ret, frame = cap.read()
-            cap.release()
-            
-            if not ret or frame is None:
-                print("ERROR: Could not read frame from camera")
-                return False
-            
-            print(f"Camera test successful! Frame shape: {frame.shape}")
-            return True
-        except Exception as e:
-            print(f"ERROR: Camera test failed with exception: {str(e)}")
-            return False
-    
-    def _init_face_detection(self):
-        """Initialize face detection and landmark prediction."""
-        try:
-            import dlib
-            self.face_detector = dlib.get_frontal_face_detector()
-            
-            # Try to load landmark predictor
-            try:
-                # First try the default path relative to the script
-                model_path = "shape_predictor_68_face_landmarks.dat"
-                self.landmark_predictor = dlib.shape_predictor(model_path)
-            except RuntimeError:
-                # If that fails, try alternative paths
-                try:
-                    model_path = "./shape_predictor_68_face_landmarks.dat"
-                    self.landmark_predictor = dlib.shape_predictor(model_path)
-                except RuntimeError:
-                    print("WARNING: Could not load face landmark model. Some features will be unavailable.")
-        except ImportError:
-            print("WARNING: dlib not installed. Face detection will not be available.")
-            
-    def capture_frame(self):
-        """
-        Capture a single frame from the camera.
-        
-        Returns:
-            numpy.ndarray: Captured frame or None if failed
-        """
-        print(f"Capturing frame from camera {self.camera_id}")
-        cap = cv2.VideoCapture(self.camera_id)
-        
-        if not cap.isOpened():
-            print(f"ERROR: Could not open camera with ID {self.camera_id}")
-            return None
-            
-        # Set resolution
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.resolution[0])
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.resolution[1])
-        
-        # Wait for camera to initialize
-        time.sleep(1.0)
-        
-        # Try multiple times to get a frame (sometimes first frame can be empty)
-        for _ in range(5):
-            ret, frame = cap.read()
-            if ret and frame is not None and frame.size > 0:
-                break
-            time.sleep(0.1)
-        
-        cap.release()
-        
-        if not ret or frame is None or frame.size == 0:
-            print("Error: Could not capture valid frame")
-            return None
-            
-        print(f"Successfully captured frame with shape: {frame.shape}")
-        return frame
-    
-    def detect_face(self, frame):
-        """
-        Detect face and landmarks in a frame.
-        
-        Args:
-            frame: Input video frame
-            
-        Returns:
-            tuple: (face_detected, face_bbox, landmarks)
-        """
-        if frame is None or self.face_detector is None:
-            return False, None, None
-            
-        # Convert to grayscale for detection
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        
-        # Detect faces
-        faces = self.face_detector(gray, 0)
-        if not faces:
-            return False, None, None
-            
-        # Use the largest face
-        face = max(faces, key=lambda rect: rect.width() * rect.height())
-        
-        # Convert to bounding box (x, y, w, h)
-        x, y = face.left(), face.top()
-        w, h = face.width(), face.height()
-        face_bbox = (x, y, w, h)
-        
-        # Detect landmarks if predictor is available
-        landmarks = []
-        if self.landmark_predictor:
-            shape = self.landmark_predictor(gray, face)
-            for i in range(68):  # 68 facial landmarks
-                x, y = shape.part(i).x, shape.part(i).y
-                landmarks.append((x, y))
-        
-        return True, face_bbox, landmarks
-    
-    def _calculate_ear(self, eye_landmarks):
-        """
-        Calculate Eye Aspect Ratio (EAR) from eye landmarks.
-        
-        Args:
-            eye_landmarks: List of 6 eye landmark points
-            
-        Returns:
-            float: Eye Aspect Ratio
-        """
-        # Calculate euclidean distances between points
-        # Vertical eye landmarks
-        A = np.linalg.norm(np.array(eye_landmarks[1]) - np.array(eye_landmarks[5]))
-        B = np.linalg.norm(np.array(eye_landmarks[2]) - np.array(eye_landmarks[4]))
-        
-        # Horizontal eye landmarks
-        C = np.linalg.norm(np.array(eye_landmarks[0]) - np.array(eye_landmarks[3]))
-        
-        # Calculate EAR
-        if C == 0:
-            return 0
-        ear = (A + B) / (2.0 * C)
-        return ear
-
     def capture_face(self):
         """Capture an image from the camera with face detection"""
         # Initialize camera
@@ -934,14 +764,6 @@ class Camera:
         Returns:
             tuple: (is_live, face_image)
         """
-        try:
-            # Import face_recognition here to avoid circular imports
-            import face_recognition
-        except ImportError:
-            print("ERROR: face_recognition module not found. Please install it with:")
-            print("pip install face_recognition")
-            return False, None
-            
         print("Enhanced liveness detection started...")
         
         # Enable skipping for troubleshooting - set these to True to skip specific tests
