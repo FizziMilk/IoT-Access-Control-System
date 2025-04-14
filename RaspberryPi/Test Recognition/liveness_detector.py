@@ -61,11 +61,24 @@ class LivenessDetector:
         
         # Initialize camera
         cap = cv2.VideoCapture(self.camera.camera_id)
+        
+        # Check if camera opened successfully
+        if not cap.isOpened():
+            print(f"ERROR: Could not open camera with ID {self.camera.camera_id}")
+            print("Try running test_camera.py to diagnose camera issues")
+            return False, None
+        
+        # Set resolution explicitly
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.camera.resolution[0])
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.camera.resolution[1])
         
-        # Wait for camera to initialize
-        time.sleep(0.5)
+        # Wait longer for camera to initialize
+        time.sleep(1.0)
+        
+        # Initialize visualization with explicit window size
+        window_name = "Liveness Detection"
+        cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+        cv2.resizeWindow(window_name, self.camera.resolution[0], self.camera.resolution[1])
         
         # Parameters for blink detection - more strict thresholds
         EYE_AR_THRESH = 0.3  # Increased from 0.25 for lower framerates
@@ -84,10 +97,6 @@ class LivenessDetector:
         start_time = time.time()
         current_stage = "init"
         face_image = None
-        
-        # Initialize visualization
-        window_name = "Liveness Detection"
-        cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
         
         try:
             while True:

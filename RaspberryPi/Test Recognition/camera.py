@@ -26,6 +26,40 @@ class Camera:
         
         # Initialize camera and detectors when needed
         self._init_face_detection()
+        
+        # Test camera on initialization
+        if not self.test_camera():
+            print("WARNING: Camera initialization test failed")
+    
+    def test_camera(self):
+        """Test if camera can be opened and read from"""
+        try:
+            cap = cv2.VideoCapture(self.camera_id)
+            
+            if not cap.isOpened():
+                print(f"ERROR: Could not open camera with ID {self.camera_id}")
+                return False
+            
+            # Set resolution
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.resolution[0])
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.resolution[1])
+            
+            # Wait for camera to initialize
+            time.sleep(1.0)
+            
+            # Try to read a frame
+            ret, frame = cap.read()
+            cap.release()
+            
+            if not ret or frame is None:
+                print("ERROR: Could not read frame from camera")
+                return False
+            
+            print(f"Camera test successful! Frame shape: {frame.shape}")
+            return True
+        except Exception as e:
+            print(f"ERROR: Camera test failed with exception: {str(e)}")
+            return False
     
     def _init_face_detection(self):
         """Initialize face detection and landmark prediction."""
@@ -56,11 +90,16 @@ class Camera:
             numpy.ndarray: Captured frame or None if failed
         """
         cap = cv2.VideoCapture(self.camera_id)
+        
+        if not cap.isOpened():
+            print(f"ERROR: Could not open camera with ID {self.camera_id}")
+            return None
+            
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.resolution[0])
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.resolution[1])
         
         # Wait for camera to initialize
-        time.sleep(0.1)
+        time.sleep(0.5)
         
         ret, frame = cap.read()
         cap.release()
