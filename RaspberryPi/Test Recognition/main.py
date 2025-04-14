@@ -64,11 +64,23 @@ def main():
 
 def run_liveness_test(liveness_detector):
     """Run a standalone liveness detection test"""
+    # First destroy any existing windows
+    cv2.destroyAllWindows()
+    
     print("Starting liveness detection test...")
-    is_live, face_image = liveness_detector.detect_liveness_multi()
+    
+    # Run liveness detection with longer timeout
+    is_live, face_image = liveness_detector.detect_liveness_multi(timeout=40)
+    
+    # Explicitly destroy windows again
+    cv2.destroyAllWindows()
+    
     if is_live:
         print("Liveness test passed!")
         if face_image is not None:
+            # Create a new window for the face
+            cv2.namedWindow("Captured Face", cv2.WINDOW_NORMAL)
+            cv2.resizeWindow("Captured Face", 640, 480)
             cv2.imshow("Captured Face", face_image)
             cv2.waitKey(0)
             cv2.destroyAllWindows()

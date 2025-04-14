@@ -934,6 +934,14 @@ class Camera:
         Returns:
             tuple: (is_live, face_image)
         """
+        try:
+            # Import face_recognition here to avoid circular imports
+            import face_recognition
+        except ImportError:
+            print("ERROR: face_recognition module not found. Please install it with:")
+            print("pip install face_recognition")
+            return False, None
+            
         print("Enhanced liveness detection started...")
         
         # Enable skipping for troubleshooting - set these to True to skip specific tests
