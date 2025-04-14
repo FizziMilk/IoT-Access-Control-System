@@ -119,7 +119,10 @@ class CameraSystem:
         # Create debug visualization
         if debug:
             # Create a larger canvas with space for visualization
-            debug_img = np.zeros((new_height + 200, new_width * 2, 3), dtype=np.uint8)
+            # Make sure the debug image is tall enough for all visualizations
+            debug_img_height = new_height * 2 + 250  # Increased height to accommodate all visualizations
+            debug_img = np.zeros((debug_img_height, new_width * 2, 3), dtype=np.uint8)
+            
             # Place the original image - ensure dimensions match
             # Check if resized dimensions match the allocated space
             if resized.shape[0] != new_height or resized.shape[1] != new_width:
@@ -141,6 +144,9 @@ class CameraSystem:
         if debug:
             laplacian_norm = cv2.normalize(laplacian, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
             laplacian_color = cv2.applyColorMap(laplacian_norm, cv2.COLORMAP_JET)
+            # Ensure dimensions match
+            if laplacian_color.shape[:2] != (new_height, new_width):
+                laplacian_color = cv2.resize(laplacian_color, (new_width, new_height))
             debug_img[0:new_height, new_width:new_width*2] = laplacian_color
             cv2.putText(debug_img, "Laplacian (Edge Detail)", (new_width + 10, new_height + 20), 
                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
@@ -343,7 +349,8 @@ class CameraSystem:
             # Add filtered images for moiré pattern and reflection detection
             if new_width > 0 and new_height > 0:
                 moire_display = cv2.applyColorMap(filtered, cv2.COLORMAP_JET)
-                moire_display = cv2.resize(moire_display, (new_width, new_height))
+                if moire_display.shape[:2] != (new_height, new_width):
+                    moire_display = cv2.resize(moire_display, (new_width, new_height))
                 debug_img[new_height+50:new_height*2+50, new_width:new_width*2] = moire_display
                 cv2.putText(debug_img, "Moiré Pattern Filter", (new_width + 10, new_height*2 + 70), 
                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
