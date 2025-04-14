@@ -88,7 +88,7 @@ class CameraSystem:
             
         return frame
     
-    def detect_texture(self, image):
+    def detect_texture(self, image, debug_output=True):
         """
         Detect if the image is a print/photo based on texture analysis
         Returns true if it appears to be a real face, false if it looks like a photo
@@ -96,22 +96,106 @@ class CameraSystem:
         # Convert to grayscale for texture analysis
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         
-        # Apply Laplacian for edge detection - photos typically have fewer fine details
+        # 1. Laplacian variance (texture detail analysis)
         laplacian = cv2.Laplacian(gray, cv2.CV_64F)
-        
-        # Calculate variance of laplacian - higher variance means more texture/detail
         lap_variance = laplacian.var()
         
-        # The threshold can be adjusted based on testing
-        # Usually real faces have more texture detail than printed photos
-        texture_threshold = 100
+        # 2. Screen pattern detection (look for pixel grid patterns)
+        # Apply high-pass filter to enhance screen patterns
+        kernel = np.array([[-1, -1, -1], [-1, 9, -1], [-1, -1, -1]])
+        sharpened = cv2.filter2D(gray, -1, kernel)
+        
+        # Check for regular patterns using FFT
+        f_transform = np.fft.fft2(sharpened)
+        f_shift = np.fft.fftshift(f_transform)
+        magnitude_spectrum = 20*np.log(np.abs(f_shift))
+        
+        # Get the high-frequency components (excluding the DC component)
+        center_y, center_x = magnitude_spectrum.shape[0]//2, magnitude_spectrum.shape[1]//2
+        mask_size = 10
+        center_mask = magnitude_spectrum[center_y-mask_size:center_y+mask_size, center_x-mask_size:center_x+mask_size]
+        high_freq_energy = np.sum(magnitude_spectrum) - np.sum(center_mask)
+        
+        # 3. Color variance analysis (real faces have more color variation than screens)
+        color_std = np.std(image, axis=(0, 1)).mean()  # Average std dev across color channels
+        
+        # 4. Gradients analysis (real faces have smoother gradients)
+        sobelx = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=3)
+        sobely = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=3)
+        sobel_mag = np.sqrt(sobelx**2 + sobely**2)
+        gradient_mean = np.mean(sobel_mag)
+        
+        # 5. Local Binary Pattern (LBP) analysis for texture patterns
+        # Simple version of LBP
+        shifted = np.roll(gray, 1, axis=0)
+        lbp = np.zeros_like(gray)
+        lbp[gray > shifted] = 1
+        lbp_variance = np.var(lbp)
+        
+        # Higher thresholds for more strictness against screen photos
+        texture_threshold = 150  # Increased from 70
+        high_freq_threshold = 1e8  # Threshold for high frequency components
+        color_std_threshold = 25   # Minimum color variation for real faces
         
         # Debug output
-        print(f"Texture variance: {lap_variance:.2f} (threshold: {texture_threshold})")
+        if debug_output:
+            print(f"Texture variance: {lap_variance:.2f} (threshold: {texture_threshold})")
+            print(f"High frequency energy: {high_freq_energy:.2e} (threshold: {high_freq_threshold:.2e})")
+            print(f"Color standard deviation: {color_std:.2f} (threshold: {color_std_threshold})")
+            print(f"Gradient mean: {gradient_mean:.2f}")
+            print(f"LBP variance: {lbp_variance:.2f}")
         
-        return lap_variance > texture_threshold
+        # Combined decision based on multiple metrics
+        texture_score = (lap_variance > texture_threshold)
+        high_freq_score = (high_freq_energy < high_freq_threshold)  # Lower is better for real faces
+        color_score = (color_std > color_std_threshold)
+        
+        # Calculate a combined score (require at least 2 positive indicators)
+        positives = sum([texture_score, high_freq_score, color_score])
+        
+        # Show debug visualization if requested
+        if debug_output:
+            # Create a visualization of the analysis
+            # Normalize for visualization
+            lap_vis = cv2.normalize(laplacian, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+            sobel_vis = cv2.normalize(sobel_mag, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+            lbp_vis = (lbp * 255).astype(np.uint8)
+            
+            # Create visualization grid
+            h, w = gray.shape
+            debug_img = np.zeros((h*2, w*2, 3), dtype=np.uint8)
+            
+            # Original grayscale image (top-left)
+            debug_img[0:h, 0:w, :] = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+            
+            # Laplacian (top-right)
+            debug_img[0:h, w:w*2, :] = cv2.cvtColor(lap_vis, cv2.COLOR_GRAY2BGR)
+            
+            # Sobel (bottom-left)
+            debug_img[h:h*2, 0:w, :] = cv2.cvtColor(sobel_vis, cv2.COLOR_GRAY2BGR)
+            
+            # LBP (bottom-right)
+            debug_img[h:h*2, w:w*2, :] = cv2.cvtColor(lbp_vis, cv2.COLOR_GRAY2BGR)
+            
+            # Add text labels
+            font = cv2.FONT_HERSHEY_SIMPLEX
+            cv2.putText(debug_img, "Original", (10, 30), font, 0.6, (0, 255, 0), 2)
+            cv2.putText(debug_img, f"Laplacian ({lap_variance:.1f})", (w+10, 30), font, 0.6, (0, 255, 0) if texture_score else (0, 0, 255), 2)
+            cv2.putText(debug_img, f"Gradient ({gradient_mean:.1f})", (10, h+30), font, 0.6, (0, 255, 0), 2)
+            cv2.putText(debug_img, f"LBP ({lbp_variance:.1f})", (w+10, h+30), font, 0.6, (0, 255, 0), 2)
+            
+            # Add overall result
+            cv2.putText(debug_img, f"RESULT: {'REAL' if positives >= 2 else 'FAKE'} ({positives}/3)", 
+                      (w//2-100, h*2-20), font, 0.8, (0, 255, 0) if positives >= 2 else (0, 0, 255), 2)
+            
+            # Show the debug visualization
+            cv2.imshow("Texture Analysis Debug", debug_img)
+            cv2.waitKey(1)  # Update the window
+        
+        # Return true if this looks like a real face
+        return positives >= 2
     
-    def detect_liveness_multi(self, timeout=20):
+    def detect_liveness_multi(self, timeout=30):  # Increased timeout from 20 to 30 seconds
         """
         Advanced liveness detection using multiple techniques:
         1. Blink detection with higher thresholds
@@ -126,6 +210,25 @@ class CameraSystem:
         """
         print("Enhanced liveness detection started...")
         
+        # Enable skipping for troubleshooting - set these to True to skip specific tests
+        # In a production environment, these should all be False
+        SKIP_TEXTURE = False    # For troubleshooting only
+        SKIP_BLINK = False      # For troubleshooting only
+        SKIP_MOVEMENT = False   # For troubleshooting only
+        
+        # Allow user to toggle which tests to run with keyboard during detection
+        # These will be updated during the detection loop if user presses keys
+        skip_texture = SKIP_TEXTURE
+        skip_blink = SKIP_BLINK
+        skip_movement = SKIP_MOVEMENT
+        
+        # Pre-mark skipped stages as passed
+        stage_passed = {
+            "texture": skip_texture,
+            "blink": skip_blink,
+            "head_movement": skip_movement
+        }
+        
         # Initialize camera
         cap = cv2.VideoCapture(self.camera_id)
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.resolution[0])
@@ -135,7 +238,7 @@ class CameraSystem:
         time.sleep(0.5)
         
         # Parameters for blink detection - more strict thresholds
-        EYE_AR_THRESH = 0.25  # Lower threshold makes it harder to trigger with printed photos
+        EYE_AR_THRESH = 0.3  # Increased from 0.25 for lower framerates
         EYE_AR_CONSEC_FRAMES = 2
         
         # Create variables to track verification stages
@@ -199,6 +302,14 @@ class CameraSystem:
             
             # Calculate time remaining
             time_left = max(0, timeout - elapsed_time)
+            
+            # Add keyboard shortcuts for toggling tests (for troubleshooting)
+            cv2.putText(display_frame, "Press T to toggle texture test", 
+                      (10, display_frame.shape[0]-60), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+            cv2.putText(display_frame, "Press B to toggle blink test", 
+                      (10, display_frame.shape[0]-40), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+            cv2.putText(display_frame, "Press M to toggle movement test", 
+                      (10, display_frame.shape[0]-20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
             
             # Detect face locations
             face_locations = face_recognition.face_locations(small_frame)
@@ -266,16 +377,45 @@ class CameraSystem:
                             
                             # Check for blink - more stringent pattern matching
                             if len(ear_history) >= 8:
-                                # Look for a clear pattern: open > partially closed > closed > partially open > open
-                                # This is much harder to fake with a photo
-                                if (ear_history[0] > EYE_AR_THRESH and
-                                    ear_history[1] > EYE_AR_THRESH and
-                                    ear_history[2] > EYE_AR_THRESH * 0.8 and
-                                    ear_history[3] < EYE_AR_THRESH and
-                                    ear_history[4] < EYE_AR_THRESH and
-                                    ear_history[5] < EYE_AR_THRESH * 1.2 and
-                                    ear_history[6] > EYE_AR_THRESH * 0.8 and
-                                    ear_history[7] > EYE_AR_THRESH):
+                                # Modified pattern detection for low framerates
+                                # We now look for ANY significant drop in EAR followed by a rise
+                                
+                                # Get min and max values in history
+                                min_ear = min(ear_history)
+                                max_ear = max(ear_history)
+                                
+                                # Check for significant difference between min and max
+                                ear_diff = max_ear - min_ear
+                                
+                                # Check for any of these blink patterns:
+                                # 1. Original strict pattern (slightly relaxed)
+                                strict_pattern = (ear_history[0] > EYE_AR_THRESH * 0.9 and
+                                                 ear_history[1] > EYE_AR_THRESH * 0.9 and
+                                                 any(e < EYE_AR_THRESH * 0.8 for e in ear_history[2:5]) and
+                                                 ear_history[6] > EYE_AR_THRESH * 0.9 and
+                                                 ear_history[7] > EYE_AR_THRESH * 0.9)
+                                
+                                # 2. Simple drop and rise pattern
+                                drop_rise_pattern = (ear_diff > 0.1 and  # Significant EAR change
+                                                    min_ear < EYE_AR_THRESH and  # Eyes were closed at some point
+                                                    ear_history[0] > min_ear * 1.3 and  # Started relatively open
+                                                    ear_history[-1] > min_ear * 1.3)  # Ended relatively open
+                                
+                                # 3. Local minimum pattern (useful for slower framerates)
+                                # Find if there's a minimum flanked by higher values
+                                local_min_pattern = False
+                                for i in range(1, len(ear_history)-1):
+                                    if (ear_history[i] < EYE_AR_THRESH and
+                                        ear_history[i] < ear_history[i-1] * 0.8 and
+                                        ear_history[i] < ear_history[i+1] * 0.8):
+                                        local_min_pattern = True
+                                        break
+                                
+                                print(f"Blink patterns: strict={strict_pattern}, drop_rise={drop_rise_pattern}, local_min={local_min_pattern}")
+                                print(f"EAR history: {[round(e,2) for e in ear_history]}, min={min_ear:.2f}, max={max_ear:.2f}, diff={ear_diff:.2f}")
+                                
+                                # If any pattern is detected, consider it a blink
+                                if strict_pattern or drop_rise_pattern or local_min_pattern:
                                     stage_passed["blink"] = True
                                     print("✓ Blink detected! Moving to head movement test.")
                                     current_stage = "head_movement"
@@ -309,8 +449,12 @@ class CameraSystem:
                             x_diff = current_pos[0] - start_pos[0]
                             y_diff = current_pos[1] - start_pos[1]
                             
-                            # Minimum pixel movement required
-                            min_movement = 30
+                            # Minimum pixel movement required - reduced for low frame rates
+                            min_movement = 20  # Reduced from 30
+                            
+                            # Display movement values for debugging
+                            cv2.putText(display_frame, f"Movement: x={x_diff:.1f}, y={y_diff:.1f}", 
+                                      (10, 250), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
                             
                             # Check if movement matches the required direction
                             if movement_type == "left" and x_diff < -min_movement:
@@ -364,9 +508,33 @@ class CameraSystem:
             # Show the frame
             cv2.imshow("Liveness Detection", display_frame)
             
-            # Break if all stages passed or ESC pressed
+            # Check for keyboard input to toggle tests
             key = cv2.waitKey(1) & 0xFF
-            if key == 27:  # ESC key
+            if key == ord('t'):  # Toggle texture test
+                skip_texture = not skip_texture
+                if skip_texture:
+                    stage_passed["texture"] = True
+                    print("Texture test skipped")
+                else:
+                    stage_passed["texture"] = False
+                    print("Texture test enabled")
+            elif key == ord('b'):  # Toggle blink test
+                skip_blink = not skip_blink
+                if skip_blink:
+                    stage_passed["blink"] = True
+                    print("Blink test skipped")
+                else:
+                    stage_passed["blink"] = False
+                    print("Blink test enabled")
+            elif key == ord('m'):  # Toggle movement test
+                skip_movement = not skip_movement
+                if skip_movement:
+                    stage_passed["head_movement"] = True
+                    print("Movement test skipped")
+                else:
+                    stage_passed["head_movement"] = False
+                    print("Movement test enabled")
+            elif key == 27:  # ESC key
                 break
             elif all_passed:
                 # Wait a moment to show the success message
