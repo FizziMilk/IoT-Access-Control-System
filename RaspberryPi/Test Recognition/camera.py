@@ -120,8 +120,14 @@ class CameraSystem:
         if debug:
             # Create a larger canvas with space for visualization
             debug_img = np.zeros((new_height + 200, new_width * 2, 3), dtype=np.uint8)
-            # Place the original image
-            debug_img[0:new_height, 0:new_width] = resized
+            # Place the original image - ensure dimensions match
+            # Check if resized dimensions match the allocated space
+            if resized.shape[0] != new_height or resized.shape[1] != new_width:
+                # If there's a mismatch, resize again to match the allocated dimensions
+                resized_for_debug = cv2.resize(resized, (new_width, new_height))
+                debug_img[0:new_height, 0:new_width] = resized_for_debug
+            else:
+                debug_img[0:new_height, 0:new_width] = resized
             # Add title
             cv2.putText(debug_img, "Original", (10, new_height + 20), 
                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
