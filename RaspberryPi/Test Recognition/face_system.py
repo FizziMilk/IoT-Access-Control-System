@@ -11,7 +11,7 @@ class FaceRecognitionSystem:
         self.storage = StorageSystem()
         self.recognition = RecognitionSystem(self.storage)
     
-    def register_new_user(self):
+    def register_new_user(self, use_liveness=True):
         """Register a new user face in the system"""
         # Get user name
         name = input("Enter name for the new user: ")
@@ -19,12 +19,16 @@ class FaceRecognitionSystem:
             print("Name cannot be empty")
             return False
         
-        # Capture face image
+        # Capture face image with liveness check if requested
         print("Capturing face image...")
-        image = self.camera.capture_face()
+        if use_liveness:
+            print("With liveness detection to prevent spoofing...")
+            image = self.camera.capture_face_with_liveness()
+        else:
+            image = self.camera.capture_face()
         
         if image is None:
-            print("Image capture cancelled")
+            print("Image capture cancelled or failed")
             return False
         
         # Add user to storage
@@ -37,18 +41,22 @@ class FaceRecognitionSystem:
         print(f"Successfully registered {name}")
         return True
     
-    def recognize_face(self):
+    def recognize_face(self, use_liveness=True):
         """Recognize a face from camera"""
         if not self.storage.has_faces():
             print("No face encodings in database. Please register users first.")
             return None
         
-        # Capture image
+        # Capture image with liveness check if requested
         print("Capturing image for recognition...")
-        image = self.camera.capture_face()
+        if use_liveness:
+            print("With liveness detection to prevent spoofing...")
+            image = self.camera.capture_face_with_liveness()
+        else:
+            image = self.camera.capture_face()
         
         if image is None:
-            print("Image capture cancelled")
+            print("Image capture cancelled or failed")
             return None
         
         # Recognize faces in image

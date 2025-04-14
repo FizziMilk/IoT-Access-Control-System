@@ -5,6 +5,9 @@ def main():
     # Create face recognition system
     face_system = FaceRecognitionSystem()
     
+    # Settings
+    use_liveness = True
+    
     while True:
         print("\nFace Recognition System")
         print("----------------------")
@@ -13,14 +16,15 @@ def main():
         print("3. List registered users")
         print("4. Delete user")
         print("5. Generate encoding for backend")
+        print(f"6. Toggle liveness detection (currently: {'ON' if use_liveness else 'OFF'})")
         print("0. Exit")
         
-        choice = input("\nEnter choice (0-5): ")
+        choice = input("\nEnter choice (0-6): ")
         
         if choice == "1":
-            face_system.register_new_user()
+            face_system.register_new_user(use_liveness=use_liveness)
         elif choice == "2":
-            results = face_system.recognize_face()
+            results = face_system.recognize_face(use_liveness=use_liveness)
             if results:
                 print("\nRecognition Results:")
                 for i, result in enumerate(results):
@@ -34,6 +38,9 @@ def main():
             if encoding:
                 print(f"Generated encoding of length {len(encoding)}")
                 print("You can send this encoding to your backend API")
+        elif choice == "6":
+            use_liveness = not use_liveness
+            print(f"Liveness detection turned {'ON' if use_liveness else 'OFF'}")
         elif choice == "0":
             print("Exiting...")
             break
