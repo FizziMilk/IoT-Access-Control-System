@@ -1,8 +1,140 @@
 import os
 import pickle
 import cv2
+import numpy as np
 from datetime import datetime
 
+class FaceDatabase:
+    """
+    Storage and management of enrolled face data using a more robust approach.
+    Stores face encodings, names, and reference images.
+    """
+    def __init__(self, db_file='faces.db'):
+        """
+        Initialize face database with specified db file.
+        
+        Args:
+            db_file: Path to database file
+        """
+        self.db_file = db_file
+        self.images_dir = "face_images"
+        
+        # Create directory for face images if it doesn't exist
+        os.makedirs(self.images_dir, exist_ok=True)
+        
+        # Load existing data or create new database
+        self.faces = []  # List of tuples (name, encoding, image_path)
+        self.load_database()
+    
+    def load_database(self):
+        """Load face database from disk"""
+        if os.path.exists(self.db_file):
+            try:
+                with open(self.db_file, "rb") as f:
+                    self.faces = pickle.load(f)
+                print(f"Loaded {len(self.faces)} faces from database")
+            except Exception as e:
+                print(f"Error loading database: {str(e)}")
+                self.faces = []
+        else:
+            print("No existing database found. Creating new database.")
+            self.faces = []
+    
+    def save_database(self):
+        """Save face database to disk"""
+        try:
+            with open(self.db_file, "wb") as f:
+                pickle.dump(self.faces, f)
+            print(f"Saved {len(self.faces)} faces to database")
+            return True
+        except Exception as e:
+            print(f"Error saving database: {str(e)}")
+            return False
+    
+    def add_face(self, name, encoding, image):
+        """
+        Add a new face to the database
+        
+        Args:
+            name: Person's name
+            encoding: Face encoding (numpy array)
+            image: Face image for reference
+            
+        Returns:
+            bool: Success or failure
+        """
+        if name is None or encoding is None or image is None:
+            return False
+            
+        # Generate unique filename for the image
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        image_path = os.path.join(self.images_dir, f"{name}_{timestamp}.jpg")
+        
+        # Save the image
+        cv2.imwrite(image_path, image)
+        
+        # Add to database (store actual encoding)
+        self.faces.append((name, encoding, image_path))
+        
+        # Save updated database
+        return self.save_database()
+    
+    def get_all_faces(self):
+        """
+        Get all faces in the database
+        
+        Returns:
+            list: List of tuples (name, encoding, image_path)
+        """
+        return self.faces
+    
+    def get_face_by_name(self, name):
+        """
+        Get a face by name
+        
+        Args:
+            name: Person's name
+            
+        Returns:
+            tuple: (name, encoding, image_path) or None if not found
+        """
+        for face in self.faces:
+            if face[0] == name:
+                return face
+        return None
+    
+    def delete_face(self, name):
+        """
+        Delete a face from the database
+        
+        Args:
+            name: Person's name
+            
+        Returns:
+            bool: Success or failure
+        """
+        initial_count = len(self.faces)
+        self.faces = [face for face in self.faces if face[0] != name]
+        
+        # Check if any faces were removed
+        if len(self.faces) < initial_count:
+            return self.save_database()
+        
+        return False
+        
+    def list_all_faces(self):
+        """Print a list of all enrolled faces"""
+        if not self.faces:
+            print("No faces enrolled in the database")
+            return
+            
+        print("\nEnrolled Faces:")
+        print("--------------")
+        for i, (name, _, _) in enumerate(self.faces, 1):
+            print(f"{i}. {name}")
+        print()
+
+# Keep original StorageSystem for backward compatibility
 class StorageSystem:
     def __init__(self):
         # Directory structure
