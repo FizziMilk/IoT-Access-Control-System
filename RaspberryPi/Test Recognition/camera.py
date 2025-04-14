@@ -89,25 +89,34 @@ class Camera:
         Returns:
             numpy.ndarray: Captured frame or None if failed
         """
+        print(f"Capturing frame from camera {self.camera_id}")
         cap = cv2.VideoCapture(self.camera_id)
         
         if not cap.isOpened():
             print(f"ERROR: Could not open camera with ID {self.camera_id}")
             return None
             
+        # Set resolution
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.resolution[0])
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.resolution[1])
         
         # Wait for camera to initialize
-        time.sleep(0.5)
+        time.sleep(1.0)
         
-        ret, frame = cap.read()
+        # Try multiple times to get a frame (sometimes first frame can be empty)
+        for _ in range(5):
+            ret, frame = cap.read()
+            if ret and frame is not None and frame.size > 0:
+                break
+            time.sleep(0.1)
+        
         cap.release()
         
-        if not ret:
-            print("Error: Could not capture frame")
+        if not ret or frame is None or frame.size == 0:
+            print("Error: Could not capture valid frame")
             return None
             
+        print(f"Successfully captured frame with shape: {frame.shape}")
         return frame
     
     def detect_face(self, frame):
