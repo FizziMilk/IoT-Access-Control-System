@@ -222,7 +222,7 @@ class CameraSystem:
         skip_blink = SKIP_BLINK
         skip_movement = SKIP_MOVEMENT
         
-        # Pre-mark skipped stages as passed
+        # Initialize stage tracking
         stage_passed = {
             "texture": skip_texture,
             "blink": skip_blink,
@@ -240,13 +240,6 @@ class CameraSystem:
         # Parameters for blink detection - more strict thresholds
         EYE_AR_THRESH = 0.3  # Increased from 0.25 for lower framerates
         EYE_AR_CONSEC_FRAMES = 2
-        
-        # Create variables to track verification stages
-        stage_passed = {
-            "blink": False,
-            "texture": False,
-            "head_movement": False
-        }
         
         # Store eye aspect ratios for blink detection
         ear_history = deque(maxlen=8)  # Longer history for better analysis
@@ -425,10 +418,13 @@ class CameraSystem:
                     
                     # Track nose position for head movement challenge
                     if current_stage == "head_movement" and 'nose_tip' in landmarks:
-                        nose_point = np.array(landmarks['nose_tip'][0]) * 2  # Scale back up
+                        # Get nose point - handle it differently to avoid indexing errors
+                        nose_tip = np.array(landmarks['nose_tip'])
+                        # Use mean position of all nose points
+                        nose_point = np.mean(nose_tip, axis=0) * 2  # Scale back up
                         
                         # Draw nose point
-                        cv2.circle(display_frame, tuple(nose_point), 5, (0, 0, 255), -1)
+                        cv2.circle(display_frame, tuple(nose_point.astype(int)), 5, (0, 0, 255), -1)
                         
                         # Track nose positions
                         movement_positions.append(nose_point)
@@ -439,11 +435,16 @@ class CameraSystem:
                             start_pos = np.mean(movement_positions[:5], axis=0)
                             current_pos = np.mean(movement_positions[-5:], axis=0)
                             
-                            # Draw movement vector
-                            cv2.arrowedLine(display_frame, 
-                                          tuple(start_pos.astype(int)), 
-                                          tuple(current_pos.astype(int)),
-                                          (255, 0, 0), 2)
+                            # Ensure positions are integers for drawing
+                            start_point = tuple(start_pos.astype(int))
+                            current_point = tuple(current_pos.astype(int))
+                            
+                            # Draw movement vector (ensure coordinates are valid)
+                            if all(p >= 0 for p in start_point) and all(p >= 0 for p in current_point):
+                                cv2.arrowedLine(display_frame, 
+                                              start_point, 
+                                              current_point,
+                                              (255, 0, 0), 2)
                             
                             # Calculate differences
                             x_diff = current_pos[0] - start_pos[0]
