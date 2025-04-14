@@ -38,6 +38,14 @@ class LivenessDetector:
         Returns:
             tuple: (is_live, face_image)
         """
+        try:
+            # Import face_recognition here to avoid circular imports
+            import face_recognition
+        except ImportError:
+            print("ERROR: face_recognition module not found. Please install it with:")
+            print("pip install face_recognition")
+            return False, None
+            
         print("Enhanced liveness detection started...")
         
         # Enable skipping for troubleshooting - set these to True to skip specific tests
@@ -59,7 +67,16 @@ class LivenessDetector:
             "head_movement": skip_movement
         }
         
-        # Initialize camera - use the camera object's capture directly
+        # First destroy any existing windows to release resources
+        cv2.destroyAllWindows()
+        
+        # Force release any previously held camera resources
+        for i in range(3):
+            temp_cap = cv2.VideoCapture(self.camera.camera_id)
+            temp_cap.release()
+            time.sleep(0.1)
+        
+        # Initialize camera - use a new direct camera instance
         print(f"Opening camera with ID {self.camera.camera_id} and resolution {self.camera.resolution}")
         cap = cv2.VideoCapture(self.camera.camera_id)
         
@@ -83,6 +100,24 @@ class LivenessDetector:
         
         # Force window to be visible on top
         cv2.setWindowProperty(window_name, cv2.WND_PROP_TOPMOST, 1)
+        
+        # Test camera with raw frames before starting detection
+        print("Testing camera feed... press any key to continue")
+        for _ in range(15):  # Show 15 raw frames
+            ret, test_frame = cap.read()
+            if ret and test_frame is not None:
+                # Fix white balance on test frame
+                b, g, r = cv2.split(test_frame)
+                b = cv2.addWeighted(b, 0.8, np.zeros_like(b), 0, 0)  # Reduce blue
+                r = cv2.addWeighted(r, 1.1, np.zeros_like(r), 0, 0)  # Boost red
+                test_frame = cv2.merge([b, g, r])
+                
+                cv2.putText(test_frame, "Camera test - press any key to continue", 
+                          (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+                cv2.imshow(window_name, test_frame)
+                if cv2.waitKey(1) != -1:
+                    break
+            time.sleep(0.1)
         
         # Parameters for blink detection - more strict thresholds
         EYE_AR_THRESH = 0.3  # Increased from 0.25 for lower framerates
@@ -117,6 +152,12 @@ class LivenessDetector:
                 if not ret:
                     print("Error: Could not capture frame")
                     break
+                
+                # Apply white balance correction to reduce blue tint
+                b, g, r = cv2.split(frame)
+                b = cv2.addWeighted(b, 0.8, np.zeros_like(b), 0, 0)  # Reduce blue
+                r = cv2.addWeighted(r, 1.1, np.zeros_like(r), 0, 0)  # Boost red
+                frame = cv2.merge([b, g, r])
                 
                 # Create a copy for visualization
                 display_frame = frame.copy()
