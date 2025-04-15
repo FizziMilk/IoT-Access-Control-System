@@ -883,7 +883,7 @@ class CameraSystem:
         # Overlay plot on frame
         frame[plot_y:plot_y+plot_h, plot_x:plot_x+plot_w] = plot_area
     
-    def detect_liveness_multi(self, timeout=30):  # Increased timeout from 20 to 30 seconds
+    def detect_liveness_multi(self, timeout=60):  # Increased timeout from 30 to 60 seconds
         """
         Advanced liveness detection using multiple techniques:
         1. Blink detection with higher thresholds
@@ -970,6 +970,16 @@ class CameraSystem:
         texture_tests = ["laplacian", "fft", "color", "gradient", "lbp", "moire", "reflection"]
         current_texture_test_idx = 0
         texture_test_results = {test: 0 for test in texture_tests}  # Track passes for each test (0 = not tested yet)
+        
+        # Create a texture tests results window
+        texture_window_width = 400
+        texture_window_height = 500
+        texture_results_window = np.zeros((texture_window_height, texture_window_width, 3), dtype=np.uint8)
+        cv2.namedWindow("Texture Tests Results", cv2.WINDOW_NORMAL)
+        cv2.resizeWindow("Texture Tests Results", texture_window_width, texture_window_height)
+        
+        # Store the most recent debug image for each test
+        texture_debug_images = {test: None for test in texture_tests}
 
         # Function to safely transition between stages
         def transition_to_stage(new_stage):
@@ -988,6 +998,93 @@ class CameraSystem:
             elif new_stage == "head_movement":
                 print(f"Stage 3: Please move your head {movement_type.upper()}")
                 movement_start_time = time.time()
+                
+        # Function to update texture results display
+        def update_texture_results_window():
+            # Create a fresh canvas
+            texture_results_window.fill(0)  # Black background
+            
+            # Add title
+            cv2.putText(texture_results_window, "TEXTURE TESTS RESULTS", 
+                       (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+            
+            # Display results for each test
+            y_offset = 70
+            for i, (test, passes) in enumerate(texture_test_results.items()):
+                # Status text and color
+                status = "N/A" if passes == 0 else f"PASS ({passes})" if passes >= 2 else f"FAIL ({passes})"
+                color = (200, 200, 200) if passes == 0 else (0, 255, 0) if passes >= 2 else (0, 0, 255)
+                
+                # Test name with capitalized first letter
+                test_name = test.capitalize()
+                
+                # Draw the test info
+                cv2.putText(texture_results_window, f"{test_name}:", 
+                           (10, y_offset), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
+                cv2.putText(texture_results_window, status, 
+                           (150, y_offset), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+                
+                # Add a progress bar
+                bar_length = 200
+                bar_height = 10
+                if passes > 0:
+                    filled_length = min(passes * (bar_length // 3), bar_length)  # 3 passes fills the bar
+                    cv2.rectangle(texture_results_window, 
+                                 (150, y_offset + 10), 
+                                 (150 + filled_length, y_offset + 10 + bar_height), 
+                                 color, -1)
+                # Draw bar outline
+                cv2.rectangle(texture_results_window, 
+                             (150, y_offset + 10), 
+                             (150 + bar_length, y_offset + 10 + bar_height), 
+                             (150, 150, 150), 1)
+                
+                # Indicate the active test
+                if test == texture_tests[current_texture_test_idx]:
+                    cv2.putText(texture_results_window, "ACTIVE", 
+                               (300, y_offset), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
+                
+                y_offset += 50
+            
+            # Draw summary
+            passed_tests = sum(1 for passes in texture_test_results.values() if passes >= 2)
+            total_needed = 4  # Need 4 out of 7 tests to pass
+            summary_text = f"PASSED: {passed_tests}/{total_needed} tests"
+            summary_color = (0, 255, 0) if passed_tests >= total_needed else (0, 0, 255)
+            
+            cv2.putText(texture_results_window, summary_text, 
+                       (10, texture_window_height - 50), cv2.FONT_HERSHEY_SIMPLEX, 0.8, summary_color, 2)
+            
+            # Draw current test debug image if available
+            current_test = texture_tests[current_texture_test_idx]
+            if texture_debug_images[current_test] is not None:
+                debug_img = texture_debug_images[current_test]
+                # Get aspect ratio of the debug image
+                aspect_ratio = debug_img.shape[1] / debug_img.shape[0]
+                # Calculate dimensions for the preview
+                preview_height = 150
+                preview_width = int(preview_height * aspect_ratio)
+                if preview_width > texture_window_width - 20:
+                    preview_width = texture_window_width - 20
+                    preview_height = int(preview_width / aspect_ratio)
+                
+                # Resize and place in bottom of window
+                try:
+                    if debug_img.shape[0] > 0 and debug_img.shape[1] > 0:
+                        debug_preview = cv2.resize(debug_img, (preview_width, preview_height))
+                        x_offset = (texture_window_width - preview_width) // 2
+                        texture_results_window[texture_window_height-preview_height-10:texture_window_height-10, 
+                                             x_offset:x_offset+preview_width] = debug_preview
+                        
+                        # Label the preview
+                        cv2.putText(texture_results_window, f"Preview: {current_test}", 
+                                   (10, texture_window_height - preview_height - 20), 
+                                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
+                except Exception as e:
+                    print(f"Error displaying debug preview: {str(e)}")
+            
+            # Show the results window
+            cv2.imshow("Texture Tests Results", texture_results_window)
                 
         while True:
             # Check for overall timeout
@@ -1056,6 +1153,10 @@ class CameraSystem:
                                 # Run only one texture test at a time
                                 is_test_passed, debug_img = self.detect_texture(face_region, test_type=current_test, debug=True)
                                 
+                                # Store debug image for the current test
+                                if debug_img is not None:
+                                    texture_debug_images[current_test] = debug_img
+                                
                                 # Track test result
                                 if is_test_passed:
                                     texture_test_results[current_test] += 1
@@ -1065,22 +1166,8 @@ class CameraSystem:
                                     cv2.putText(display_frame, f"{current_test.upper()} TEST FAILED", (left, top-10), 
                                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
                                 
-                                # Show test results on screen
-                                for i, (test, passes) in enumerate(texture_test_results.items()):
-                                    status = "N/A" if passes == 0 else f"PASS ({passes})" if passes >= 2 else f"FAIL"
-                                    color = (255, 255, 255) if passes == 0 else (0, 255, 0) if passes >= 2 else (0, 0, 255)
-                                    cv2.putText(display_frame, f"{test}: {status}", 
-                                              (10, 110 + i*20), cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
-                                
-                                # Show debug image if available
-                                if debug_img is not None:
-                                    # Only show if the debug image is valid
-                                    if debug_img.shape[0] > 0 and debug_img.shape[1] > 0:
-                                        # Resize to a reasonable size 
-                                        debug_img_resized = cv2.resize(debug_img, (320, 240))
-                                        # Place in top right corner
-                                        h, w = debug_img_resized.shape[:2]
-                                        display_frame[10:10+h, display_frame.shape[1]-w-10:display_frame.shape[1]-10] = debug_img_resized
+                                # Update texture results window
+                                update_texture_results_window()
                                 
                                 # Rotate to next test after a few frames with the same test
                                 if texture_frames % 15 == 0:
@@ -1292,7 +1379,9 @@ class CameraSystem:
                 
         # Clean up
         cap.release()
-        cv2.destroyAllWindows()
+        cv2.destroyWindow("Liveness Detection")
+        cv2.destroyWindow("Texture Tests Results")
+        cv2.waitKey(1)  # Required to properly close windows
         
         # Return the results
         return all_passed, face_image
