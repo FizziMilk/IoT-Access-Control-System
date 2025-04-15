@@ -359,7 +359,7 @@ class CameraSystem:
         """
         # Initialize camera
         cap = cv2.VideoCapture(self.camera_id)
-        # Use lower resolution for liveness detection
+        # Use slightly higher resolution for better eye landmark detection
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.liveness_resolution[0])
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.liveness_resolution[1])
         # Disable autofocus to reduce processing overhead
@@ -386,7 +386,7 @@ class CameraSystem:
         max_face_size = 0
         
         # Downsample factor for face detection (to speed up processing)
-        downsample = 0.25  # Even smaller for better performance
+        downsample = 0.25
         
         # Frame counter for processing only every nth frame
         frame_count = 0
@@ -407,9 +407,18 @@ class CameraSystem:
         print(f"Processing every {self.process_nth_frame}th frame for detection")
         
         # Position smoothing to reduce jitter
-        # Keep a history of recent face positions for smoothing
         position_history = []
         position_history_max = 3  # Number of positions to keep for smoothing
+        
+        # Motion detection variables
+        previous_frame = None
+        motion_history = []
+        motion_history_max = 5
+        high_motion_detected = False
+        
+        # EAR history for detecting real blink patterns
+        ear_history = []
+        ear_history_max = 10
         
         # Increase timeout slightly to allow for adaptation
         actual_timeout = timeout + 0.5
@@ -434,6 +443,32 @@ class CameraSystem:
             
             # Create a copy for display
             display_frame = frame.copy()
+            
+            # Detect global motion between frames
+            if previous_frame is not None:
+                # Convert frames to grayscale for motion detection
+                gray1 = cv2.cvtColor(previous_frame, cv2.COLOR_BGR2GRAY)
+                gray2 = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                
+                # Calculate absolute difference between frames
+                diff = cv2.absdiff(gray1, gray2)
+                # Apply threshold to highlight significant changes
+                _, thresh = cv2.threshold(diff, 30, 255, cv2.THRESH_BINARY)
+                # Calculate motion score as percentage of pixels changed
+                motion_score = np.sum(thresh) / (thresh.shape[0] * thresh.shape[1] * 255)
+                
+                # Add to motion history
+                motion_history.append(motion_score)
+                if len(motion_history) > motion_history_max:
+                    motion_history.pop(0)
+                
+                # Detect high motion if average motion exceeds threshold
+                if len(motion_history) > 2:
+                    avg_motion = sum(motion_history) / len(motion_history)
+                    high_motion_detected = avg_motion > 0.05  # Threshold for high motion
+            
+            # Store current frame for next iteration
+            previous_frame = frame.copy()
             
             # Only process every nth frame to improve performance
             process_this_frame = (frame_count % self.process_nth_frame == 0)
@@ -552,6 +587,11 @@ class CameraSystem:
                         # Average the EAR of both eyes
                         ear = (left_ear + right_ear) / 2.0
                         
+                        # Add to EAR history
+                        ear_history.append(ear)
+                        if len(ear_history) > ear_history_max:
+                            ear_history.pop(0)
+                        
                         # Add to history for adaptive thresholding
                         ear_values.append(ear)
                         
@@ -571,18 +611,33 @@ class CameraSystem:
                             eye_hull = cv2.convexHull(np.array(eye))
                             cv2.drawContours(display_frame, [eye_hull], -1, (0, 255, 0), 1)
                         
-                        # Check if EAR is below threshold
-                        if ear < adaptive_threshold:
-                            ear_thresh_counter += 1
-                            # Draw RED eye contours when eyes are detected as closed
-                            for eye in [left_eye, right_eye]:
-                                eye_hull = cv2.convexHull(np.array(eye))
-                                cv2.drawContours(display_frame, [eye_hull], -1, (0, 0, 255), 2)
-                        else:
-                            # If eyes were closed for enough frames, count as a blink
-                            if ear_thresh_counter >= self.EAR_CONSEC_FRAMES:
-                                blink_counter += 1
-                            ear_thresh_counter = 0
+                        # Skip blink detection during high motion
+                        blink_valid = not high_motion_detected
+                        
+                        # Check for blink pattern (real blinks have a specific EAR pattern)
+                        if len(ear_history) >= 5 and blink_valid:
+                            # Basic blink pattern: EAR decreases then increases
+                            # Check if current EAR is below threshold
+                            if ear < adaptive_threshold:
+                                ear_thresh_counter += 1
+                                # Draw RED eye contours when eyes are detected as closed
+                                for eye in [left_eye, right_eye]:
+                                    eye_hull = cv2.convexHull(np.array(eye))
+                                    cv2.drawContours(display_frame, [eye_hull], -1, (0, 0, 255), 2)
+                            else:
+                                # If eyes were closed for enough frames, check if it was a valid blink pattern
+                                if ear_thresh_counter >= self.EAR_CONSEC_FRAMES:
+                                    # Look at recent history to verify this was a real blink
+                                    # Real blinks have a pattern: open -> closing -> closed -> opening -> open
+                                    recent_ear = ear_history[-5:]
+                                    
+                                    # Check if the EAR dropped significantly and then rose again
+                                    # This pattern is typical for real blinks but not for motion artifacts
+                                    if (max(recent_ear[:2]) - min(recent_ear[2:3]) > 0.04 and 
+                                        max(recent_ear[4:]) - min(recent_ear[2:3]) > 0.04):
+                                        blink_counter += 1
+                                
+                                ear_thresh_counter = 0
                         
                         # Check if we've detected a blink
                         if blink_counter > 0:
@@ -601,11 +656,15 @@ class CameraSystem:
             cv2.putText(display_frame, f"Time: {time_left}s", (10, 90),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
             
-            # Display frame rate (every ~10 frames)
-            if frame_count % 10 == 0:
-                fps = frame_count / (time.time() - start_time)
-                cv2.putText(display_frame, f"FPS: {fps:.1f}", (display_frame.shape[1] - 120, 30), 
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
+            # Display motion status
+            motion_status = "High Motion" if high_motion_detected else "Stable"
+            motion_color = (0, 0, 255) if high_motion_detected else (0, 255, 0)
+            cv2.putText(display_frame, motion_status, (display_frame.shape[1] - 120, 90),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, motion_color, 1)
+            
+            # Display frame rate
+            cv2.putText(display_frame, f"FPS: {fps:.1f}", (display_frame.shape[1] - 120, 30), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
             
             # Display tracking status
             tracking_status = "Tracking" if (tracker is not None and tracking_active) else "Detecting"
@@ -617,7 +676,7 @@ class CameraSystem:
                 status = f"Blink detected! ({blink_counter} blinks) - Continuing for testing"
                 color = (0, 255, 0)
             else:
-                status = "Please blink..."
+                status = "Please blink naturally..."
                 color = (0, 0, 255)
             cv2.putText(display_frame, status, (10, 120),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
