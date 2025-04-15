@@ -104,10 +104,11 @@ class CameraSystem:
             debug: Whether to print debug information and return visualizations
             
         Returns:
-            tuple: (is_real, debug_image) where is_real is a boolean and debug_image shows analysis results
+            tuple: (is_real, debug_image, test_values) where is_real is a boolean, debug_image shows analysis results,
+                  and test_values is a dictionary containing the measured values for each test
         """
         if face_image is None or face_image.size == 0:
-            return False, None
+            return False, None, {}
             
         # Resize for consistent analysis (maintain aspect ratio)
         height, width = face_image.shape[:2]
@@ -122,6 +123,9 @@ class CameraSystem:
         
         # Keep track of test results
         test_results = {}
+        
+        # Dictionary to store test values
+        test_values = {}
         
         # Create debug visualization if running all tests or debugging specific test
         if debug:
@@ -152,6 +156,9 @@ class CameraSystem:
             laplacian = cv2.Laplacian(gray, cv2.CV_64F)
             laplacian_variance = np.var(laplacian)
             
+            # Store value in dictionary
+            test_values["laplacian"] = laplacian_variance
+            
             # Normalize for visualization
             if debug:
                 laplacian_norm = cv2.normalize(laplacian, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
@@ -162,15 +169,13 @@ class CameraSystem:
                 debug_img[0:new_height, new_width:new_width*2] = laplacian_color
                 cv2.putText(debug_img, "Laplacian (Edge Detail)", (new_width + 10, new_height + 20), 
                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-                # Attach value to debug image for parent function to access
-                debug_img.__laplacian_variance = laplacian_variance
             
             # Real faces typically have higher Laplacian variance (more texture detail)
             texture_threshold = 100.0  # Reduced from 150.0 - more lenient for Raspberry Pi camera
             test_results["laplacian"] = laplacian_variance > texture_threshold
             
             if test_type != "all":
-                return test_results["laplacian"], debug_img if debug else None
+                return test_results["laplacian"], debug_img if debug else None, test_values
         
         if test_type in ["fft", "all"]:
             # ===================== TEST 2: HIGH FREQUENCY ANALYSIS =====================
@@ -191,6 +196,9 @@ class CameraSystem:
             # Calculate energy in high-frequency regions
             high_freq_energy = np.mean(magnitude_spectrum[mask])
             
+            # Store value in dictionary
+            test_values["fft"] = high_freq_energy
+            
             # Visualize FFT with high-frequency regions highlighted
             if debug:
                 # Normalize spectrum for visualization
@@ -204,9 +212,6 @@ class CameraSystem:
                 
                 # Place in debug image
                 fft_display = cv2.resize(magnitude_color, (new_width, new_height))
-                
-                # Attach value to debug image for parent function to access
-                debug_img.__high_freq_energy = high_freq_energy
                 
                 if test_type == "all":
                     debug_img[new_height+50:new_height*2+50, 0:new_width] = fft_display
@@ -222,7 +227,7 @@ class CameraSystem:
             test_results["fft"] = high_freq_energy > high_freq_threshold
             
             if test_type != "all":
-                return test_results["fft"], debug_img if debug else None
+                return test_results["fft"], debug_img if debug else None, test_values
         
         if test_type in ["color", "all"]:
             # ===================== TEST 3: COLOR VARIANCE ANALYSIS =====================
@@ -244,10 +249,9 @@ class CameraSystem:
             corr_penalty = 8.0 * avg_color_corr  # Reduced from 10.0 - less penalty
             adjusted_color_std = color_std_avg - corr_penalty
             
-            # Attach values to debug image
-            if debug:
-                debug_img.__adjusted_color_std = adjusted_color_std
-                
+            # Store value in dictionary
+            test_values["color"] = adjusted_color_std
+            
             test_results["color"] = adjusted_color_std > color_threshold
             
             # Visualize color channels for debugging
@@ -273,7 +277,7 @@ class CameraSystem:
                                    cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
             
             if test_type != "all":
-                return test_results["color"], debug_img if debug else None
+                return test_results["color"], debug_img if debug else None, test_values
         
         if test_type in ["gradient", "all"]:
             # ===================== TEST 4: GRADIENT ANALYSIS =====================
@@ -286,10 +290,9 @@ class CameraSystem:
             gradient_direction = np.arctan2(sobely, sobelx) * 180 / np.pi
             direction_variance = np.var(gradient_direction)
             
-            # Attach value to debug image
-            if debug:
-                debug_img.__direction_variance = direction_variance
-                
+            # Store value in dictionary
+            test_values["gradient"] = direction_variance
+            
             # Digital displays often show more uniform gradient patterns
             gradient_threshold = 900.0  # Reduced from 1200.0 - more lenient for Raspberry Pi camera
             test_results["gradient"] = direction_variance > gradient_threshold
@@ -307,7 +310,7 @@ class CameraSystem:
                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
             
             if test_type != "all":
-                return test_results["gradient"], debug_img if debug else None
+                return test_results["gradient"], debug_img if debug else None, test_values
         
         if test_type in ["lbp", "all"]:
             # ===================== TEST 5: LOCAL BINARY PATTERN ANALYSIS =====================
@@ -334,10 +337,9 @@ class CameraSystem:
             # Calculate LBP uniformity (real faces have more uniform LBP distribution)
             lbp_uniformity = 1.0 - np.std(hist)
             
-            # Attach value to debug image
-            if debug:
-                debug_img.__lbp_uniformity = lbp_uniformity
-                
+            # Store value in dictionary
+            test_values["lbp"] = lbp_uniformity
+            
             # Digital displays often show less uniform LBP patterns
             lbp_threshold = 0.94  # Increased from 0.93 - more lenient for Raspberry Pi camera
             test_results["lbp"] = lbp_uniformity < lbp_threshold
@@ -355,7 +357,7 @@ class CameraSystem:
                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
             
             if test_type != "all":
-                return test_results["lbp"], debug_img if debug else None
+                return test_results["lbp"], debug_img if debug else None, test_values
         
         if test_type in ["moire", "all"]:
             # ===================== TEST 6: MOIRÉ PATTERN DETECTION =====================
@@ -397,10 +399,9 @@ class CameraSystem:
             # Calculate energy in the filtered image (high energy indicates moiré patterns)
             moire_energy = np.mean(filtered)
             
-            # Attach value to debug image
-            if debug:
-                debug_img.__moire_energy = moire_energy
-                
+            # Store value in dictionary
+            test_values["moire"] = moire_energy
+            
             # Digital displays often show moiré patterns in this frequency band
             moire_threshold = 20.0  # Increased from 15.0 - more lenient for Raspberry Pi camera
             test_results["moire"] = moire_energy < moire_threshold
@@ -422,7 +423,7 @@ class CameraSystem:
                                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
             
             if test_type != "all":
-                return test_results["moire"], debug_img if debug else None
+                return test_results["moire"], debug_img if debug else None, test_values
         
         if test_type in ["reflection", "all"]:
             # ===================== TEST 7: REFLECTION DETECTION =====================
@@ -441,10 +442,9 @@ class CameraSystem:
             brightness_hist = brightness_hist / np.sum(brightness_hist)
             brightness_entropy = -np.sum(brightness_hist * np.log2(brightness_hist + 1e-10))
             
-            # Attach value to debug image
-            if debug:
-                debug_img.__bright_pixels = bright_pixels
-                
+            # Store value in dictionary
+            test_values["reflection"] = bright_pixels
+            
             # Phone screens often have unnaturally bright regions or reflections
             reflection_threshold = 0.025  # Increased from 0.02 - more lenient for Raspberry Pi camera
             # Reduce the threshold if entropy is low (uniform brightness, typical of screens)
@@ -465,7 +465,7 @@ class CameraSystem:
                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
             
             if test_type != "all":
-                return test_results["reflection"], debug_img if debug else None
+                return test_results["reflection"], debug_img if debug else None, test_values
         
         # ===================== COMBINE RESULTS FOR ALL TESTS =====================
         if test_type == "all":
@@ -528,10 +528,10 @@ class CameraSystem:
                 if "reflection" in test_results:
                     print(f"  - Reflection detection: {bright_pixels*100:.2f}% ({'PASS' if test_results['reflection'] else 'FAIL'})")
             
-            return is_real, debug_img if debug else None
+            return is_real, debug_img if debug else None, test_values
         
         # If test_type is not recognized, return False
-        return False, debug_img if debug else None
+        return False, debug_img if debug else None, test_values
     
     def detect_blink_with_movement_rejection(self, frame, face_bbox=None, landmarks=None, visualize=True):
         """
@@ -1247,7 +1247,7 @@ class CameraSystem:
                                 current_test = texture_tests[current_texture_test_idx]
                                 
                                 # Run only one texture test at a time
-                                is_test_passed, debug_img = self.detect_texture(face_region, test_type=current_test, debug=True)
+                                is_test_passed, debug_img, test_values = self.detect_texture(face_region, test_type=current_test, debug=True)
                                 
                                 # Store debug image for the current test
                                 if debug_img is not None:
@@ -1262,25 +1262,9 @@ class CameraSystem:
                                     cv2.putText(display_frame, f"{current_test.upper()} TEST FAILED", (left, top-10), 
                                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
                                 
-                                # Store the test values from the results
-                                try:
-                                    if current_test == "laplacian":
-                                        test_values["laplacian"] = debug_img.__laplacian_variance
-                                    elif current_test == "fft":
-                                        test_values["fft"] = debug_img.__high_freq_energy
-                                    elif current_test == "color":
-                                        test_values["color"] = debug_img.__adjusted_color_std
-                                    elif current_test == "gradient":
-                                        test_values["gradient"] = debug_img.__direction_variance
-                                    elif current_test == "lbp":
-                                        test_values["lbp"] = debug_img.__lbp_uniformity
-                                    elif current_test == "moire":
-                                        test_values["moire"] = debug_img.__moire_energy
-                                    elif current_test == "reflection":
-                                        test_values["reflection"] = debug_img.__bright_pixels
-                                except AttributeError:
-                                    # If the attributes aren't available, we'll continue without showing values
-                                    pass
+                                # Store the test values directly from the returned dictionary
+                                for key, value in test_values.items():
+                                    test_values[key] = value
                                 
                                 # Update texture results window
                                 update_texture_results_window()
