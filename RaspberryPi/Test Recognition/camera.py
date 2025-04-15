@@ -558,11 +558,11 @@ class CameraSystem:
             print(f"Gradient range: {gradient_range:.4f}, Gradient std: {gradient_std:.4f}")
             
             # Combined decision metrics
-            # Based on latest test data:
-            # - Photos consistently show gradient_range > 0.035
-            # - Real faces consistently show gradient_range < 0.030
-            # Use gradient range as primary differentiator rather than focus_variance_ratio
-            is_real_face = (gradient_range < 0.035)
+            # Based on comprehensive test data from multiple scenarios:
+            # - Real faces consistently show gradient_range < 0.035 
+            # - Photos consistently show gradient_range > 0.08 or very high focus_variance_ratio
+            # Use both metrics for better accuracy
+            is_real_face = (gradient_range < 0.035 and focus_variance_ratio < 0.05)
             
             print(f"Focus test result: {is_real_face}")
             
@@ -706,19 +706,19 @@ class CameraSystem:
             print(f"Frequency energy ratio: {freq_energy_ratio:.4f}")
             
             # Combined decision metrics using multiple texture properties
-            # Thresholds adjusted based on detailed test data
+            # Thresholds adjusted based on comprehensive test data
             
-            # 1. Real faces consistently show higher entropy values at medium and large scales
-            entropy_score = (entropy2 > 3.7 and entropy3 > 4.15)
+            # 1. Real faces show entropy3 values consistently above 4.10
+            entropy_score = (entropy3 > 4.10)
             
-            # 2. Real faces show higher gradient ratio according to test data
-            gradient_score = (gradient_ratio > 1.22)
+            # 2. Real faces consistently show gradient ratio above 1.18
+            gradient_score = (gradient_ratio > 1.18)
             
-            # 3. Uniformity ratio is a strong differentiator between real and printed faces
+            # 3. Uniformity ratio shows clear separation - real faces above 1.75
             uniformity_score = (uniformity_ratio > 1.75)
             
-            # 4. Frequency ratio is less reliable but still useful
-            frequency_score = (freq_energy_ratio < 0.954)
+            # 4. Frequency ratio also shows distinction
+            frequency_score = (freq_energy_ratio < 0.955)
             
             # Compute scores and final decision
             passing_scores = sum([entropy_score, gradient_score, uniformity_score, frequency_score])
@@ -726,8 +726,9 @@ class CameraSystem:
                   f"Uniformity={uniformity_score}, Frequency={frequency_score}")
             print(f"Passing texture scores: {passing_scores}/4")
             
-            # Must pass at least 2 metrics, with entropy score being the most reliable
-            is_real_texture = (passing_scores >= 2 and entropy_score)
+            # Need at least 2 metrics to pass, with either entropy or uniformity being required
+            # (these showed the clearest distinction between real faces and photos)
+            is_real_texture = (passing_scores >= 2 and (entropy_score or uniformity_score))
             
             print(f"Texture test result: {is_real_texture}")
             
