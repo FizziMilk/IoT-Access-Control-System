@@ -6,13 +6,18 @@ import dlib
 from scipy.spatial import distance as dist
 import threading
 import traceback
+import logging
+
+# Set up logger
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+LOGGER = logging.getLogger("CameraSystem")
 
 class CameraSystem:
     def __init__(self, camera_id=0, resolution=(640, 480)):
         self.camera_id = camera_id
         self.resolution = resolution
         # EAR threshold for blink detection - more sensitive
-        self.EAR_THRESHOLD = 0.19  # Lower threshold to catch more blinks
+        self.EAR_THRESHOLD = 0.17  # Even lower threshold to catch more blinks
         # Number of consecutive frames the eye must be below threshold to count as a blink
         self.EAR_CONSEC_FRAMES = 1  # Fast blink detection
         # Use a much lower resolution for liveness detection
@@ -616,11 +621,8 @@ class CameraSystem:
                             eye_hull = cv2.convexHull(np.array(eye))
                             cv2.drawContours(display_frame, [eye_hull], -1, (0, 255, 0), 1)
                         
-                        # Check if we're in a high motion state
-                        in_motion = high_motion_detected
-                        
                         # Check for blink pattern - need stable EAR history
-                        if len(ear_history) >= 5:
+                        if len(ear_history) >= 3:
                             # Check if current EAR is below threshold - indicates closed eyes
                             if ear < adaptive_threshold:
                                 ear_thresh_counter += 1
@@ -631,18 +633,9 @@ class CameraSystem:
                             else:
                                 # Eyes are open now, if they were closed before, check if it was a blink
                                 if ear_thresh_counter >= self.EAR_CONSEC_FRAMES:
-                                    # Get recent EAR values for pattern analysis
-                                    recent_ear = ear_history[-5:]
-                                    
-                                    # Calculate pattern metrics
-                                    ear_drop = max(recent_ear[:2]) - min(recent_ear[2:3])
-                                    
-                                    # Simplified blink detection criteria - no vertical motion checks
-                                    valid_blink = ear_drop > 0.015  # Reduced threshold for detecting a blink
-                                    
-                                    # Count blink if valid
-                                    if valid_blink:
-                                        blink_counter += 1
+                                    # Simpler blink detection - just check if we were below threshold
+                                    blink_counter += 1
+                                    print(f"Blink detected! EAR: {ear:.3f}, Threshold: {adaptive_threshold:.3f}")
                                 
                                 # Reset counter after eyes reopen
                                 ear_thresh_counter = 0
