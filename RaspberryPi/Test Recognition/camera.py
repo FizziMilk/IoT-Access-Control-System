@@ -463,7 +463,32 @@ class CameraSystem:
         try:
             print("Starting enhanced focus depth test...")
             top, right, bottom, left = face_location
+            
+            # Add safety margins to ensure we're looking at the face region
+            face_height = bottom - top
             face_width = right - left
+            
+            # Calculate center of the face
+            face_center_x = left + face_width // 2
+            face_center_y = top + face_height // 2
+            
+            # Create a centered ROI with appropriate size
+            # Use 80% of the original face width to ensure we're focused on facial features
+            roi_size = min(face_width, face_height) * 4 // 5
+            
+            # Calculate new region boundaries centered on face
+            new_left = max(0, face_center_x - roi_size // 2)
+            new_top = max(0, face_center_y - roi_size // 2)
+            new_right = new_left + roi_size
+            new_bottom = new_top + roi_size
+            
+            # Update face location with centered ROI
+            face_location = (new_top, new_right, new_bottom, new_left)
+            top, right, bottom, left = face_location
+            
+            # Print the region dimensions to help with debugging
+            print(f"Focus test using region: Top={top}, Right={right}, Bottom={bottom}, Left={left}")
+            print(f"Region size: {right-left}x{bottom-top} pixels")
             
             # Save original camera settings
             original_resolution = (cap.get(cv2.CAP_PROP_FRAME_WIDTH), cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
@@ -477,13 +502,6 @@ class CameraSystem:
             # Disable autofocus
             cap.set(cv2.CAP_PROP_AUTOFOCUS, 0)
             
-            # Create a display window for focus test images
-            focus_display = np.zeros((600, 800, 3), dtype=np.uint8)
-            cv2.putText(focus_display, "FOCUS TEST IMAGES", (300, 30), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
-            cv2.imshow("Focus Test Images", focus_display)
-            cv2.waitKey(1)
-            
             # Use more focus points for better depth analysis
             focus_measurements = []
             focus_values = [0, 50, 100, 150, 200, 250]  # More test points
@@ -493,7 +511,7 @@ class CameraSystem:
             # Set baseline measurements including gradient analysis
             focus_gradients = []
             
-            for i, focus_val in enumerate(focus_values):
+            for focus_val in focus_values:
                 # Set focus value (0-255 range for most webcams)
                 cap.set(cv2.CAP_PROP_FOCUS, focus_val)
                 time.sleep(0.5)  # Give camera time to adjust focus
@@ -501,7 +519,6 @@ class CameraSystem:
                 # Capture multiple frames and average the focus measures
                 frame_focus_measures = []
                 frame_gradient_measures = []
-                captured_face = None
                 
                 for _ in range(3):
                     ret, frame = cap.read()
@@ -512,7 +529,6 @@ class CameraSystem:
                     face_frame = frame[top:bottom, left:right]
                     
                     if _ == 0:  # Save first frame for visualization
-                        captured_face = face_frame.copy()
                         focus_images.append(face_frame.copy())
                     
                     # Calculate focus measure (using Laplacian variance)
@@ -547,57 +563,6 @@ class CameraSystem:
                 gradient_measures.append(median_gradient)
                 
                 print(f"Focus setting {focus_val}: measure = {median_focus:.2f}, gradient = {median_gradient:.4f}")
-                
-                # Update the focus display window with the current image
-                # Calculate position in the grid (2x3 grid)
-                row = i // 3
-                col = i % 3
-                h, w = captured_face.shape[:2]
-                
-                # Scale the image to fit the display
-                max_h = 250
-                max_w = 250
-                scale = min(max_h / h, max_w / w)
-                new_h, new_w = int(h * scale), int(w * scale)
-                resized_face = cv2.resize(captured_face, (new_w, new_h))
-                
-                # Position on display
-                x_offset = col * (max_w + 10) + 20
-                y_offset = row * (max_h + 50) + 80
-                
-                # Create a new display for this update
-                focus_display = np.zeros((600, 800, 3), dtype=np.uint8)
-                cv2.putText(focus_display, "FOCUS TEST IMAGES", (300, 30), 
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
-                
-                # Place all processed images so far
-                for j in range(i+1):
-                    prev_row = j // 3
-                    prev_col = j % 3
-                    prev_x = prev_col * (max_w + 10) + 20
-                    prev_y = prev_row * (max_h + 50) + 80
-                    
-                    h_img, w_img = focus_images[j].shape[:2]
-                    scale_img = min(max_h / h_img, max_w / w_img)
-                    resized_img = cv2.resize(focus_images[j], (int(w_img * scale_img), int(h_img * scale_img)))
-                    
-                    # Add the image to the display
-                    h_res, w_res = resized_img.shape[:2]
-                    focus_display[prev_y:prev_y+h_res, prev_x:prev_x+w_res] = resized_img
-                    
-                    # Add focus level text
-                    focus_level_text = f"Focus: {focus_values[j]}"
-                    cv2.putText(focus_display, focus_level_text, (prev_x, prev_y + h_res + 15), 
-                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-                    
-                    # Add focus measure text
-                    measure_text = f"Measure: {focus_measurements[j]:.2f}"
-                    cv2.putText(focus_display, measure_text, (prev_x, prev_y + h_res + 35), 
-                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-                
-                # Show the updated display
-                cv2.imshow("Focus Test Images", focus_display)
-                cv2.waitKey(1)
             
             # Analyze focus pattern across measurements
             max_focus = max(focus_measurements)
@@ -618,23 +583,11 @@ class CameraSystem:
             print(f"Gradient range: {gradient_range:.4f}, Gradient std: {gradient_std:.4f}")
             
             # Combined decision metrics
-            # Based on comprehensive test data from multiple scenarios:
-            # - Real faces consistently show gradient_range < 0.035 
-            # - Photos consistently show gradient_range > 0.08 or very high focus_variance_ratio
-            # Use both metrics for better accuracy
-            is_real_face = (gradient_range < 0.035 and focus_variance_ratio < 0.05)
+            # Based on updated real-world data from multiple tests
+            # Real faces consistently show focus_variance_ratio < 0.025 and gradient_range < 0.04
+            is_real_face = (focus_variance_ratio < 0.025 and gradient_range < 0.04)
             
             print(f"Focus test result: {is_real_face}")
-            
-            # Add final result to display
-            result_text = "PASS: Real Face" if is_real_face else "FAIL: Possible Spoof"
-            result_color = (0, 255, 0) if is_real_face else (0, 0, 255)
-            cv2.putText(focus_display, result_text, (300, 550), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.8, result_color, 2)
-            cv2.putText(focus_display, f"Focus range: {focus_range:.2f}, Variance ratio: {focus_variance_ratio:.4f}", 
-                       (200, 580), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
-            cv2.imshow("Focus Test Images", focus_display)
-            cv2.waitKey(1)
             
             # For debugging: Display the focus images side by side
             if len(focus_images) >= 3:
@@ -650,8 +603,26 @@ class CameraSystem:
                     focus_idx = 0 if i == 0 else (len(focus_measurements)//2 if i == 1 else -1)
                     cv2.putText(combined_img, f"Focus: {focus_measurements[focus_idx]:.2f}", 
                                (i*w + 10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                    
+                    # Add focus setting text
+                    focus_setting = focus_values[0] if i == 0 else (focus_values[len(focus_values)//2] if i == 1 else focus_values[-1])
+                    cv2.putText(combined_img, f"Focus: {focus_setting}", 
+                              (i*w + 10, h - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                    
+                    # Draw rectangle to show this is the analyzed region
+                    cv2.rectangle(combined_img, (i*w, 0), (i*w + w, h), (0, 255, 0), 2)
+                    
+                # Add header
+                header_img = np.zeros((50, w*3, 3), dtype=np.uint8)
+                cv2.putText(header_img, "FOCUS TEST IMAGES", (w*3//2 - 150, 30), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2)
                 
-                cv2.imwrite("focus_test_debug.jpg", combined_img)
+                # Combine header and images
+                final_display = np.vstack((header_img, combined_img))
+                
+                cv2.imwrite("focus_test_debug.jpg", final_display)
+                cv2.imshow("Focus Test Images", final_display)
+                cv2.waitKey(1)  # Display briefly but don't block
             
             # Restore original settings
             cap.set(cv2.CAP_PROP_AUTOFOCUS, original_autofocus)
@@ -689,40 +660,6 @@ class CameraSystem:
             # Apply Gaussian blur to reduce noise
             blurred = cv2.GaussianBlur(equalized, (5, 5), 0)
             
-            # Create visualization window
-            texture_display = np.zeros((800, 1000, 3), dtype=np.uint8)
-            cv2.putText(texture_display, "TEXTURE ANALYSIS VISUALIZATION", (300, 30), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
-            
-            # Show original image
-            orig_h, orig_w = face_image.shape[:2]
-            max_size = 250
-            scale = min(max_size / orig_h, max_size / orig_w)
-            resized_orig = cv2.resize(face_image, (int(orig_w * scale), int(orig_h * scale)))
-            h_res, w_res = resized_orig.shape[:2]
-            
-            # Add original image
-            x_offset, y_offset = 50, 80
-            texture_display[y_offset:y_offset+h_res, x_offset:x_offset+w_res] = resized_orig
-            cv2.putText(texture_display, "Original Image", (x_offset, y_offset-10), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
-            
-            # Add grayscale image
-            gray_3ch = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
-            resized_gray = cv2.resize(gray_3ch, (int(orig_w * scale), int(orig_h * scale)))
-            x_offset += w_res + 50
-            texture_display[y_offset:y_offset+h_res, x_offset:x_offset+w_res] = resized_gray
-            cv2.putText(texture_display, "Grayscale", (x_offset, y_offset-10), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
-            
-            # Add equalized image
-            equal_3ch = cv2.cvtColor(equalized, cv2.COLOR_GRAY2BGR)
-            resized_equal = cv2.resize(equal_3ch, (int(orig_w * scale), int(orig_h * scale)))
-            x_offset += w_res + 50
-            texture_display[y_offset:y_offset+h_res, x_offset:x_offset+w_res] = resized_equal
-            cv2.putText(texture_display, "Histogram Equalized", (x_offset, y_offset-10), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
-            
             # Calculate Local Binary Pattern at multiple scales
             # This helps capture both micro and macro texture patterns
             results = {}
@@ -741,40 +678,6 @@ class CameraSystem:
             radius3 = 3
             n_points3 = 8 * radius3
             lbp3 = skimage_feature.local_binary_pattern(blurred, n_points3, radius3, method="uniform")
-            
-            # Add LBP visualizations to second row
-            lbp1_norm = cv2.normalize(lbp1.astype(np.uint8), None, 0, 255, cv2.NORM_MINMAX)
-            lbp1_3ch = cv2.cvtColor(lbp1_norm, cv2.COLOR_GRAY2BGR)
-            resized_lbp1 = cv2.resize(lbp1_3ch, (int(orig_w * scale), int(orig_h * scale)))
-            
-            lbp2_norm = cv2.normalize(lbp2.astype(np.uint8), None, 0, 255, cv2.NORM_MINMAX)
-            lbp2_3ch = cv2.cvtColor(lbp2_norm, cv2.COLOR_GRAY2BGR)
-            resized_lbp2 = cv2.resize(lbp2_3ch, (int(orig_w * scale), int(orig_h * scale)))
-            
-            lbp3_norm = cv2.normalize(lbp3.astype(np.uint8), None, 0, 255, cv2.NORM_MINMAX)
-            lbp3_3ch = cv2.cvtColor(lbp3_norm, cv2.COLOR_GRAY2BGR)
-            resized_lbp3 = cv2.resize(lbp3_3ch, (int(orig_w * scale), int(orig_h * scale)))
-            
-            # Add LBPs to second row
-            y_offset = y_offset + h_res + 50
-            x_offset = 50
-            texture_display[y_offset:y_offset+h_res, x_offset:x_offset+w_res] = resized_lbp1
-            cv2.putText(texture_display, f"LBP (r={radius1})", (x_offset, y_offset-10), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
-            
-            x_offset += w_res + 50
-            texture_display[y_offset:y_offset+h_res, x_offset:x_offset+w_res] = resized_lbp2
-            cv2.putText(texture_display, f"LBP (r={radius2})", (x_offset, y_offset-10), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
-            
-            x_offset += w_res + 50
-            texture_display[y_offset:y_offset+h_res, x_offset:x_offset+w_res] = resized_lbp3
-            cv2.putText(texture_display, f"LBP (r={radius3})", (x_offset, y_offset-10), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
-            
-            # Display the visualization window
-            cv2.imshow("Texture Analysis", texture_display)
-            cv2.waitKey(1)
             
             # Compute histograms for each scale
             hist1, _ = np.histogram(lbp1.ravel(), bins=np.arange(0, n_points1 + 3), range=(0, n_points1 + 2))
@@ -823,32 +726,6 @@ class CameraSystem:
             f_shift = np.fft.fftshift(f_transform)
             magnitude_spectrum = 20 * np.log(np.abs(f_shift) + 1)
             
-            # Add gradient and frequency visualizations
-            magnitude_norm = cv2.normalize(magnitude.astype(np.uint8), None, 0, 255, cv2.NORM_MINMAX)
-            magnitude_3ch = cv2.cvtColor(magnitude_norm, cv2.COLOR_GRAY2BGR)
-            resized_magnitude = cv2.resize(magnitude_3ch, (int(orig_w * scale), int(orig_h * scale)))
-            
-            # Normalize spectrum for display
-            spectrum_norm = cv2.normalize(magnitude_spectrum.astype(np.uint8), None, 0, 255, cv2.NORM_MINMAX)
-            spectrum_3ch = cv2.cvtColor(spectrum_norm, cv2.COLOR_GRAY2BGR)
-            resized_spectrum = cv2.resize(spectrum_3ch, (int(orig_w * scale), int(orig_h * scale)))
-            
-            # Add gradient and spectrum to third row
-            y_offset = y_offset + h_res + 50
-            x_offset = 50
-            texture_display[y_offset:y_offset+h_res, x_offset:x_offset+w_res] = resized_magnitude
-            cv2.putText(texture_display, "Gradient Magnitude", (x_offset, y_offset-10), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
-            
-            x_offset += w_res + 50
-            texture_display[y_offset:y_offset+h_res, x_offset:x_offset+w_res] = resized_spectrum
-            cv2.putText(texture_display, "Frequency Spectrum", (x_offset, y_offset-10), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
-            
-            # Update display
-            cv2.imshow("Texture Analysis", texture_display)
-            cv2.waitKey(1)
-            
             # Split spectrum into high/low frequency regions
             h, w = magnitude_spectrum.shape
             center_h, center_w = h // 2, w // 2
@@ -873,59 +750,26 @@ class CameraSystem:
             # Thresholds adjusted based on extensive real test data
             
             # 1. Real faces have higher entropy values, especially at larger scales
-            entropy_score = (entropy3 > 4.10)
+            entropy_score = (entropy2 > 3.65 and entropy3 > 4.10)
             
             # 2. Real faces show higher gradient ratio based on all test results
-            gradient_score = (gradient_ratio > 1.18)
+            gradient_score = (gradient_ratio > 1.25)
             
-            # 3. Uniformity ratio shows clear separation - real faces above 1.75
-            uniformity_score = (uniformity_ratio > 1.75)
+            # 3. Real faces show higher uniformity ratio consistently
+            uniformity_score = (uniformity_ratio > 1.85)
             
-            # 4. Frequency ratio also shows distinction
-            frequency_score = (freq_energy_ratio < 0.955)
+            # 4. Real faces show lower frequency energy ratio
+            frequency_score = (freq_energy_ratio < 0.952)
             
             # Compute scores and final decision
+            # Need at least 2 of 4 texture metrics to pass, with entropy being critical
             passing_scores = sum([entropy_score, gradient_score, uniformity_score, frequency_score])
             print(f"Texture scores: Entropy={entropy_score}, Gradient={gradient_score}, "
                   f"Uniformity={uniformity_score}, Frequency={frequency_score}")
             print(f"Passing texture scores: {passing_scores}/4")
             
-            # Need at least 2 metrics to pass, with either entropy or uniformity being required
-            # (these showed the clearest distinction between real faces and photos)
-            is_real_texture = (passing_scores >= 2 and (entropy_score or uniformity_score))
-            
-            # Add metrics and results to display
-            y_offset = y_offset + h_res + 50
-            metrics_color = (200, 200, 200)
-            cv2.putText(texture_display, f"Entropy (r1/r2/r3): {entropy1:.2f}/{entropy2:.2f}/{entropy3:.2f}", (50, y_offset), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, metrics_color, 1)
-            cv2.putText(texture_display, f"Uniformity ratio: {uniformity_ratio:.4f}", (50, y_offset+30), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, metrics_color, 1)
-            cv2.putText(texture_display, f"Gradient ratio: {gradient_ratio:.4f}", (50, y_offset+60), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, metrics_color, 1)
-            cv2.putText(texture_display, f"Frequency ratio: {freq_energy_ratio:.4f}", (50, y_offset+90), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, metrics_color, 1)
-            
-            # Add test scores
-            score_x = 500
-            cv2.putText(texture_display, f"Entropy test: {'PASS' if entropy_score else 'FAIL'}", (score_x, y_offset), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0) if entropy_score else (0, 0, 255), 1)
-            cv2.putText(texture_display, f"Gradient test: {'PASS' if gradient_score else 'FAIL'}", (score_x, y_offset+30), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0) if gradient_score else (0, 0, 255), 1)
-            cv2.putText(texture_display, f"Uniformity test: {'PASS' if uniformity_score else 'FAIL'}", (score_x, y_offset+60), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0) if uniformity_score else (0, 0, 255), 1)
-            cv2.putText(texture_display, f"Frequency test: {'PASS' if frequency_score else 'FAIL'}", (score_x, y_offset+90), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0) if frequency_score else (0, 0, 255), 1)
-            
-            # Add final result
-            result_text = "TEXTURE TEST RESULT: " + ("PASS - REAL FACE" if is_real_texture else "FAIL - POSSIBLE SPOOF")
-            result_color = (0, 255, 0) if is_real_texture else (0, 0, 255)
-            cv2.putText(texture_display, result_text, (300, y_offset+140), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.8, result_color, 2)
-            
-            # Show final display
-            cv2.imshow("Texture Analysis", texture_display)
-            cv2.waitKey(1)
+            # Require at least 2 metrics and EITHER entropy OR gradient score (the most reliable indicators)
+            is_real_texture = passing_scores >= 2 and (entropy_score or gradient_score)
             
             print(f"Texture test result: {is_real_texture}")
             
@@ -935,15 +779,75 @@ class CameraSystem:
             macro_texture = cv2.normalize(lbp3.astype(np.uint8), None, 0, 255, cv2.NORM_MINMAX)
             gradient_viz = cv2.normalize(magnitude.astype(np.uint8), None, 0, 255, cv2.NORM_MINMAX)
             
-            debug_row1 = np.hstack([gray, equalized])
-            debug_row2 = np.hstack([micro_texture, macro_texture])
+            # Create visualization for FFT
+            freq_viz = np.log(np.abs(f_shift) + 1)
+            freq_viz = cv2.normalize(freq_viz, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
             
-            # Ensure all are 3-channel for display
-            debug_row1 = cv2.cvtColor(debug_row1, cv2.COLOR_GRAY2BGR)
-            debug_row2 = cv2.cvtColor(debug_row2, cv2.COLOR_GRAY2BGR)
+            # Create a nicer visualization with title and organized layout
+            h, w = face_image.shape[:2]
+            viz_size = (w, h)
             
-            debug_img = np.vstack([debug_row1, debug_row2])
-            cv2.imwrite("texture_analysis_debug.jpg", debug_img)
+            # Create labels for each image
+            labels = [
+                "Original Image", "Grayscale", "Histogram Equalized",
+                "LBP (r=1)", "LBP (r=2)", "LBP (r=3)",
+                "Gradient Magnitude", "Frequency Spectrum"
+            ]
+            
+            # Resize each image to the same size
+            face_resized = cv2.resize(face_image, viz_size)
+            gray_resized = cv2.resize(gray, viz_size)
+            equalized_resized = cv2.resize(equalized, viz_size)
+            
+            # Make sure LBP visualizations are 3-channel
+            lbp1_viz = cv2.resize(cv2.cvtColor(micro_texture, cv2.COLOR_GRAY2BGR), viz_size)
+            lbp2_viz = cv2.resize(cv2.cvtColor(cv2.normalize(lbp2.astype(np.uint8), None, 0, 255, cv2.NORM_MINMAX), cv2.COLOR_GRAY2BGR), viz_size)
+            lbp3_viz = cv2.resize(cv2.cvtColor(macro_texture, cv2.COLOR_GRAY2BGR), viz_size)
+            
+            gradient_viz = cv2.resize(cv2.cvtColor(gradient_viz, cv2.COLOR_GRAY2BGR), viz_size)
+            freq_viz = cv2.resize(cv2.cvtColor(freq_viz, cv2.COLOR_GRAY2BGR), viz_size)
+            
+            # Make sure gray images are 3-channel for display
+            gray_resized = cv2.cvtColor(gray_resized, cv2.COLOR_GRAY2BGR)
+            equalized_resized = cv2.cvtColor(equalized_resized, cv2.COLOR_GRAY2BGR)
+            
+            # Create the visualization layout
+            row1 = np.hstack([face_resized, gray_resized, equalized_resized])
+            row2 = np.hstack([lbp1_viz, lbp2_viz, lbp3_viz])
+            row3 = np.hstack([gradient_viz, freq_viz, np.zeros_like(freq_viz)])
+            
+            # Create header with title
+            header = np.zeros((60, row1.shape[1], 3), dtype=np.uint8)
+            cv2.putText(header, "TEXTURE ANALYSIS VISUALIZATION", (row1.shape[1]//2 - 200, 40), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2)
+            
+            # Add labels to each image
+            for i, img in enumerate([row1, row2, row3]):
+                for j in range(3):
+                    if i * 3 + j < len(labels):
+                        label = labels[i * 3 + j]
+                        x = j * viz_size[0] + 10
+                        y = 30
+                        cv2.putText(img, label, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+            
+            # Add test results at the bottom of the image
+            footer = np.zeros((60, row1.shape[1], 3), dtype=np.uint8)
+            entropy_text = f"Entropy (r1/r2/r3): {entropy1:.2f}/{entropy2:.2f}/{entropy3:.2f}"
+            cv2.putText(footer, entropy_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 1)
+            
+            # Add pass/fail indicator
+            entropy_result = "PASS" if entropy_score else "FAIL"
+            entropy_color = (0, 255, 0) if entropy_score else (0, 0, 255)
+            cv2.putText(footer, f"Entropy test: {entropy_result}", (row1.shape[1] - 250, 30), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, entropy_color, 2)
+            
+            # Combine everything
+            texture_visualization = np.vstack([header, row1, row2, row3, footer])
+            
+            # Save and display
+            cv2.imwrite("texture_analysis_debug.jpg", texture_visualization)
+            cv2.imshow("Texture Analysis", texture_visualization)
+            cv2.waitKey(1)  # Show image but don't block
             
             return is_real_texture
             
@@ -1451,46 +1355,17 @@ class CameraSystem:
                     texture_color = (0, 255, 0) if texture_result else (0, 0, 255)
                     cv2.putText(result_frame, f"Texture Check: {texture_result_text}", 
                                 (20, 160), cv2.FONT_HERSHEY_SIMPLEX, 0.7, texture_color, 2)
-                    
-                    # Create a composite display with the debug images
-                    debug_display = np.zeros((720, 1280, 3), dtype=np.uint8)
-                    
-                    # Place the result frame in the top-left corner
-                    result_h, result_w = result_frame.shape[:2]
-                    debug_display[0:result_h, 0:result_w] = result_frame
-                    
-                    # Load and display the focus test debug image if it exists
-                    if os.path.exists("focus_test_debug.jpg"):
-                        focus_debug = cv2.imread("focus_test_debug.jpg")
-                        if focus_debug is not None:
-                            debug_h, debug_w = 240, 640  # Desired size
-                            focus_debug_resized = cv2.resize(focus_debug, (debug_w, debug_h))
-                            debug_display[result_h:result_h+debug_h, 0:debug_w] = focus_debug_resized
-                            cv2.putText(debug_display, "Focus Test Debug Images", 
-                                       (10, result_h+20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
-                    
-                    # Load and display the texture analysis debug image if it exists
-                    if os.path.exists("texture_analysis_debug.jpg"):
-                        texture_debug = cv2.imread("texture_analysis_debug.jpg")
-                        if texture_debug is not None:
-                            debug_h, debug_w = 480, 640  # Desired size
-                            texture_debug_resized = cv2.resize(texture_debug, (debug_w, debug_h))
-                            debug_display[0:debug_h, result_w:result_w+debug_w] = texture_debug_resized
-                            cv2.putText(debug_display, "Texture Analysis Debug Images", 
-                                       (result_w+10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
-                    
-                    cv2.putText(debug_display, "Press any key to continue...", 
-                                (20, debug_display.shape[0] - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
-                    
-                    # Show the composite display instead of just the result frame
-                    cv2.imshow("Liveness Detection Results", debug_display)
-                    cv2.waitKey(0)
-                    cv2.destroyAllWindows()
                 
                 # Clean up focus camera
                 focus_cap.release()
             
-            # Final step: Show results and wait for user acknowledgment is now handled above
+            # Final step: Show results and wait for user acknowledgment
+            cv2.putText(result_frame, "Press any key to continue...", 
+                        (20, result_frame.shape[0] - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
+            cv2.imshow("Liveness Result", result_frame)
+            cv2.waitKey(0)
+            cv2.destroyAllWindows()
+            
             # Return the image only if liveness is confirmed
             return liveness_confirmed, best_face_image
         else:
@@ -1604,187 +1479,6 @@ class CameraSystem:
             print(f"Error in liveness check: {e}")
             print(traceback.format_exc())
             return False  # Default to rejecting on error
-
-    def focus_test(self, face_image):
-        """
-        Enhanced focus test that more reliably distinguishes between real faces and photos.
-        Tests multiple focus points and analyzes focus variance.
-        """
-        try:
-            # Create visualization window for focus test
-            focus_display = np.zeros((700, 1000, 3), dtype=np.uint8)
-            cv2.putText(focus_display, "FOCUS TEST VISUALIZATION", (350, 30), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
-            
-            # Show original image
-            orig_h, orig_w = face_image.shape[:2]
-            max_size = 250
-            scale = min(max_size / orig_h, max_size / orig_w)
-            resized_orig = cv2.resize(face_image, (int(orig_w * scale), int(orig_h * scale)))
-            h_res, w_res = resized_orig.shape[:2]
-            
-            # Add original image
-            x_offset, y_offset = 50, 80
-            focus_display[y_offset:y_offset+h_res, x_offset:x_offset+w_res] = resized_orig
-            cv2.putText(focus_display, "Original Image", (x_offset, y_offset-10), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
-            
-            # Convert to grayscale
-            gray = cv2.cvtColor(face_image, cv2.COLOR_BGR2GRAY)
-            gray_3ch = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
-            resized_gray = cv2.resize(gray_3ch, (int(orig_w * scale), int(orig_h * scale)))
-            x_offset += w_res + 50
-            focus_display[y_offset:y_offset+h_res, x_offset:x_offset+w_res] = resized_gray
-            cv2.putText(focus_display, "Grayscale", (x_offset, y_offset-10), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
-            
-            # Display the visualization window
-            cv2.imshow("Focus Test", focus_display)
-            cv2.waitKey(1)
-            
-            # Define multiple regions of interest for focus testing
-            # Test focus at multiple points to detect consistency differences
-            h, w = gray.shape
-            
-            # Calculate ROIs - center and 4 additional points
-            rois = []
-            rois.append(gray[h//3:2*h//3, w//3:2*w//3])  # center
-            rois.append(gray[h//4:h//2, w//4:w//2])      # top-left
-            rois.append(gray[h//4:h//2, w//2:3*w//4])    # top-right
-            rois.append(gray[h//2:3*h//4, w//4:w//2])    # bottom-left
-            rois.append(gray[h//2:3*h//4, w//2:3*w//4])  # bottom-right
-            
-            # Collect focus measures
-            focus_measures = []
-            
-            # Prepare visualization of ROIs
-            y_offset = y_offset + h_res + 50
-            x_offset = 50
-            roi_names = ["Center", "Top-Left", "Top-Right", "Bottom-Left", "Bottom-Right"]
-            
-            for i, roi in enumerate(rois):
-                # Apply Laplacian for focus measurement
-                lap = cv2.Laplacian(roi, cv2.CV_64F)
-                
-                # Apply Sobel for additional gradient information
-                sobelx = cv2.Sobel(roi, cv2.CV_64F, 1, 0, ksize=3)
-                sobely = cv2.Sobel(roi, cv2.CV_64F, 0, 1, ksize=3)
-                
-                # Calculate focus measures
-                lap_var = np.var(lap)
-                focus_measures.append(lap_var)
-                
-                # Calculate gradient magnitude and its statistics
-                magnitude = cv2.magnitude(sobelx, sobely)
-                gradient_mean = np.mean(magnitude)
-                gradient_std = np.std(magnitude)
-                gradient_range = (np.max(magnitude) - np.min(magnitude)) / (np.mean(magnitude) + 1e-7)
-                
-                # Add to display if this is one of the first 5 ROIs
-                if i < 5:
-                    # Convert ROI for display
-                    roi_h, roi_w = roi.shape
-                    roi_scale = min(120 / roi_h, 120 / roi_w)
-                    resized_roi = cv2.resize(roi, (int(roi_w * roi_scale), int(roi_h * roi_scale)))
-                    resized_roi_3ch = cv2.cvtColor(resized_roi, cv2.COLOR_GRAY2BGR)
-                    
-                    # Normalize Laplacian for display
-                    lap_norm = cv2.normalize(lap, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
-                    lap_3ch = cv2.cvtColor(lap_norm, cv2.COLOR_GRAY2BGR)
-                    resized_lap = cv2.resize(lap_3ch, (int(roi_w * roi_scale), int(roi_h * roi_scale)))
-                    
-                    # Normalize gradient magnitude for display
-                    mag_norm = cv2.normalize(magnitude, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
-                    mag_3ch = cv2.cvtColor(mag_norm, cv2.COLOR_GRAY2BGR)
-                    resized_mag = cv2.resize(mag_3ch, (int(roi_w * roi_scale), int(roi_h * roi_scale)))
-                    
-                    # Stack ROI, Laplacian and Magnitude horizontally
-                    roi_display = np.hstack([resized_roi_3ch, resized_lap, resized_mag])
-                    roi_h, roi_w = roi_display.shape[:2]
-                    
-                    # Add to main display
-                    focus_display[y_offset:y_offset+roi_h, x_offset:x_offset+roi_w] = roi_display
-                    
-                    # Add labels
-                    cv2.putText(focus_display, roi_names[i], (x_offset, y_offset-10), 
-                              cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-                    cv2.putText(focus_display, f"VAR: {lap_var:.2f}", (x_offset, y_offset+roi_h+15), 
-                              cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
-                    cv2.putText(focus_display, f"Range: {gradient_range:.4f}", (x_offset, y_offset+roi_h+35), 
-                              cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
-                    
-                    # Move to next position
-                    x_offset += roi_w + 30
-                    
-                    # Update display
-                    cv2.imshow("Focus Test", focus_display)
-                    cv2.waitKey(1)
-            
-            # Calculate statistics on focus measures
-            focus_mean = np.mean(focus_measures)
-            focus_std = np.std(focus_measures)
-            focus_min = np.min(focus_measures)
-            focus_max = np.max(focus_measures)
-            
-            # Calculate variance ratio - key metric for detecting printed photos
-            focus_variance_ratio = focus_std / (focus_mean + 1e-7)
-            
-            # Calculate additional gradient metrics for all regions combined
-            sobelx_full = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=3)
-            sobely_full = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=3)
-            magnitude_full = cv2.magnitude(sobelx_full, sobely_full)
-            
-            gradient_mean = np.mean(magnitude_full)
-            gradient_std = np.std(magnitude_full)
-            gradient_range = (np.max(magnitude_full) - np.min(magnitude_full)) / (np.mean(magnitude_full) + 1e-7)
-            
-            # Check if focus is reasonably high and consistent
-            # From test data: Real faces consistently show gradient_range < 0.035
-            # Photos show gradient_range > 0.08 or very high focus_variance_ratio
-            print(f"Focus metrics: mean={focus_mean:.2f}, std={focus_std:.2f}, variance ratio={focus_variance_ratio:.4f}")
-            print(f"Gradient metrics: mean={gradient_mean:.2f}, std={gradient_std:.2f}, range={gradient_range:.4f}")
-            
-            # Add metrics at the bottom
-            y_offset = y_offset + 150  # Move down past the ROIs
-            metrics_color = (200, 200, 200)
-            cv2.putText(focus_display, f"Focus mean: {focus_mean:.2f}", (50, y_offset), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, metrics_color, 1)
-            cv2.putText(focus_display, f"Focus std: {focus_std:.2f}", (300, y_offset), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, metrics_color, 1)
-            cv2.putText(focus_display, f"Focus variance ratio: {focus_variance_ratio:.4f}", (550, y_offset), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, metrics_color, 1)
-            
-            y_offset += 30
-            cv2.putText(focus_display, f"Gradient mean: {gradient_mean:.2f}", (50, y_offset), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, metrics_color, 1)
-            cv2.putText(focus_display, f"Gradient std: {gradient_std:.2f}", (300, y_offset), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, metrics_color, 1)
-            cv2.putText(focus_display, f"Gradient range: {gradient_range:.4f}", (550, y_offset), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, metrics_color, 1)
-            
-            # Combined decision metrics using multiple focus properties
-            # Thresholds based on extensive real test data
-            is_real_focus = (gradient_range < 0.035 and focus_variance_ratio < 0.05)
-            
-            # Add test result
-            y_offset += 50
-            result_text = "FOCUS TEST RESULT: " + ("PASS - REAL FACE" if is_real_focus else "FAIL - POSSIBLE SPOOF")
-            result_color = (0, 255, 0) if is_real_focus else (0, 0, 255)
-            cv2.putText(focus_display, result_text, (350, y_offset), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.8, result_color, 2)
-            
-            # Update final display
-            cv2.imshow("Focus Test", focus_display)
-            cv2.waitKey(1)
-            
-            print(f"Focus test result: {is_real_focus}")
-            
-            return is_real_focus
-            
-        except Exception as e:
-            print(f"Error in focus test: {e}")
-            print(traceback.format_exc())
-            return False  # Default to fail on error
 
 # For demonstration
 if __name__ == "__main__":
