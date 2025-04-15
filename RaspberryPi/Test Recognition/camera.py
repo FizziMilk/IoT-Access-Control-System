@@ -162,9 +162,11 @@ class CameraSystem:
                 debug_img[0:new_height, new_width:new_width*2] = laplacian_color
                 cv2.putText(debug_img, "Laplacian (Edge Detail)", (new_width + 10, new_height + 20), 
                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+                # Attach value to debug image for parent function to access
+                debug_img.__laplacian_variance = laplacian_variance
             
             # Real faces typically have higher Laplacian variance (more texture detail)
-            texture_threshold = 150.0
+            texture_threshold = 100.0  # Reduced from 150.0 - more lenient for Raspberry Pi camera
             test_results["laplacian"] = laplacian_variance > texture_threshold
             
             if test_type != "all":
@@ -203,6 +205,9 @@ class CameraSystem:
                 # Place in debug image
                 fft_display = cv2.resize(magnitude_color, (new_width, new_height))
                 
+                # Attach value to debug image for parent function to access
+                debug_img.__high_freq_energy = high_freq_energy
+                
                 if test_type == "all":
                     debug_img[new_height+50:new_height*2+50, 0:new_width] = fft_display
                     cv2.putText(debug_img, "FFT (High Freq in Green)", (10, new_height*2 + 70), 
@@ -213,7 +218,7 @@ class CameraSystem:
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
             
             # Real faces have significant high-frequency components
-            high_freq_threshold = 18.0
+            high_freq_threshold = 15.0  # Reduced from 18.0 - more lenient for Raspberry Pi camera
             test_results["fft"] = high_freq_energy > high_freq_threshold
             
             if test_type != "all":
@@ -235,9 +240,14 @@ class CameraSystem:
             avg_color_corr = (abs(b_g_corr) + abs(b_r_corr) + abs(g_r_corr)) / 3
             
             # Printed/digital images often have less color variance within skin tones
-            color_threshold = 45.0
-            corr_penalty = 10.0 * avg_color_corr  # Reduce score for high correlation
+            color_threshold = 35.0  # Reduced from 45.0 - more lenient for Raspberry Pi camera
+            corr_penalty = 8.0 * avg_color_corr  # Reduced from 10.0 - less penalty
             adjusted_color_std = color_std_avg - corr_penalty
+            
+            # Attach values to debug image
+            if debug:
+                debug_img.__adjusted_color_std = adjusted_color_std
+                
             test_results["color"] = adjusted_color_std > color_threshold
             
             # Visualize color channels for debugging
@@ -276,8 +286,12 @@ class CameraSystem:
             gradient_direction = np.arctan2(sobely, sobelx) * 180 / np.pi
             direction_variance = np.var(gradient_direction)
             
+            # Attach value to debug image
+            if debug:
+                debug_img.__direction_variance = direction_variance
+                
             # Digital displays often show more uniform gradient patterns
-            gradient_threshold = 1200.0
+            gradient_threshold = 900.0  # Reduced from 1200.0 - more lenient for Raspberry Pi camera
             test_results["gradient"] = direction_variance > gradient_threshold
             
             # Visualize gradient for debugging
@@ -320,8 +334,12 @@ class CameraSystem:
             # Calculate LBP uniformity (real faces have more uniform LBP distribution)
             lbp_uniformity = 1.0 - np.std(hist)
             
+            # Attach value to debug image
+            if debug:
+                debug_img.__lbp_uniformity = lbp_uniformity
+                
             # Digital displays often show less uniform LBP patterns
-            lbp_threshold = 0.93
+            lbp_threshold = 0.94  # Increased from 0.93 - more lenient for Raspberry Pi camera
             test_results["lbp"] = lbp_uniformity < lbp_threshold
             
             # Visualize LBP for debugging
@@ -379,8 +397,12 @@ class CameraSystem:
             # Calculate energy in the filtered image (high energy indicates moiré patterns)
             moire_energy = np.mean(filtered)
             
+            # Attach value to debug image
+            if debug:
+                debug_img.__moire_energy = moire_energy
+                
             # Digital displays often show moiré patterns in this frequency band
-            moire_threshold = 15.0
+            moire_threshold = 20.0  # Increased from 15.0 - more lenient for Raspberry Pi camera
             test_results["moire"] = moire_energy < moire_threshold
             
             # Add filtered images for moiré pattern visualization
@@ -419,8 +441,12 @@ class CameraSystem:
             brightness_hist = brightness_hist / np.sum(brightness_hist)
             brightness_entropy = -np.sum(brightness_hist * np.log2(brightness_hist + 1e-10))
             
+            # Attach value to debug image
+            if debug:
+                debug_img.__bright_pixels = bright_pixels
+                
             # Phone screens often have unnaturally bright regions or reflections
-            reflection_threshold = 0.02
+            reflection_threshold = 0.025  # Increased from 0.02 - more lenient for Raspberry Pi camera
             # Reduce the threshold if entropy is low (uniform brightness, typical of screens)
             if brightness_entropy < 3.0:
                 reflection_threshold *= 0.8
@@ -970,6 +996,8 @@ class CameraSystem:
         texture_tests = ["laplacian", "fft", "color", "gradient", "lbp", "moire", "reflection"]
         current_texture_test_idx = 0
         texture_test_results = {test: 0 for test in texture_tests}  # Track passes for each test (0 = not tested yet)
+        test_duration_frames = 30  # Increased from 15 - spend more time on each test
+        current_test_frames = 0  # Track how many frames we've spent on current test
         
         # Create a texture tests results window
         texture_window_width = 400
@@ -999,6 +1027,17 @@ class CameraSystem:
                 print(f"Stage 3: Please move your head {movement_type.upper()}")
                 movement_start_time = time.time()
                 
+        # Store test values for display
+        test_values = {
+            'laplacian': None,  # laplacian_variance
+            'fft': None,        # high_freq_energy
+            'color': None,      # adjusted_color_std
+            'gradient': None,   # direction_variance
+            'lbp': None,        # lbp_uniformity
+            'moire': None,      # moire_energy
+            'reflection': None  # bright_pixels
+        }
+        
         # Function to update texture results display
         def update_texture_results_window():
             # Create a fresh canvas
@@ -1007,6 +1046,28 @@ class CameraSystem:
             # Add title
             cv2.putText(texture_results_window, "TEXTURE TESTS RESULTS", 
                        (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+            
+            # Get current test data - this will help us display current values
+            current_test = texture_tests[current_texture_test_idx]
+            current_test_value = test_values[current_test]
+            
+            # Get the thresholds for the active test
+            if current_test == "laplacian":
+                current_test_threshold = 100.0  # Texture threshold
+            elif current_test == "fft":
+                current_test_threshold = 15.0  # High frequency threshold
+            elif current_test == "color":
+                current_test_threshold = 35.0  # Color threshold
+            elif current_test == "gradient":
+                current_test_threshold = 900.0  # Gradient threshold
+            elif current_test == "lbp":
+                current_test_threshold = 0.94  # LBP threshold
+            elif current_test == "moire":
+                current_test_threshold = 20.0  # Moire threshold
+            elif current_test == "reflection":
+                current_test_threshold = 0.025  # Reflection threshold
+            else:
+                current_test_threshold = None
             
             # Display results for each test
             y_offset = 70
@@ -1048,12 +1109,47 @@ class CameraSystem:
             
             # Draw summary
             passed_tests = sum(1 for passes in texture_test_results.values() if passes >= 2)
-            total_needed = 4  # Need 4 out of 7 tests to pass
+            total_needed = 3  # Need 3 out of 7 tests to pass (reduced from 4)
             summary_text = f"PASSED: {passed_tests}/{total_needed} tests"
             summary_color = (0, 255, 0) if passed_tests >= total_needed else (0, 0, 255)
             
             cv2.putText(texture_results_window, summary_text, 
-                       (10, texture_window_height - 50), cv2.FONT_HERSHEY_SIMPLEX, 0.8, summary_color, 2)
+                       (10, texture_window_height - 80), cv2.FONT_HERSHEY_SIMPLEX, 0.8, summary_color, 2)
+            
+            # Display active test info with current value and threshold
+            if current_test_value is not None and current_test_threshold is not None:
+                # Formatter for different test types - some are greater than threshold, some are less than
+                if current_test in ["lbp", "moire", "reflection"]:
+                    # For these tests, lower values are better (below threshold = pass)
+                    comparison_symbol = "<"
+                    is_pass = current_test_value < current_test_threshold
+                else:
+                    # For these tests, higher values are better (above threshold = pass)
+                    comparison_symbol = ">"
+                    is_pass = current_test_value > current_test_threshold
+                
+                # Format the value appropriately based on its magnitude
+                if abs(current_test_value) < 0.1:
+                    value_str = f"{current_test_value:.4f}"
+                elif abs(current_test_value) < 10:
+                    value_str = f"{current_test_value:.2f}"
+                else:
+                    value_str = f"{current_test_value:.1f}"
+                
+                # Same formatting for threshold
+                if abs(current_test_threshold) < 0.1:
+                    threshold_str = f"{current_test_threshold:.4f}"
+                elif abs(current_test_threshold) < 10:
+                    threshold_str = f"{current_test_threshold:.2f}"
+                else:
+                    threshold_str = f"{current_test_threshold:.1f}"
+                
+                # Display current test value info
+                status_color = (0, 255, 0) if is_pass else (0, 0, 255)
+                cv2.putText(texture_results_window, f"Current test: {current_test}", 
+                           (10, texture_window_height - 50), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
+                cv2.putText(texture_results_window, f"Value: {value_str} {comparison_symbol} {threshold_str}", 
+                           (10, texture_window_height - 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, status_color, 1)
             
             # Draw current test debug image if available
             current_test = texture_tests[current_texture_test_idx]
@@ -1166,16 +1262,39 @@ class CameraSystem:
                                     cv2.putText(display_frame, f"{current_test.upper()} TEST FAILED", (left, top-10), 
                                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
                                 
+                                # Store the test values from the results
+                                try:
+                                    if current_test == "laplacian":
+                                        test_values["laplacian"] = debug_img.__laplacian_variance
+                                    elif current_test == "fft":
+                                        test_values["fft"] = debug_img.__high_freq_energy
+                                    elif current_test == "color":
+                                        test_values["color"] = debug_img.__adjusted_color_std
+                                    elif current_test == "gradient":
+                                        test_values["gradient"] = debug_img.__direction_variance
+                                    elif current_test == "lbp":
+                                        test_values["lbp"] = debug_img.__lbp_uniformity
+                                    elif current_test == "moire":
+                                        test_values["moire"] = debug_img.__moire_energy
+                                    elif current_test == "reflection":
+                                        test_values["reflection"] = debug_img.__bright_pixels
+                                except AttributeError:
+                                    # If the attributes aren't available, we'll continue without showing values
+                                    pass
+                                
                                 # Update texture results window
                                 update_texture_results_window()
                                 
-                                # Rotate to next test after a few frames with the same test
-                                if texture_frames % 15 == 0:
+                                # Rotate to next test after enough frames with the same test
+                                current_test_frames += 1
+                                if current_test_frames >= test_duration_frames:
                                     current_texture_test_idx = (current_texture_test_idx + 1) % len(texture_tests)
+                                    current_test_frames = 0
+                                    print(f"Switching to test: {texture_tests[current_texture_test_idx]}")
                                 
                                 # Check if we've collected enough passes across tests
                                 passing_tests = sum(1 for passes in texture_test_results.values() if passes >= 2)
-                                if passing_tests >= 4:  # Need 4 out of 7 tests to pass
+                                if passing_tests >= 3:  # Reduced from 4 to 3 - easier to pass on Raspberry Pi
                                     stage_passed["texture"] = True
                                     print("✓ Texture check passed! It appears to be a real face.")
                                     print(f"Test results: {texture_test_results}")
