@@ -1018,22 +1018,8 @@ class CameraSystem:
                         max_face_size = face_size
                         best_face_image = frame.copy()
                         
-                        # Only perform focus liveness check if it wasn't already done in the initialization phase
-                        # and we don't yet have a result
-                        if not self.focus_check_passed and face_size > 10000 and last_face_location is None:
-                            print("Running focus check during blink detection (only if not done earlier)...")
-                            self.focus_check_passed = self.perform_focus_liveness_check(cap, current_face_box)
-                            
-                            # Reset camera settings after focus check
-                            cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.liveness_resolution[0])
-                            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.liveness_resolution[1])
-                            cap.set(cv2.CAP_PROP_AUTOFOCUS, 0)
-                            time.sleep(0.5)  # Give camera time to adjust
-                            
-                            # If focus check failed, reset blink counter as additional security
-                            if not self.focus_check_passed:
-                                blink_counter = 0
-                                print("Focus check failed, resetting blink counter")
+                        # We no longer run focus checks during blink detection for better performance
+                        # Focus check is done only in the initialization phase
                 
                 # Process landmarks if available
                 if last_landmarks is not None and process_blink_this_frame:
