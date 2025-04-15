@@ -11,6 +11,9 @@ class CameraSystem:
     def __init__(self, camera_id=0, resolution=(640, 480)):
         self.camera_id = camera_id
         self.resolution = resolution
+        
+        # Initialize eye tracking variables for blink detection
+        self.eye_history = []  # For tracking eye aspect ratio over time
     
     def capture_face(self):
         """Capture an image from the camera with face detection"""
@@ -90,13 +93,14 @@ class CameraSystem:
             
         return frame
     
-    def detect_texture(self, face_image, debug=True):
+    def detect_texture(self, face_image, test_type="all", debug=True):
         """
         Advanced texture analysis to detect printed/digital photos vs real faces.
         This function implements multiple texture detection methods to identify spoofing attacks.
         
         Args:
             face_image: Image containing only the face region
+            test_type: Which test to run ("laplacian", "fft", "color", "gradient", "lbp", "moire", "reflection", or "all")
             debug: Whether to print debug information and return visualizations
             
         Returns:
@@ -116,277 +120,390 @@ class CameraSystem:
         # Convert to grayscale for texture analysis
         gray = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY)
         
-        # Create debug visualization
+        # Keep track of test results
+        test_results = {}
+        
+        # Create debug visualization if running all tests or debugging specific test
         if debug:
-            # Create a larger canvas with space for visualization
-            # Make sure the debug image is tall enough for all visualizations
-            debug_img_height = new_height * 2 + 250  # Increased height to accommodate all visualizations
+            if test_type == "all":
+                # Make sure the debug image is tall enough for all visualizations
+                debug_img_height = new_height * 2 + 250
+            else:
+                # Smaller debug image for single test
+                debug_img_height = new_height + 100
+                
             debug_img = np.zeros((debug_img_height, new_width * 2, 3), dtype=np.uint8)
             
             # Place the original image - ensure dimensions match
-            # Check if resized dimensions match the allocated space
             if resized.shape[0] != new_height or resized.shape[1] != new_width:
-                # If there's a mismatch, resize again to match the allocated dimensions
                 resized_for_debug = cv2.resize(resized, (new_width, new_height))
                 debug_img[0:new_height, 0:new_width] = resized_for_debug
             else:
                 debug_img[0:new_height, 0:new_width] = resized
+                
             # Add title
             cv2.putText(debug_img, "Original", (10, new_height + 20), 
                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
         
-        # ===================== TEST 1: TEXTURE DETAIL ANALYSIS =====================
-        # Apply Laplacian filter to detect edges/details (2nd order derivative)
-        laplacian = cv2.Laplacian(gray, cv2.CV_64F)
-        laplacian_variance = np.var(laplacian)
-        
-        # Normalize for visualization
-        if debug:
-            laplacian_norm = cv2.normalize(laplacian, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
-            laplacian_color = cv2.applyColorMap(laplacian_norm, cv2.COLORMAP_JET)
-            # Ensure dimensions match
-            if laplacian_color.shape[:2] != (new_height, new_width):
-                laplacian_color = cv2.resize(laplacian_color, (new_width, new_height))
-            debug_img[0:new_height, new_width:new_width*2] = laplacian_color
-            cv2.putText(debug_img, "Laplacian (Edge Detail)", (new_width + 10, new_height + 20), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-        
-        # Real faces typically have higher Laplacian variance (more texture detail)
-        # Printed/digital images lose fine details 
-        texture_threshold = 150.0  # Increased from 100.0 - more sensitive to lack of texture
-        texture_test_pass = laplacian_variance > texture_threshold
-        
-        # ===================== TEST 2: HIGH FREQUENCY ANALYSIS =====================
-        # Apply FFT to analyze frequency content
-        f_transform = np.fft.fft2(gray)
-        f_shift = np.fft.fftshift(f_transform)
-        magnitude_spectrum = 20 * np.log(np.abs(f_shift) + 1)
-        
-        # Calculate high-frequency energy (outer portions of FFT)
-        h, w = magnitude_spectrum.shape
-        center_y, center_x = h // 2, w // 2
-        radius = min(h, w) // 4  # Inner circle radius (low frequencies)
-        
-        # Create a mask for high-frequency regions
-        y, x = np.ogrid[:h, :w]
-        mask = ((x - center_x)**2 + (y - center_y)**2) > radius**2
-        
-        # Calculate energy in high-frequency regions
-        high_freq_energy = np.mean(magnitude_spectrum[mask])
-        
-        # Visualize FFT with high-frequency regions highlighted
-        if debug:
-            # Normalize spectrum for visualization
-            magnitude_norm = cv2.normalize(magnitude_spectrum, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
-            magnitude_color = cv2.applyColorMap(magnitude_norm, cv2.COLORMAP_JET)
+        # Run tests based on test_type parameter
+        if test_type in ["laplacian", "all"]:
+            # ===================== TEST 1: TEXTURE DETAIL ANALYSIS =====================
+            # Apply Laplacian filter to detect edges/details (2nd order derivative)
+            laplacian = cv2.Laplacian(gray, cv2.CV_64F)
+            laplacian_variance = np.var(laplacian)
             
-            # Highlight high-frequency regions
-            highlight_mask = np.zeros((h, w, 3), dtype=np.uint8)
-            highlight_mask[mask] = [0, 255, 0]
-            magnitude_color = cv2.addWeighted(magnitude_color, 0.7, highlight_mask, 0.3, 0)
-            
-            # Place in debug image
-            fft_display = cv2.resize(magnitude_color, (new_width, new_height))
-            debug_img[new_height+50:new_height*2+50, 0:new_width] = fft_display
-            cv2.putText(debug_img, "FFT (High Freq in Green)", (10, new_height*2 + 70), 
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-        
-        # Real faces have significant high-frequency components
-        # Digital displays lose high frequencies or show interference patterns
-        high_freq_threshold = 18.0  # Increased from 14.0 - more sensitive to screen patterns
-        high_freq_test_pass = high_freq_energy > high_freq_threshold
-        
-        # ===================== TEST 3: COLOR VARIANCE ANALYSIS =====================
-        # Calculate color standard deviation in each channel
-        b, g, r = cv2.split(resized)
-        b_std = np.std(b)
-        g_std = np.std(g)
-        r_std = np.std(r)
-        color_std_avg = (b_std + g_std + r_std) / 3
-        
-        # Also check for unnatural channel correlation (phone screens have more correlated RGB)
-        b_g_corr = np.corrcoef(b.flatten(), g.flatten())[0,1]
-        b_r_corr = np.corrcoef(b.flatten(), r.flatten())[0,1]
-        g_r_corr = np.corrcoef(g.flatten(), r.flatten())[0,1]
-        avg_color_corr = (abs(b_g_corr) + abs(b_r_corr) + abs(g_r_corr)) / 3
-        
-        # Printed/digital images often have less color variance within skin tones
-        color_threshold = 45.0  # Increased from 40.0 - more sensitive to color uniformity
-        corr_penalty = 10.0 * avg_color_corr  # Reduce score for high correlation
-        adjusted_color_std = color_std_avg - corr_penalty
-        color_test_pass = adjusted_color_std > color_threshold
-        
-        # ===================== TEST 4: GRADIENT ANALYSIS =====================
-        # Calculate image gradients (1st order derivatives)
-        sobelx = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=3)
-        sobely = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=3)
-        gradient_magnitude = np.sqrt(sobelx**2 + sobely**2)
-        
-        # Calculate gradient complexity (variance of gradient directions)
-        gradient_direction = np.arctan2(sobely, sobelx) * 180 / np.pi
-        direction_variance = np.var(gradient_direction)
-        
-        # Digital displays often show more uniform gradient patterns
-        gradient_threshold = 1200.0  # Increased from 1000.0 - more sensitive to gradient uniformity
-        gradient_test_pass = direction_variance > gradient_threshold
-        
-        # ===================== TEST 5: LOCAL BINARY PATTERN ANALYSIS =====================
-        # Calculate simple LBP (Local Binary Pattern)
-        def local_binary_pattern(image):
-            h, w = image.shape
-            lbp = np.zeros_like(image)
-            for i in range(1, h-1):
-                for j in range(1, w-1):
-                    center = image[i, j]
-                    binary = (image[i-1:i+2, j-1:j+2] >= center).flatten()
-                    # Skip the center pixel (which is always 0)
-                    binary = np.delete(binary, 4)
-                    # Convert binary to decimal
-                    lbp_value = np.sum(binary * (2**np.arange(8)))
-                    lbp[i, j] = lbp_value
-            return lbp
-        
-        # Calculate LBP and its histogram
-        lbp = local_binary_pattern(gray)
-        hist, _ = np.histogram(lbp, bins=256, range=(0, 256))
-        hist = hist / np.sum(hist)  # Normalize
-        
-        # Calculate LBP uniformity (real faces have more uniform LBP distribution)
-        lbp_uniformity = 1.0 - np.std(hist)
-        
-        # Digital displays often show less uniform LBP patterns
-        lbp_threshold = 0.93  # Decreased from 0.95 - more sensitive to screen patterns
-        lbp_test_pass = lbp_uniformity < lbp_threshold
-        
-        # ===================== TEST 6: MOIRÉ PATTERN DETECTION =====================
-        # Digital displays often show moiré interference patterns at certain scales
-        # Apply bandpass filter to detect moiré patterns
-        
-        # Create bandpass filter (in frequency domain)
-        rows, cols = gray.shape
-        crow, ccol = rows // 2, cols // 2
-        
-        # Create a mask with a ring to isolate frequencies where moiré patterns appear
-        mask = np.ones((rows, cols), np.uint8)
-        r_outer = min(crow, ccol) // 2
-        r_inner = r_outer // 2
-        
-        center = [crow, ccol]
-        y, x = np.ogrid[:rows, :cols]
-        mask_area = ((x - center[1])**2 + (y - center[0])**2 >= r_inner**2) & \
-                    ((x - center[1])**2 + (y - center[0])**2 <= r_outer**2)
-        mask[mask_area] = 0
-        
-        # Apply FFT, mask frequencies, then IFFT
-        dft = cv2.dft(np.float32(gray), flags=cv2.DFT_COMPLEX_OUTPUT)
-        dft_shift = np.fft.fftshift(dft)
-        
-        # Apply mask to isolate frequency band
-        dft_shift[:,:,0] = dft_shift[:,:,0] * mask
-        dft_shift[:,:,1] = dft_shift[:,:,1] * mask
-        
-        # Inverse FFT to get filtered image
-        f_ishift = np.fft.ifftshift(dft_shift)
-        img_back = cv2.idft(f_ishift)
-        filtered = cv2.magnitude(img_back[:,:,0], img_back[:,:,1])
-        
-        # Normalize filtered image
-        cv2.normalize(filtered, filtered, 0, 255, cv2.NORM_MINMAX)
-        filtered = filtered.astype(np.uint8)
-        
-        # Calculate energy in the filtered image (high energy indicates moiré patterns)
-        moire_energy = np.mean(filtered)
-        
-        # Digital displays often show moiré patterns in this frequency band
-        moire_threshold = 15.0  # Decreased from 20.0 - more sensitive to subtle moiré patterns
-        moire_test_pass = moire_energy < moire_threshold
-        
-        # ===================== TEST 7: REFLECTION DETECTION =====================
-        # Digital displays often show reflections with different characteristics
-        
-        # Check for unnatural brightness patterns
-        hsv = cv2.cvtColor(resized, cv2.COLOR_BGR2HSV)
-        v_channel = hsv[:,:,2]
-        
-        # Calculate brightness standard deviation and max regions
-        brightness_std = np.std(v_channel)
-        bright_pixels = (v_channel > 240).sum() / v_channel.size
-        
-        # Also check for abnormal brightness distribution (screens are more uniform)
-        brightness_hist, _ = np.histogram(v_channel, bins=64, range=(0, 256))
-        brightness_hist = brightness_hist / np.sum(brightness_hist)
-        brightness_entropy = -np.sum(brightness_hist * np.log2(brightness_hist + 1e-10))
-        
-        # Phone screens often have unnaturally bright regions or reflections
-        reflection_threshold = 0.02  # Decreased from 0.025 - more sensitive to reflections
-        # Reduce the threshold if entropy is low (uniform brightness, typical of screens)
-        if brightness_entropy < 3.0:
-            reflection_threshold *= 0.8
-        reflection_test_pass = bright_pixels < reflection_threshold
-        
-        # ===================== COMBINE RESULTS =====================
-        # Visualize test results
-        if debug:
-            result_img = np.zeros((200, new_width * 2, 3), dtype=np.uint8)
-            texts = [
-                f"1. Texture Detail: {'PASS' if texture_test_pass else 'FAIL'} ({laplacian_variance:.1f} > {texture_threshold})",
-                f"2. High Frequency: {'PASS' if high_freq_test_pass else 'FAIL'} ({high_freq_energy:.1f} > {high_freq_threshold})",
-                f"3. Color Variance: {'PASS' if color_test_pass else 'FAIL'} ({adjusted_color_std:.1f} > {color_threshold})",
-                f"4. Gradient Complexity: {'PASS' if gradient_test_pass else 'FAIL'} ({direction_variance:.1f} > {gradient_threshold})",
-                f"5. LBP Uniformity: {'PASS' if lbp_test_pass else 'FAIL'} ({lbp_uniformity:.3f} < {lbp_threshold})",
-                f"6. Moiré Pattern: {'PASS' if moire_test_pass else 'FAIL'} ({moire_energy:.1f} < {moire_threshold})",
-                f"7. Reflection: {'PASS' if reflection_test_pass else 'FAIL'} ({bright_pixels*100:.2f}% < {reflection_threshold*100}%)"
-            ]
-            
-            for i, text in enumerate(texts):
-                color = (0, 255, 0) if "PASS" in text else (0, 0, 255)
-                cv2.putText(result_img, text, (10, 25 + i * 25), 
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
-            
-            # Place in debug image
-            debug_img[new_height*2+50:new_height*2+250, 0:new_width*2] = result_img
-            
-            # Add filtered images for moiré pattern and reflection detection
-            if new_width > 0 and new_height > 0:
-                moire_display = cv2.applyColorMap(filtered, cv2.COLORMAP_JET)
-                if moire_display.shape[:2] != (new_height, new_width):
-                    moire_display = cv2.resize(moire_display, (new_width, new_height))
-                debug_img[new_height+50:new_height*2+50, new_width:new_width*2] = moire_display
-                cv2.putText(debug_img, "Moiré Pattern Filter", (new_width + 10, new_height*2 + 70), 
+            # Normalize for visualization
+            if debug:
+                laplacian_norm = cv2.normalize(laplacian, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+                laplacian_color = cv2.applyColorMap(laplacian_norm, cv2.COLORMAP_JET)
+                # Ensure dimensions match
+                if laplacian_color.shape[:2] != (new_height, new_width):
+                    laplacian_color = cv2.resize(laplacian_color, (new_width, new_height))
+                debug_img[0:new_height, new_width:new_width*2] = laplacian_color
+                cv2.putText(debug_img, "Laplacian (Edge Detail)", (new_width + 10, new_height + 20), 
                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-        
-        # Count how many tests pass
-        passing_tests = sum([
-            texture_test_pass, 
-            high_freq_test_pass, 
-            color_test_pass, 
-            gradient_test_pass,
-            lbp_test_pass,
-            moire_test_pass,
-            reflection_test_pass
-        ])
-        
-        # Require at least 5 out of 7 tests to pass for the image to be classified as real
-        tests_required = 5
-        is_real = passing_tests >= tests_required
-        
-        # Display final result
-        if debug:
-            result_text = f"REAL FACE ({passing_tests}/{tests_required} tests passed)" if is_real else f"FAKE FACE ({passing_tests}/{tests_required} tests passed)"
-            result_color = (0, 255, 0) if is_real else (0, 0, 255)
-            cv2.putText(debug_img, result_text, (new_width - 150, new_height*2 + 240), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.8, result_color, 2)
             
-            print(f"Texture Analysis: {'REAL' if is_real else 'FAKE'} - {passing_tests}/{tests_required} tests passed")
-            print(f"  - Laplacian variance: {laplacian_variance:.1f} ({'PASS' if texture_test_pass else 'FAIL'})")
-            print(f"  - High frequency energy: {high_freq_energy:.1f} ({'PASS' if high_freq_test_pass else 'FAIL'})")
-            print(f"  - Color variance: {adjusted_color_std:.1f} ({'PASS' if color_test_pass else 'FAIL'})")
-            print(f"  - Gradient complexity: {direction_variance:.1f} ({'PASS' if gradient_test_pass else 'FAIL'})")
-            print(f"  - LBP uniformity: {lbp_uniformity:.3f} ({'PASS' if lbp_test_pass else 'FAIL'})")
-            print(f"  - Moiré pattern: {moire_energy:.1f} ({'PASS' if moire_test_pass else 'FAIL'})")
-            print(f"  - Reflection detection: {bright_pixels*100:.2f}% ({'PASS' if reflection_test_pass else 'FAIL'})")
+            # Real faces typically have higher Laplacian variance (more texture detail)
+            texture_threshold = 150.0
+            test_results["laplacian"] = laplacian_variance > texture_threshold
+            
+            if test_type != "all":
+                return test_results["laplacian"], debug_img if debug else None
         
-        return is_real, debug_img if debug else None
+        if test_type in ["fft", "all"]:
+            # ===================== TEST 2: HIGH FREQUENCY ANALYSIS =====================
+            # Apply FFT to analyze frequency content
+            f_transform = np.fft.fft2(gray)
+            f_shift = np.fft.fftshift(f_transform)
+            magnitude_spectrum = 20 * np.log(np.abs(f_shift) + 1)
+            
+            # Calculate high-frequency energy (outer portions of FFT)
+            h, w = magnitude_spectrum.shape
+            center_y, center_x = h // 2, w // 2
+            radius = min(h, w) // 4  # Inner circle radius (low frequencies)
+            
+            # Create a mask for high-frequency regions
+            y, x = np.ogrid[:h, :w]
+            mask = ((x - center_x)**2 + (y - center_y)**2) > radius**2
+            
+            # Calculate energy in high-frequency regions
+            high_freq_energy = np.mean(magnitude_spectrum[mask])
+            
+            # Visualize FFT with high-frequency regions highlighted
+            if debug:
+                # Normalize spectrum for visualization
+                magnitude_norm = cv2.normalize(magnitude_spectrum, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+                magnitude_color = cv2.applyColorMap(magnitude_norm, cv2.COLORMAP_JET)
+                
+                # Highlight high-frequency regions
+                highlight_mask = np.zeros((h, w, 3), dtype=np.uint8)
+                highlight_mask[mask] = [0, 255, 0]
+                magnitude_color = cv2.addWeighted(magnitude_color, 0.7, highlight_mask, 0.3, 0)
+                
+                # Place in debug image
+                fft_display = cv2.resize(magnitude_color, (new_width, new_height))
+                
+                if test_type == "all":
+                    debug_img[new_height+50:new_height*2+50, 0:new_width] = fft_display
+                    cv2.putText(debug_img, "FFT (High Freq in Green)", (10, new_height*2 + 70), 
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+                else:
+                    debug_img[0:new_height, new_width:new_width*2] = fft_display
+                    cv2.putText(debug_img, "FFT (High Freq in Green)", (new_width + 10, new_height + 20), 
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+            
+            # Real faces have significant high-frequency components
+            high_freq_threshold = 18.0
+            test_results["fft"] = high_freq_energy > high_freq_threshold
+            
+            if test_type != "all":
+                return test_results["fft"], debug_img if debug else None
+        
+        if test_type in ["color", "all"]:
+            # ===================== TEST 3: COLOR VARIANCE ANALYSIS =====================
+            # Calculate color standard deviation in each channel
+            b, g, r = cv2.split(resized)
+            b_std = np.std(b)
+            g_std = np.std(g)
+            r_std = np.std(r)
+            color_std_avg = (b_std + g_std + r_std) / 3
+            
+            # Also check for unnatural channel correlation (phone screens have more correlated RGB)
+            b_g_corr = np.corrcoef(b.flatten(), g.flatten())[0,1]
+            b_r_corr = np.corrcoef(b.flatten(), r.flatten())[0,1]
+            g_r_corr = np.corrcoef(g.flatten(), r.flatten())[0,1]
+            avg_color_corr = (abs(b_g_corr) + abs(b_r_corr) + abs(g_r_corr)) / 3
+            
+            # Printed/digital images often have less color variance within skin tones
+            color_threshold = 45.0
+            corr_penalty = 10.0 * avg_color_corr  # Reduce score for high correlation
+            adjusted_color_std = color_std_avg - corr_penalty
+            test_results["color"] = adjusted_color_std > color_threshold
+            
+            # Visualize color channels for debugging
+            if debug and test_type != "all":
+                # Create color channel visualization
+                color_vis = np.zeros((new_height, new_width*2, 3), dtype=np.uint8)
+                # Show each channel
+                for i, (channel, name, color) in enumerate(zip([b, g, r], ["Blue", "Green", "Red"], [(255,0,0), (0,255,0), (0,0,255)])):
+                    vis_channel = cv2.cvtColor(channel, cv2.COLOR_GRAY2BGR)
+                    # Add a color tint
+                    color_tint = np.zeros_like(vis_channel)
+                    color_tint[:] = color
+                    vis_channel = cv2.addWeighted(vis_channel, 0.7, color_tint, 0.3, 0)
+                    
+                    pos_y = i * (new_height // 3)
+                    h_segment = new_height // 3
+                    if pos_y + h_segment <= new_height:
+                        debug_img[pos_y:pos_y+h_segment, new_width:new_width*2] = vis_channel[0:h_segment, 0:new_width]
+                        cv2.putText(debug_img, f"{name}: std={eval(f'{name.lower()}_std'):.1f}", 
+                                   (new_width + 10, pos_y + 20), 
+                                   cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
+            
+            if test_type != "all":
+                return test_results["color"], debug_img if debug else None
+        
+        if test_type in ["gradient", "all"]:
+            # ===================== TEST 4: GRADIENT ANALYSIS =====================
+            # Calculate image gradients (1st order derivatives)
+            sobelx = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=3)
+            sobely = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=3)
+            gradient_magnitude = np.sqrt(sobelx**2 + sobely**2)
+            
+            # Calculate gradient complexity (variance of gradient directions)
+            gradient_direction = np.arctan2(sobely, sobelx) * 180 / np.pi
+            direction_variance = np.var(gradient_direction)
+            
+            # Digital displays often show more uniform gradient patterns
+            gradient_threshold = 1200.0
+            test_results["gradient"] = direction_variance > gradient_threshold
+            
+            # Visualize gradient for debugging
+            if debug and test_type != "all":
+                # Create gradient visualization
+                sobel_norm = cv2.normalize(gradient_magnitude, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+                sobel_color = cv2.applyColorMap(sobel_norm, cv2.COLORMAP_JET)
+                if sobel_color.shape[:2] != (new_height, new_width):
+                    sobel_color = cv2.resize(sobel_color, (new_width, new_height))
+                    
+                debug_img[0:new_height, new_width:new_width*2] = sobel_color
+                cv2.putText(debug_img, "Gradient Magnitude", (new_width + 10, new_height + 20), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+            
+            if test_type != "all":
+                return test_results["gradient"], debug_img if debug else None
+        
+        if test_type in ["lbp", "all"]:
+            # ===================== TEST 5: LOCAL BINARY PATTERN ANALYSIS =====================
+            # Calculate simple LBP (Local Binary Pattern)
+            def local_binary_pattern(image):
+                h, w = image.shape
+                lbp = np.zeros_like(image)
+                for i in range(1, h-1):
+                    for j in range(1, w-1):
+                        center = image[i, j]
+                        binary = (image[i-1:i+2, j-1:j+2] >= center).flatten()
+                        # Skip the center pixel (which is always 0)
+                        binary = np.delete(binary, 4)
+                        # Convert binary to decimal
+                        lbp_value = np.sum(binary * (2**np.arange(8)))
+                        lbp[i, j] = lbp_value
+                return lbp
+            
+            # Calculate LBP and its histogram
+            lbp = local_binary_pattern(gray)
+            hist, _ = np.histogram(lbp, bins=256, range=(0, 256))
+            hist = hist / np.sum(hist)  # Normalize
+            
+            # Calculate LBP uniformity (real faces have more uniform LBP distribution)
+            lbp_uniformity = 1.0 - np.std(hist)
+            
+            # Digital displays often show less uniform LBP patterns
+            lbp_threshold = 0.93
+            test_results["lbp"] = lbp_uniformity < lbp_threshold
+            
+            # Visualize LBP for debugging
+            if debug and test_type != "all":
+                # Normalize LBP for visualization
+                lbp_norm = cv2.normalize(lbp, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+                lbp_color = cv2.applyColorMap(lbp_norm, cv2.COLORMAP_JET)
+                if lbp_color.shape[:2] != (new_height, new_width):
+                    lbp_color = cv2.resize(lbp_color, (new_width, new_height))
+                    
+                debug_img[0:new_height, new_width:new_width*2] = lbp_color
+                cv2.putText(debug_img, "Local Binary Pattern", (new_width + 10, new_height + 20), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+            
+            if test_type != "all":
+                return test_results["lbp"], debug_img if debug else None
+        
+        if test_type in ["moire", "all"]:
+            # ===================== TEST 6: MOIRÉ PATTERN DETECTION =====================
+            # Digital displays often show moiré interference patterns at certain scales
+            # Apply bandpass filter to detect moiré patterns
+            
+            # Create bandpass filter (in frequency domain)
+            rows, cols = gray.shape
+            crow, ccol = rows // 2, cols // 2
+            
+            # Create a mask with a ring to isolate frequencies where moiré patterns appear
+            mask = np.ones((rows, cols), np.uint8)
+            r_outer = min(crow, ccol) // 2
+            r_inner = r_outer // 2
+            
+            center = [crow, ccol]
+            y, x = np.ogrid[:rows, :cols]
+            mask_area = ((x - center[1])**2 + (y - center[0])**2 >= r_inner**2) & \
+                        ((x - center[1])**2 + (y - center[0])**2 <= r_outer**2)
+            mask[mask_area] = 0
+            
+            # Apply FFT, mask frequencies, then IFFT
+            dft = cv2.dft(np.float32(gray), flags=cv2.DFT_COMPLEX_OUTPUT)
+            dft_shift = np.fft.fftshift(dft)
+            
+            # Apply mask to isolate frequency band
+            dft_shift[:,:,0] = dft_shift[:,:,0] * mask
+            dft_shift[:,:,1] = dft_shift[:,:,1] * mask
+            
+            # Inverse FFT to get filtered image
+            f_ishift = np.fft.ifftshift(dft_shift)
+            img_back = cv2.idft(f_ishift)
+            filtered = cv2.magnitude(img_back[:,:,0], img_back[:,:,1])
+            
+            # Normalize filtered image
+            cv2.normalize(filtered, filtered, 0, 255, cv2.NORM_MINMAX)
+            filtered = filtered.astype(np.uint8)
+            
+            # Calculate energy in the filtered image (high energy indicates moiré patterns)
+            moire_energy = np.mean(filtered)
+            
+            # Digital displays often show moiré patterns in this frequency band
+            moire_threshold = 15.0
+            test_results["moire"] = moire_energy < moire_threshold
+            
+            # Add filtered images for moiré pattern visualization
+            if debug:
+                if new_width > 0 and new_height > 0:
+                    moire_display = cv2.applyColorMap(filtered, cv2.COLORMAP_JET)
+                    if moire_display.shape[:2] != (new_height, new_width):
+                        moire_display = cv2.resize(moire_display, (new_width, new_height))
+                    
+                    if test_type == "all":
+                        debug_img[new_height+50:new_height*2+50, new_width:new_width*2] = moire_display
+                        cv2.putText(debug_img, "Moiré Pattern Filter", (new_width + 10, new_height*2 + 70), 
+                                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+                    else:
+                        debug_img[0:new_height, new_width:new_width*2] = moire_display
+                        cv2.putText(debug_img, "Moiré Pattern Filter", (new_width + 10, new_height + 20), 
+                                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+            
+            if test_type != "all":
+                return test_results["moire"], debug_img if debug else None
+        
+        if test_type in ["reflection", "all"]:
+            # ===================== TEST 7: REFLECTION DETECTION =====================
+            # Digital displays often show reflections with different characteristics
+            
+            # Check for unnatural brightness patterns
+            hsv = cv2.cvtColor(resized, cv2.COLOR_BGR2HSV)
+            v_channel = hsv[:,:,2]
+            
+            # Calculate brightness standard deviation and max regions
+            brightness_std = np.std(v_channel)
+            bright_pixels = (v_channel > 240).sum() / v_channel.size
+            
+            # Also check for abnormal brightness distribution (screens are more uniform)
+            brightness_hist, _ = np.histogram(v_channel, bins=64, range=(0, 256))
+            brightness_hist = brightness_hist / np.sum(brightness_hist)
+            brightness_entropy = -np.sum(brightness_hist * np.log2(brightness_hist + 1e-10))
+            
+            # Phone screens often have unnaturally bright regions or reflections
+            reflection_threshold = 0.02
+            # Reduce the threshold if entropy is low (uniform brightness, typical of screens)
+            if brightness_entropy < 3.0:
+                reflection_threshold *= 0.8
+            test_results["reflection"] = bright_pixels < reflection_threshold
+            
+            # Visualize brightness for debugging
+            if debug and test_type != "all":
+                # Create brightness visualization
+                v_norm = cv2.normalize(v_channel, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+                v_color = cv2.applyColorMap(v_norm, cv2.COLORMAP_JET)
+                if v_color.shape[:2] != (new_height, new_width):
+                    v_color = cv2.resize(v_color, (new_width, new_height))
+                    
+                debug_img[0:new_height, new_width:new_width*2] = v_color
+                cv2.putText(debug_img, "Brightness Analysis", (new_width + 10, new_height + 20), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+            
+            if test_type != "all":
+                return test_results["reflection"], debug_img if debug else None
+        
+        # ===================== COMBINE RESULTS FOR ALL TESTS =====================
+        if test_type == "all":
+            # Visualize test results
+            if debug:
+                result_img = np.zeros((200, new_width * 2, 3), dtype=np.uint8)
+                texts = [
+                    f"1. Texture Detail: {'PASS' if test_results.get('laplacian', False) else 'FAIL'} ({laplacian_variance:.1f} > {texture_threshold})",
+                    f"2. High Frequency: {'PASS' if test_results.get('fft', False) else 'FAIL'} ({high_freq_energy:.1f} > {high_freq_threshold})",
+                    f"3. Color Variance: {'PASS' if test_results.get('color', False) else 'FAIL'} ({adjusted_color_std:.1f} > {color_threshold})",
+                    f"4. Gradient Complexity: {'PASS' if test_results.get('gradient', False) else 'FAIL'} ({direction_variance:.1f} > {gradient_threshold})",
+                    f"5. LBP Uniformity: {'PASS' if test_results.get('lbp', False) else 'FAIL'} ({lbp_uniformity:.3f} < {lbp_threshold})",
+                    f"6. Moiré Pattern: {'PASS' if test_results.get('moire', False) else 'FAIL'} ({moire_energy:.1f} < {moire_threshold})",
+                    f"7. Reflection: {'PASS' if test_results.get('reflection', False) else 'FAIL'} ({bright_pixels*100:.2f}% < {reflection_threshold*100}%)"
+                ]
+                
+                for i, text in enumerate(texts):
+                    color = (0, 255, 0) if "PASS" in text else (0, 0, 255)
+                    cv2.putText(result_img, text, (10, 25 + i * 25), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
+                
+                # Place in debug image
+                debug_img[new_height*2+50:new_height*2+250, 0:new_width*2] = result_img
+            
+            # Count how many tests pass
+            passing_tests = sum([
+                test_results.get("laplacian", False), 
+                test_results.get("fft", False), 
+                test_results.get("color", False), 
+                test_results.get("gradient", False),
+                test_results.get("lbp", False),
+                test_results.get("moire", False),
+                test_results.get("reflection", False)
+            ])
+            
+            # Require at least 5 out of 7 tests to pass for the image to be classified as real
+            tests_required = 5
+            is_real = passing_tests >= tests_required
+            
+            # Display final result
+            if debug:
+                result_text = f"REAL FACE ({passing_tests}/{tests_required} tests passed)" if is_real else f"FAKE FACE ({passing_tests}/{tests_required} tests passed)"
+                result_color = (0, 255, 0) if is_real else (0, 0, 255)
+                cv2.putText(debug_img, result_text, (new_width - 150, new_height*2 + 240), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.8, result_color, 2)
+                
+                print(f"Texture Analysis: {'REAL' if is_real else 'FAKE'} - {passing_tests}/{tests_required} tests passed")
+                if "laplacian" in test_results:
+                    print(f"  - Laplacian variance: {laplacian_variance:.1f} ({'PASS' if test_results['laplacian'] else 'FAIL'})")
+                if "fft" in test_results:
+                    print(f"  - High frequency energy: {high_freq_energy:.1f} ({'PASS' if test_results['fft'] else 'FAIL'})")
+                if "color" in test_results:
+                    print(f"  - Color variance: {adjusted_color_std:.1f} ({'PASS' if test_results['color'] else 'FAIL'})")
+                if "gradient" in test_results:
+                    print(f"  - Gradient complexity: {direction_variance:.1f} ({'PASS' if test_results['gradient'] else 'FAIL'})")
+                if "lbp" in test_results:
+                    print(f"  - LBP uniformity: {lbp_uniformity:.3f} ({'PASS' if test_results['lbp'] else 'FAIL'})")
+                if "moire" in test_results:
+                    print(f"  - Moiré pattern: {moire_energy:.1f} ({'PASS' if test_results['moire'] else 'FAIL'})")
+                if "reflection" in test_results:
+                    print(f"  - Reflection detection: {bright_pixels*100:.2f}% ({'PASS' if test_results['reflection'] else 'FAIL'})")
+            
+            return is_real, debug_img if debug else None
+        
+        # If test_type is not recognized, return False
+        return False, debug_img if debug else None
     
     def detect_blink_with_movement_rejection(self, frame, face_bbox=None, landmarks=None, visualize=True):
         """
@@ -846,6 +963,11 @@ class CameraSystem:
         # to avoid race conditions between updating state and using new state
         should_transition_to_blink = False
         should_transition_to_movement = False
+        
+        # For texture test rotation - run one test at a time in sequence
+        texture_tests = ["laplacian", "fft", "color", "gradient", "lbp", "moire", "reflection"]
+        current_texture_test_idx = 0
+        texture_test_results = {test: 0 for test in texture_tests}  # Track passes for each test (0 = not tested yet)
 
         # Function to safely transition between stages
         def transition_to_stage(new_stage):
@@ -926,32 +1048,51 @@ class CameraSystem:
                         face_region = frame[top:bottom, left:right]
                         if face_region.size > 0 and face_region.shape[0] > 20 and face_region.shape[1] > 20:  # Ensure the region is valid and large enough
                             try:
-                                has_texture, debug_img = self.detect_texture(face_region)
-                                if has_texture:
-                                    texture_passed_count += 1
-                                    cv2.putText(display_frame, "REAL FACE DETECTED", (left, top-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                                # Get the current test to run
+                                current_test = texture_tests[current_texture_test_idx]
+                                
+                                # Run only one texture test at a time
+                                is_test_passed, debug_img = self.detect_texture(face_region, test_type=current_test, debug=True)
+                                
+                                # Track test result
+                                if is_test_passed:
+                                    texture_test_results[current_test] += 1
+                                    cv2.putText(display_frame, f"{current_test.upper()} TEST PASSED", (left, top-10), 
+                                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
                                 else:
-                                    texture_failed_count += 1
-                                    cv2.putText(display_frame, "PHOTO DETECTED", (left, top-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+                                    cv2.putText(display_frame, f"{current_test.upper()} TEST FAILED", (left, top-10), 
+                                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
                                 
-                                # Show counts
-                                cv2.putText(display_frame, f"Pass/Fail: {texture_passed_count}/{texture_failed_count}", 
-                                          (10, 140), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+                                # Show test results on screen
+                                for i, (test, passes) in enumerate(texture_test_results.items()):
+                                    status = "N/A" if passes == 0 else f"PASS ({passes})" if passes >= 2 else f"FAIL"
+                                    color = (255, 255, 255) if passes == 0 else (0, 255, 0) if passes >= 2 else (0, 0, 255)
+                                    cv2.putText(display_frame, f"{test}: {status}", 
+                                              (10, 110 + i*20), cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
                                 
-                                # Require 3 passes and no more than 1 failure to confirm it's a real face
-                                if texture_passed_count >= 3 and texture_failed_count <= 1:
+                                # Show debug image if available
+                                if debug_img is not None:
+                                    # Only show if the debug image is valid
+                                    if debug_img.shape[0] > 0 and debug_img.shape[1] > 0:
+                                        # Resize to a reasonable size 
+                                        debug_img_resized = cv2.resize(debug_img, (320, 240))
+                                        # Place in top right corner
+                                        h, w = debug_img_resized.shape[:2]
+                                        display_frame[10:10+h, display_frame.shape[1]-w-10:display_frame.shape[1]-10] = debug_img_resized
+                                
+                                # Rotate to next test after a few frames with the same test
+                                if texture_frames % 15 == 0:
+                                    current_texture_test_idx = (current_texture_test_idx + 1) % len(texture_tests)
+                                
+                                # Check if we've collected enough passes across tests
+                                passing_tests = sum(1 for passes in texture_test_results.values() if passes >= 2)
+                                if passing_tests >= 4:  # Need 4 out of 7 tests to pass
                                     stage_passed["texture"] = True
                                     print("✓ Texture check passed! It appears to be a real face.")
+                                    print(f"Test results: {texture_test_results}")
                                     # Schedule transition to blink detection
                                     should_transition_to_blink = True
-                                # If we have too many failures, reset the test
-                                elif texture_failed_count >= 5:
-                                    print("✗ Texture check failed! The face appears to be a photo.")
-                                    cv2.putText(display_frame, "FAILED: DETECTED AS PHOTO", 
-                                              (display_frame.shape[1]//2-150, 110), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
-                                    # Give the user feedback but don't immediately end the test
-                                    texture_failed_count = 0
-                                    texture_passed_count = 0
+                                
                             except Exception as e:
                                 print(f"Error in texture analysis: {str(e)}")
                     texture_frames += 1
@@ -1086,7 +1227,7 @@ class CameraSystem:
             
             for i, info in enumerate(stages_info):
                 cv2.putText(display_frame, info, 
-                          (10, 150 + i*30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, 
+                          (10, 280 + i*30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, 
                           (0, 255, 0) if "✓" in info else (255, 255, 255), 1)
             
             # Display time remaining
@@ -1096,7 +1237,7 @@ class CameraSystem:
             # Display current instruction
             instruction = ""
             if current_stage == "texture":
-                instruction = "Hold still while we analyze your face"
+                instruction = f"Hold still while we analyze your face (Test: {texture_tests[current_texture_test_idx]})"
             elif current_stage == "blink":
                 instruction = "Please blink naturally"
             elif current_stage == "head_movement":
@@ -1176,4 +1317,89 @@ class CameraSystem:
             return face_image
             
         # Otherwise capture a new face
-        return self.capture_face() 
+        return self.capture_face()
+
+    def detect_face(self, frame):
+        """
+        Detect a face and its landmarks in the given frame.
+        
+        Args:
+            frame: Input video frame
+            
+        Returns:
+            tuple: (success, face_bbox, landmarks)
+        """
+        try:
+            # Resize for faster detection
+            small_frame = cv2.resize(frame, (0, 0), fx=0.5, fy=0.5)
+            rgb_small_frame = cv2.cvtColor(small_frame, cv2.COLOR_BGR2RGB)
+            
+            # Detect face locations
+            face_locations = face_recognition.face_locations(rgb_small_frame)
+            
+            if not face_locations:
+                return False, None, None
+                
+            # Get first face
+            top, right, bottom, left = face_locations[0]
+            
+            # Scale back to full size
+            top *= 2
+            right *= 2
+            bottom *= 2
+            left *= 2
+            
+            face_bbox = (left, top, right-left, bottom-top)
+            
+            # Get facial landmarks
+            landmarks_list = face_recognition.face_landmarks(rgb_small_frame, [face_locations[0]])
+            
+            if not landmarks_list:
+                return False, face_bbox, None
+                
+            # Convert face_recognition landmarks to dlib format (flat list of points)
+            landmarks = []
+            for feature in ['chin', 'left_eyebrow', 'right_eyebrow', 'nose_bridge', 'nose_tip', 
+                           'left_eye', 'right_eye', 'top_lip', 'bottom_lip']:
+                if feature in landmarks_list[0]:
+                    for point in landmarks_list[0][feature]:
+                        # Scale back to full size
+                        landmarks.append((point[0] * 2, point[1] * 2))
+            
+            return True, face_bbox, landmarks
+        except Exception as e:
+            print(f"Error in face detection: {str(e)}")
+            return False, None, None
+            
+    def _calculate_ear(self, eye_landmarks):
+        """
+        Calculate the Eye Aspect Ratio (EAR) from eye landmarks.
+        
+        Args:
+            eye_landmarks: List of eye landmark points
+            
+        Returns:
+            float: Eye Aspect Ratio
+        """
+        # Ensure landmarks are in correct format
+        if not eye_landmarks or len(eye_landmarks) < 6:
+            return 0.0
+            
+        try:
+            # Convert to numpy array if not already
+            points = np.array(eye_landmarks)
+            
+            # Calculate horizontal distance (eye width)
+            horizontal_dist = np.linalg.norm(points[0] - points[3])
+            
+            # Calculate vertical distances
+            v1 = np.linalg.norm(points[1] - points[5])
+            v2 = np.linalg.norm(points[2] - points[4])
+            
+            # Calculate EAR
+            ear = (v1 + v2) / (2.0 * horizontal_dist)
+            
+            return ear
+        except Exception as e:
+            print(f"Error calculating EAR: {str(e)}")
+            return 0.0 
