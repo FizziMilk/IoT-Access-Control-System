@@ -710,6 +710,9 @@ class CameraSystem:
         start_positioning = time.time()
         positioning_timeout = 5  # 5 seconds to position face
         
+        # Initialize frame counter
+        frame_count = 0
+        
         while not face_detected and (time.time() - start_positioning) < positioning_timeout:
             ret, frame = cap.read()
             if not ret:
@@ -818,9 +821,6 @@ class CameraSystem:
         
         # Downsample factor for face detection (to speed up processing)
         downsample = 0.25
-        
-        # Frame counter for processing only every nth frame
-        frame_count = 0
         
         # Store the last processed face location to use for intermediate frames
         last_face_location = face_location if face_detected else None
