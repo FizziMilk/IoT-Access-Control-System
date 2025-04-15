@@ -326,37 +326,21 @@ class CameraSystem:
         return left_eye, right_eye
     
     def create_tracker(self):
-        """Create a tracking object compatible with the installed OpenCV version"""
+        """Create a KCF tracking object"""
         # Print OpenCV version for diagnostic purposes
         print(f"OpenCV version: {cv2.__version__}")
         
         try:
-            # Try KCF first (good balance of speed and accuracy)
+            # Only use KCF tracker for consistency and performance
             if hasattr(cv2, 'legacy') and hasattr(cv2.legacy, 'TrackerKCF'):
-                print("Using legacy.TrackerKCF - good balance of speed and accuracy")
+                print("Using legacy.TrackerKCF tracker")
                 return cv2.legacy.TrackerKCF.create()
             elif hasattr(cv2, 'TrackerKCF'):
-                print("Using TrackerKCF - good balance of speed and accuracy")
+                print("Using TrackerKCF tracker")
                 return cv2.TrackerKCF.create()
-            
-            # Try MOSSE next (fastest but less accurate)
-            elif hasattr(cv2, 'legacy') and hasattr(cv2.legacy, 'TrackerMOSSE'):
-                print("Using legacy.TrackerMOSSE - fastest tracker")
-                return cv2.legacy.TrackerMOSSE.create()
-            elif hasattr(cv2, 'TrackerMOSSE'):
-                print("Using TrackerMOSSE - fastest tracker")
-                return cv2.TrackerMOSSE.create()
-                
-            # Try CSRT last (most accurate but slowest)
-            elif hasattr(cv2, 'legacy') and hasattr(cv2.legacy, 'TrackerCSRT'):
-                print("Using legacy.TrackerCSRT - most accurate but slower")
-                return cv2.legacy.TrackerCSRT.create()
-            elif hasattr(cv2, 'TrackerCSRT'):
-                print("Using TrackerCSRT - most accurate but slower")
-                return cv2.TrackerCSRT.create()
-                
-            print("No suitable tracker found in opencv-contrib-python")
-            return None
+            else:
+                print("KCF tracker not found - please check opencv-contrib-python installation")
+                return None
             
         except Exception as e:
             print(f"Error creating tracker: {e}")
@@ -414,18 +398,13 @@ class CameraSystem:
         # For adaptive EAR threshold
         ear_values = []
         
-        # Try to create a tracker
+        # Create tracker once at the beginning
         tracker = self.create_tracker()
         tracking_active = False
         
-        # If tracker is available, process fewer frames
-        if tracker is not None:
-            self.process_nth_frame = 6  # Process every 6th frame for detection with KCF
-            print(f"Tracking enabled - processing every {self.process_nth_frame}th frame")
-        else:
-            # Process more frames if tracking isn't available
-            self.process_nth_frame = 2
-            print("Tracking not available - processing every 2nd frame")
+        # Set frame processing rate
+        self.process_nth_frame = 6 if tracker is not None else 2
+        print(f"Processing every {self.process_nth_frame}th frame for detection")
         
         # Increase timeout slightly to allow for adaptation
         actual_timeout = timeout + 0.5
@@ -474,7 +453,7 @@ class CameraSystem:
                     process_this_frame = True
             
             # Run face detection when needed
-            if (process_this_frame or not tracking_active) and tracker is not None:
+            if process_this_frame or not tracking_active:
                 # Downscale for faster processing
                 small_frame = cv2.resize(frame, (0, 0), fx=downsample, fy=downsample)
                 
@@ -492,19 +471,16 @@ class CameraSystem:
                     
                     last_face_location = (top, right, bottom, left)
                     
-                    # Initialize or reinitialize tracker
-                    if tracker is not None:
+                    # Initialize tracker if available and not active
+                    if tracker is not None and not tracking_active:
                         try:
-                            # Release previous tracker
-                            tracker = self.create_tracker()
-                            if tracker is not None:
-                                # Initialize with current face location
-                                bbox = (left, top, right - left, bottom - top)
-                                ok = tracker.init(frame, bbox)
-                                if ok:
-                                    tracking_active = True
-                                else:
-                                    print("Failed to initialize tracker")
+                            # Initialize with current face location
+                            bbox = (left, top, right - left, bottom - top)
+                            ok = tracker.init(frame, bbox)
+                            if ok:
+                                tracking_active = True
+                            else:
+                                print("Failed to initialize tracker")
                         except Exception as e:
                             print(f"Tracker initialization error: {e}")
                             tracking_active = False
@@ -514,29 +490,6 @@ class CameraSystem:
                     
                     if landmarks_list:
                         # Convert landmarks to full scale
-                        scaled_landmarks = {}
-                        for feature, points in landmarks_list[0].items():
-                            scaled_landmarks[feature] = [(int(p[0] / downsample), int(p[1] / downsample)) for p in points]
-                        
-                        last_landmarks = scaled_landmarks
-            # If no tracker is available, always use face detection
-            elif tracker is None and process_this_frame:
-                small_frame = cv2.resize(frame, (0, 0), fx=downsample, fy=downsample)
-                rgb_small_frame = cv2.cvtColor(small_frame, cv2.COLOR_BGR2RGB)
-                face_locations = face_recognition.face_locations(rgb_small_frame, model="hog")
-                
-                if face_locations:
-                    top, right, bottom, left = face_locations[0]
-                    top = int(top / downsample)
-                    right = int(right / downsample)
-                    bottom = int(bottom / downsample)
-                    left = int(left / downsample)
-                    
-                    last_face_location = (top, right, bottom, left)
-                    
-                    landmarks_list = face_recognition.face_landmarks(rgb_small_frame, [face_locations[0]])
-                    
-                    if landmarks_list:
                         scaled_landmarks = {}
                         for feature, points in landmarks_list[0].items():
                             scaled_landmarks[feature] = [(int(p[0] / downsample), int(p[1] / downsample)) for p in points]
