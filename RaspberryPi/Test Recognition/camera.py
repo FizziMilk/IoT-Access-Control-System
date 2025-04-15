@@ -526,7 +526,7 @@ class CameraSystem:
             
             # A real 3D face should show significant focus differences
             # Threshold determined empirically - may need adjustment based on camera
-            is_real_face = focus_range > 15.0
+            is_real_face = focus_range > 0.5  # Lowered from 15.0 to 0.5
             
             # For debugging: Display the focus images side by side
             if len(focus_images) == 3:
@@ -607,7 +607,7 @@ class CameraSystem:
             
             # Combined score - empirically determined thresholds
             # These thresholds may need adjustment based on testing
-            is_real_texture = (entropy > 4.5 and std_dev > 35.0 and high_freq_energy > 5000000)
+            is_real_texture = (entropy > 4.0 and std_dev > 35.0 and high_freq_energy > 4800000)
             
             # Save debug visualization
             debug_img = np.hstack([gray, equalized, lbp.astype(np.uint8)])
