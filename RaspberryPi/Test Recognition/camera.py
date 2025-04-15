@@ -607,7 +607,7 @@ class CameraSystem:
             
             # Combined score - empirically determined thresholds
             # These thresholds may need adjustment based on testing
-            is_real_texture = (entropy > 4.0 and std_dev > 35.0 and high_freq_energy > 4800000)
+            is_real_texture = (entropy > 3.5 and std_dev > 30.0 and high_freq_energy > 4500000)
             
             # Save debug visualization
             debug_img = np.hstack([gray, equalized, lbp.astype(np.uint8)])
