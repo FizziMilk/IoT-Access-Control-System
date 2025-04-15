@@ -390,9 +390,13 @@ class CameraSystem:
             original_autofocus = cap.get(cv2.CAP_PROP_AUTOFOCUS)
             original_focus = cap.get(cv2.CAP_PROP_FOCUS)
             
+            # Save current cap to self.cap for the texture check
+            self.cap = cap
+            self.current_face_location = face_location
+            
             # Run enhanced liveness checks
             focus_result = self.check_focus_depth(cap, face_location)
-            texture_result = self.check_facial_texture(cap, face_location)
+            texture_result, texture_confidence = self.check_facial_texture()
             
             # Combine results - require both checks to pass for real face
             is_real_face = focus_result and texture_result
@@ -421,7 +425,7 @@ class CameraSystem:
                 # Show texture test result
                 texture_status = "PASS" if texture_result else "FAIL"
                 texture_color = (0, 255, 0) if texture_result else (0, 0, 255)
-                cv2.putText(summary_frame, f"Texture Test: {texture_status}", (20, 180),
+                cv2.putText(summary_frame, f"Texture Test: {texture_status} ({int(texture_confidence*100)}%)", (20, 180),
                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, texture_color, 2)
                 
                 # Add instruction to press any key to continue
@@ -452,6 +456,8 @@ class CameraSystem:
     def check_focus_depth(self, cap, face_location):
         """
         Check if the face has proper 3D depth based on focus changes.
+        Returns:
+            tuple: (is_real_face, confidence_score)
         """
         try:
             # Extract face region for analysis
@@ -573,7 +579,7 @@ class CameraSystem:
             # Calculate differences in how regions respond to focus
             if len(clarity_values) < 3:
                 print("Not enough clarity values to analyze")
-                return False
+                return False, 0.0
                 
             # Check if focus changes had any significant effect (to detect if focus control is working)
             eye_clarity_values = [c[1] for c in clarity_values]
@@ -591,7 +597,7 @@ class CameraSystem:
             if max(eye_range, nose_range, bg_range) < 5.0:
                 print("WARNING: Focus changes had minimal effect on image clarity")
                 print("Focus control might not be working properly")
-                return True  # Default to allow
+                return True, 0.3  # Default to allow with low confidence
                 
             # Calculate correlations
             eye_nose_correlation = np.corrcoef(eye_clarity_values, nose_clarity_values)[0, 1]
@@ -635,6 +641,27 @@ class CameraSystem:
             # Real face passes if there's some difference in correlations or not all highly positive
             is_real_face = correlation_diff > 0.1 or not both_highly_positive
             
+            # Calculate confidence score (0.0-1.0)
+            confidence = 0.0
+            if is_real_face:
+                # Calculate confidence based on correlation difference (bigger difference = higher confidence)
+                diff_confidence = min(correlation_diff / 0.3, 1.0) * 0.7  # 0.3 is an ideal diff value
+                
+                # Add extra confidence if clarity ranges show good depth sensitivity
+                depth_sensitivity = max(eye_range, nose_range) / max(1.0, bg_range)
+                depth_confidence = min(depth_sensitivity / 2.0, 1.0) * 0.3
+                
+                confidence = diff_confidence + depth_confidence
+            else:
+                # If it's a photo, confidence is based on how close the correlations are
+                if both_highly_positive:
+                    confidence = 0.7 + 0.3 * min(1.0, (eye_nose_correlation + eye_bg_correlation + nose_bg_correlation) / 3.0 - 0.95) / 0.05
+                else:
+                    confidence = max(0.5, 1.0 - correlation_diff)
+                    
+                # Inverse the confidence since this indicates confidence it's NOT real
+                confidence = 1.0 - confidence
+            
             # Add results to summary frame
             result_text = "REAL FACE" if is_real_face else "POSSIBLE SPOOF"
             result_color = (0, 255, 0) if is_real_face else (0, 0, 255)
@@ -649,6 +676,8 @@ class CameraSystem:
                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
             cv2.putText(summary_frame, f"Difference: {correlation_diff:.3f}", (20, 300),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
+            cv2.putText(summary_frame, f"Confidence: {confidence:.2f}", (20, 330),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
             
             cv2.imshow("Focus Test Summary", summary_frame)
             cv2.imwrite("focus_test_summary.jpg", summary_frame)
@@ -668,7 +697,27 @@ class CameraSystem:
         """
         print("\n--- Starting Facial Texture Analysis ---")
         
+        # Initialize face detector and shape predictor if not already done
+        if not hasattr(self, 'face_detector'):
+            self.face_detector = dlib.get_frontal_face_detector()
+        if not hasattr(self, 'shape_predictor'):
+            model_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 
+                                      "shape_predictor_68_face_landmarks.dat")
+            if not os.path.exists(model_path):
+                print(f"ERROR: Could not find shape predictor model at {model_path}")
+                return False, 0.0
+            self.shape_predictor = dlib.shape_predictor(model_path)
+        
+        # If this was called from perform_focus_liveness_check, use the saved cap and face_location
+        use_existing_face = hasattr(self, 'current_face_location') and self.current_face_location is not None
+        
         # Save current camera settings
+        if not hasattr(self, 'cap') or self.cap is None:
+            # If no camera object available, create one
+            self.cap = cv2.VideoCapture(self.camera_id)
+            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.resolution[0])
+            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.resolution[1])
+        
         original_resolution = self.cap.get(cv2.CAP_PROP_FRAME_WIDTH), self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
         print(f"Original resolution: {original_resolution}")
         
@@ -721,14 +770,25 @@ class CameraSystem:
         print(f"  Std dev range: {std_min_threshold:.2f}-{std_max_threshold:.2f}")
         print(f"  Detail energy threshold: {detail_energy_threshold:.2f}")
         
-        # Capture frames for analysis
-        for i in range(num_frames):
-            print(f"Capturing frame {i+1}/{num_frames}...")
+        # If we have a pre-existing face location, use it to create a dlib rectangle
+        face_rect = None
+        if use_existing_face:
+            top, right, bottom, left = self.current_face_location
+            face_rect = dlib.rectangle(left, top, right, bottom)
+            
+            # Capture just one frame since we already have a face location
             ret, frame = self.cap.read()
-            if not ret:
-                print("Failed to capture frame")
-                continue
-            frames.append(frame)
+            if ret:
+                frames.append(frame)
+        else:
+            # Capture frames for analysis
+            for i in range(num_frames):
+                print(f"Capturing frame {i+1}/{num_frames}...")
+                ret, frame = self.cap.read()
+                if not ret:
+                    print("Failed to capture frame")
+                    continue
+                frames.append(frame)
         
         if len(frames) == 0:
             print("No frames captured for texture analysis")
@@ -756,8 +816,13 @@ class CameraSystem:
             # Convert to grayscale for texture analysis
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             
-            # Detect faces
-            faces = self.detector(gray)
+            # Use existing face location or detect faces
+            if face_rect is not None:
+                faces = [face_rect]
+            else:
+                # Detect faces
+                faces = self.face_detector(gray)
+                
             if len(faces) == 0:
                 print(f"No face detected in frame {frame_idx+1}")
                 continue
@@ -766,7 +831,7 @@ class CameraSystem:
             largest_face = max(faces, key=lambda rect: rect.width() * rect.height())
             
             # Get facial landmarks
-            shape = self.predictor(gray, largest_face)
+            shape = self.shape_predictor(gray, largest_face)
             landmarks = face_utils.shape_to_np(shape)
             
             # Define regions to analyze (forehead, left cheek, right cheek, chin)
@@ -874,6 +939,10 @@ class CameraSystem:
                 std_averages.append(np.mean(frame_stds))
                 detail_energy_averages.append(np.mean(frame_energies))
         
+        # Clear the stored face location after processing
+        if hasattr(self, 'current_face_location'):
+            self.current_face_location = None
+            
         # Restore original camera settings
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, original_resolution[0])
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, original_resolution[1])
@@ -943,7 +1012,7 @@ class CameraSystem:
         energy_conf = min(100, avg_energy / detail_energy_threshold * 100)
         
         # Weighted average of confidences
-        confidence = (gradient_conf * 0.4 + std_conf * 0.4 + energy_conf * 0.2)
+        confidence = (gradient_conf * 0.4 + std_conf * 0.4 + energy_conf * 0.2) / 100.0
         
         # Result with threshold checks
         is_real_texture = gradient_check and std_check and energy_check
@@ -957,7 +1026,7 @@ class CameraSystem:
             f"Std Dev: {avg_std:.2f} ({std_check})",
             f"Energy: {avg_energy:.4f} ({energy_check})",
             f"Real Texture: {is_real_texture}",
-            f"Confidence: {confidence:.1f}%"
+            f"Confidence: {confidence:.2f}"
         ]
         
         # Draw a semi-transparent box for text background
@@ -970,14 +1039,14 @@ class CameraSystem:
         # Add each line of text
         for i, line in enumerate(text_lines):
             y_pos = y + i * h_line
-            text_color = (0, 255, 0) if "True" in line else (0, 255, 255) if "%" in line else (0, 0, 255)
+            text_color = (0, 255, 0) if "True" in line else (0, 255, 255) if "Confidence" in line else (0, 0, 255)
             cv2.putText(result_img, line, (10, y_pos), 
                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, text_color, 2)
         
         # Save the result visualization
         cv2.imwrite("texture_analysis_result.jpg", result_img)
         
-        print(f"Texture analysis result: {is_real_texture} (Confidence: {confidence:.1f}%)")
+        print(f"Texture analysis result: {is_real_texture} (Confidence: {confidence:.2f})")
         return is_real_texture, confidence
     
     def calculate_clarity(self, gray_img, point, region_size=20):
@@ -1593,12 +1662,45 @@ class CameraSystem:
         self.cleanup_diagnostic_images()  # Clean up any previous test files
 
         print("Starting facial reality check...")
-        self.capture_face()  # Ensure we have a current face capture
-
-        # Step 1: Check focus/depth test
-        focus_result, focus_score = self.check_focus_depth()
         
-        # Step 2: Check texture detail
+        # Ensure we have a camera object
+        if not hasattr(self, 'cap') or self.cap is None:
+            self.cap = cv2.VideoCapture(self.camera_id)
+            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.resolution[0])
+            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.resolution[1])
+        
+        # Capture a face to work with
+        frame = self.capture_face()
+        if frame is None:
+            print("No face captured, aborting test")
+            return False, 0.0
+            
+        # Convert to grayscale for face detection
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        
+        # Initialize face detector if not already done
+        if not hasattr(self, 'face_detector'):
+            self.face_detector = dlib.get_frontal_face_detector()
+            
+        # Detect face
+        faces = self.face_detector(gray)
+        if not faces:
+            print("No face detected in captured image")
+            return False, 0.0
+            
+        # Get the largest face
+        face = max(faces, key=lambda rect: rect.width() * rect.height())
+        
+        # Convert dlib rectangle to face_location tuple (top, right, bottom, left)
+        face_location = (face.top(), face.right(), face.bottom(), face.left())
+        
+        # Save face location for focus and texture tests
+        self.current_face_location = face_location
+
+        # Step 1: Check focus/depth test - passing the face location
+        focus_result, focus_score = self.check_focus_depth(self.cap, face_location)
+        
+        # Step 2: Check texture detail - this will use the saved face location
         texture_result, texture_score = self.check_facial_texture()
         
         # Step 3: Calculate overall result and confidence
@@ -1613,6 +1715,11 @@ class CameraSystem:
         print(f"\nFINAL RESULT: {result_str} (Confidence: {conf_pct}%)")
         print(f"  - Focus/Depth Test: {'PASSED' if focus_result else 'FAILED'} ({int(focus_score*100)}%)")
         print(f"  - Texture Test: {'PASSED' if texture_result else 'FAILED'} ({int(texture_score*100)}%)")
+        
+        # Clean up
+        if hasattr(self, 'cap') and self.cap is not None:
+            self.cap.release()
+            self.cap = None
         
         return is_real, confidence
         
