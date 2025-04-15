@@ -256,7 +256,9 @@ class CameraSystem:
                     h_segment = new_height // 3
                     if pos_y + h_segment <= new_height:
                         debug_img[pos_y:pos_y+h_segment, new_width:new_width*2] = vis_channel[0:h_segment, 0:new_width]
-                        cv2.putText(debug_img, f"{name}: std={eval(f'{name.lower()}_std'):.1f}", 
+                        # Map color names to actual variable names
+                        std_value = b_std if name == "Blue" else (g_std if name == "Green" else r_std)
+                        cv2.putText(debug_img, f"{name}: std={std_value:.1f}", 
                                    (new_width + 10, pos_y + 20), 
                                    cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
             
