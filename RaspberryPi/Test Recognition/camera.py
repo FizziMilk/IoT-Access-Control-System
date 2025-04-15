@@ -409,8 +409,8 @@ class CameraSystem:
         tracker = self.create_tracker()
         tracking_active = False
         
-        # Set frame processing rate
-        self.process_nth_frame = 6 if tracker is not None else 2
+        # Set frame processing rate - process more frequently to catch blinks better
+        self.process_nth_frame = 2 if tracker is not None else 1
         print(f"Processing every {self.process_nth_frame}th frame for detection")
         
         # Position smoothing to reduce jitter
@@ -483,6 +483,9 @@ class CameraSystem:
             # Only process every nth frame to improve performance
             process_this_frame = (frame_count % self.process_nth_frame == 0)
             frame_count += 1
+            
+            # For blink detection, try to process every frame when possible
+            process_blink_this_frame = True
             
             # Current face box (to be determined in this frame)
             current_face_box = None
@@ -585,7 +588,7 @@ class CameraSystem:
                         best_face_image = frame.copy()
                 
                 # Process landmarks if available
-                if last_landmarks is not None:
+                if last_landmarks is not None and process_blink_this_frame:
                     # Get eye landmarks
                     left_eye, right_eye = self.get_eye_landmarks(last_landmarks)
                     
