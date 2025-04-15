@@ -454,7 +454,7 @@ class CameraSystem:
                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
                 
                 # Store debug frame
-                diagnostic_images.append(debug_frame)
+                diagnostic_images.append(debug_frame.copy())
                 
                 # Show the diagnostic image
                 cv2.imshow(f"Focus Test - Level {focus}", debug_frame)
@@ -518,9 +518,14 @@ class CameraSystem:
                 cv2.putText(summary_frame, f"Variance: {variance:.6f}", (20, 150 + len(clarity_differences)*30),
                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
                 
+                # Add instruction to press any key to continue
+                cv2.putText(summary_frame, "Press any key to continue...", 
+                           (20, 150 + len(clarity_differences)*30 + 30),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+                
                 cv2.imshow("Focus Test Result", summary_frame)
                 cv2.imwrite("focus_test_result.jpg", summary_frame)
-                cv2.waitKey(1000)  # Show result for longer
+                cv2.waitKey(0)  # Wait for user to press any key before continuing
             
             return is_real_face
             
@@ -981,8 +986,27 @@ class CameraSystem:
                 # Check for key press
                 key = cv2.waitKey(1) & 0xFF
                 if key == 27:  # ESC key
+                    # Store result before exiting
+                    liveness_result = False
+                    best_face_img = None if best_face_image is None else best_face_image.copy()
+                    
+                    # Clean up main camera
                     cap.release()
+                    cv2.destroyWindow("Liveness Detection")
+                    
+                    # Create result message for canceled test
+                    result_frame = np.zeros((480, 640, 3), dtype=np.uint8) if best_face_img is None else best_face_img
+                    cv2.putText(result_frame, "LIVENESS CHECK CANCELED", 
+                                (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+                    cv2.putText(result_frame, "Press any key to exit...", 
+                                (20, result_frame.shape[0] - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
+                    cv2.imshow("Liveness Result", result_frame)
+                    cv2.waitKey(0)  # Wait for key press
                     cv2.destroyAllWindows()
+                    
+                    # No need to clean up diagnostic images in ESC case
+                    # as they may contain useful debug information
+                    
                     return False, None
                 
                 # Continue running even after blink is detected (removed early exit)
@@ -1016,20 +1040,34 @@ class CameraSystem:
             best_face_image = self.capture_face()
         
         # Show final result and wait for user to acknowledge
-        if blink_detected:
-            result_frame = best_face_image.copy() if best_face_image is not None else np.zeros((480, 640, 3), dtype=np.uint8)
-            cv2.putText(result_frame, f"LIVENESS CHECK {'PASSED' if blink_counter >= 2 else 'INCOMPLETE'}", 
-                        (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
-            cv2.putText(result_frame, f"Detected {blink_counter} blinks", 
-                        (20, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-            cv2.putText(result_frame, "Press any key to continue...", 
-                        (20, result_frame.shape[0] - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
-            cv2.imshow("Liveness Result", result_frame)
-            cv2.waitKey(0)  # Wait for any key press
-            cv2.destroyAllWindows()
+        if blink_counter > 0:
+            result_message = "PASSED" if blink_counter >= 2 else "INCOMPLETE"
+            result_color = (0, 255, 0) if blink_counter >= 2 else (0, 165, 255)
+        else:
+            result_message = "FAILED"
+            result_color = (0, 0, 255)
             
-            # Clean up any diagnostic images generated during focus testing
-            self.cleanup_diagnostic_images()
+        result_frame = best_face_image.copy() if best_face_image is not None else np.zeros((480, 640, 3), dtype=np.uint8)
+        cv2.putText(result_frame, f"LIVENESS CHECK {result_message}", 
+                    (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.8, result_color, 2)
+        cv2.putText(result_frame, f"Detected {blink_counter} blinks", 
+                    (20, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+        
+        # Add focus test result if it was performed
+        if hasattr(self, 'focus_check_passed'):
+            focus_result = "PASSED" if self.focus_check_passed else "FAILED"
+            focus_color = (0, 255, 0) if self.focus_check_passed else (0, 0, 255)
+            cv2.putText(result_frame, f"Focus Check: {focus_result}", 
+                        (20, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.7, focus_color, 2)
+            
+        cv2.putText(result_frame, "Press any key to continue...", 
+                    (20, result_frame.shape[0] - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
+        cv2.imshow("Liveness Result", result_frame)
+        cv2.waitKey(0)  # Wait for any key press
+        cv2.destroyAllWindows()
+        
+        # Clean up any diagnostic images generated during focus testing
+        self.cleanup_diagnostic_images()
         
         return blink_detected, best_face_image
     
