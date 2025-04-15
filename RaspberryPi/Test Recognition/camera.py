@@ -462,54 +462,35 @@ class CameraSystem:
         """
         try:
             print("Starting enhanced focus depth test...")
-            # Completely new approach to select face region
+            # Completely different approach: always use center of frame with large region
             
-            # Capture a full frame first to get dimensions and show region
+            # Capture a full frame first to get dimensions
             ret, full_frame = cap.read()
             if not ret:
                 raise Exception("Failed to get frame for region selection")
                 
             frame_height, frame_width = full_frame.shape[:2]
             
-            # Get the original face location
-            if face_location and len(face_location) == 4:
-                top, right, bottom, left = face_location
-                # Check if these coordinates make sense
-                valid_coordinates = (
-                    0 <= top < frame_height and 
-                    0 <= bottom < frame_height and 
-                    0 <= left < frame_width and 
-                    0 <= right < frame_width and
-                    bottom > top and
-                    right > left
-                )
-                
-                if valid_coordinates:
-                    # Calculate center of detected face
-                    center_x = (left + right) // 2
-                    center_y = (top + bottom) // 2
-                    
-                    # Use reasonable size for analysis (30% of frame height)
-                    roi_size = int(frame_height * 0.3)
-                else:
-                    print("Invalid face coordinates, using center of frame")
-                    # Use center of frame
-                    center_x = frame_width // 2
-                    center_y = frame_height // 2
-                    roi_size = int(frame_height * 0.3)
-            else:
-                print("No face location provided, using center of frame")
-                # Use center of frame
-                center_x = frame_width // 2
-                center_y = frame_height // 2
-                roi_size = int(frame_height * 0.3)
+            # ALWAYS use center of frame with a large region (60% of frame height)
+            center_x = frame_width // 2
+            center_y = frame_height // 2
+            roi_size = int(frame_height * 0.6)  # Much larger region
             
             # Calculate the region boundaries
             half_size = roi_size // 2
-            left = max(0, center_x - half_size)
-            top = max(0, center_y - half_size)
-            right = min(frame_width, center_x + half_size)
-            bottom = min(frame_height, center_y + half_size)
+            left = center_x - half_size
+            top = center_y - half_size
+            right = center_x + half_size
+            bottom = center_y + half_size
+            
+            # Ensure coordinates are valid
+            left = max(0, left)
+            top = max(0, top)
+            right = min(frame_width, right)
+            bottom = min(frame_height, bottom)
+            
+            print(f"FOCUS TEST REGION: center=({center_x}, {center_y}), size={roi_size}")
+            print(f"Coordinates: left={left}, top={top}, right={right}, bottom={bottom}")
             
             # Show the selected region on the full frame
             debug_frame = full_frame.copy()
@@ -517,7 +498,7 @@ class CameraSystem:
             cv2.putText(debug_frame, "FOCUS TEST REGION", (left, top - 10), 
                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
             cv2.imshow("Focus Test Region", debug_frame)
-            cv2.waitKey(500)  # Show for half a second
+            cv2.waitKey(1000)  # Show for a full second
             
             # Save original camera settings
             original_resolution = (cap.get(cv2.CAP_PROP_FRAME_WIDTH), cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
@@ -527,6 +508,18 @@ class CameraSystem:
             # Temporarily increase resolution for better focus analysis
             cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
             cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
+            
+            # Recalculate region for higher resolution frame
+            scale_x = 1920 / original_resolution[0]
+            scale_y = 1080 / original_resolution[1]
+            
+            # Scale the coordinates to the new resolution
+            scaled_left = int(left * scale_x)
+            scaled_top = int(top * scale_y)
+            scaled_right = int(right * scale_x)
+            scaled_bottom = int(bottom * scale_y)
+            
+            print(f"Scaled coordinates for higher resolution: left={scaled_left}, top={scaled_top}, right={scaled_right}, bottom={scaled_bottom}")
             
             # Disable autofocus
             cap.set(cv2.CAP_PROP_AUTOFOCUS, 0)
@@ -554,20 +547,26 @@ class CameraSystem:
                     if not ret:
                         raise Exception("Failed to capture frame during focus test")
                     
+                    # Calculate new center for high-res frame to ensure we're analyzing the face
+                    high_res_h, high_res_w = frame.shape[:2]
+                    
                     # Draw rectangle on frame to show the region being analyzed (for debugging)
                     debug_frame = frame.copy()
-                    cv2.rectangle(debug_frame, (left, top), (right, bottom), (0, 255, 0), 2)
+                    cv2.rectangle(debug_frame, (scaled_left, scaled_top), (scaled_right, scaled_bottom), (0, 255, 0), 2)
                     cv2.imshow("Focus Region", debug_frame)
                     cv2.waitKey(1)  # Show briefly without blocking
                     
                     # Extract the region - use safe coordinates
-                    if 0 <= top < bottom < frame.shape[0] and 0 <= left < right < frame.shape[1]:
-                        face_frame = frame[top:bottom, left:right]
-                    else:
-                        print("WARNING: Invalid region bounds, using default center region")
-                        h, w = frame.shape[:2]
-                        center_y, center_x = h // 2, w // 2
-                        region_size = min(h, w) // 4
+                    try:
+                        face_frame = frame[scaled_top:scaled_bottom, scaled_left:scaled_right]
+                        if face_frame.size == 0:
+                            raise ValueError("Extracted region is empty")
+                    except Exception as e:
+                        print(f"Error extracting region: {e}")
+                        print(f"Frame shape: {frame.shape}, Region: ({scaled_top}:{scaled_bottom}, {scaled_left}:{scaled_right})")
+                        # Use a safe region in the center as fallback
+                        center_y, center_x = high_res_h // 2, high_res_w // 2
+                        region_size = min(high_res_h, high_res_w) // 3
                         safe_top = center_y - region_size
                         safe_bottom = center_y + region_size
                         safe_left = center_x - region_size
