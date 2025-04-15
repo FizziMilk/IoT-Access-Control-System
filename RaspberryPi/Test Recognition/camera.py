@@ -408,7 +408,7 @@ class CameraSystem:
         
         # Position smoothing to reduce jitter
         position_history = []
-        position_history_max = 3  # Number of positions to keep for smoothing
+        position_history_max = 5  # Increased number of frames for smoother tracking
         
         # Motion detection variables
         previous_frame = None
@@ -641,7 +641,7 @@ class CameraSystem:
                         
                         # Calculate variability in ratios - high variation indicates vertical head movement
                         ratio_std = np.std(self.ratio_history) if len(self.ratio_history) > 3 else 0
-                        vertical_movement = ratio_std > 0.03  # Threshold for vertical head movement
+                        vertical_movement = ratio_std > 0.05  # Increased threshold to reduce false positives
                         
                         # Check for blink pattern - need stable EAR history
                         if len(ear_history) >= 5:
@@ -669,14 +669,18 @@ class CameraSystem:
                                     # Conditions for a valid blink:
                                     valid_blink = False
                                     
-                                    # 1. If no motion and stable EAR - easy to detect blinks
-                                    if not in_motion and not vertical_movement and ear_stable:
-                                        valid_blink = ear_drop > 0.02  # Minimal drop for still position
+                                    # 1. If no motion and stable EAR - make it very easy to detect blinks
+                                    if not in_motion and not vertical_movement:
+                                        valid_blink = ear_drop > 0.015  # Even lower threshold for still position
                                         
-                                    # 2. During motion - need strong evidence
-                                    elif in_motion or vertical_movement:
-                                        # During motion, check for clearer blink pattern with both drop and rise
-                                        valid_blink = (ear_drop > 0.05 and ear_rise > 0.05)
+                                    # 2. During lower motion - moderate requirements
+                                    elif vertical_movement and not in_motion:
+                                        valid_blink = ear_drop > 0.03  # Medium threshold
+                                        
+                                    # 3. During high motion - need stronger evidence
+                                    else:
+                                        # Still make this more lenient
+                                        valid_blink = (ear_drop > 0.04)  # Reduced threshold, don't require rise
                                     
                                     # Count blink if valid
                                     if valid_blink:
