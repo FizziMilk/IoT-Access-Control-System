@@ -428,11 +428,6 @@ class CameraSystem:
         stillness_counter = 0
         is_still_enough = False
         
-        # Screen detection
-        is_screen_detected = False
-        screen_check_frames = []
-        screen_history_max = 10
-        
         # EAR history for detecting real blink patterns
         ear_history = []
         ear_history_max = 10
@@ -498,50 +493,6 @@ class CameraSystem:
                         stillness_counter += 1
                         # Check if we've been still long enough
                         is_still_enough = stillness_counter >= stillness_frames_required
-                
-                # Screen detection - check for regular patterns in motion
-                # (screens often have refresh patterns that real faces don't)
-                if len(motion_history) >= 4:
-                    # Store frames for screen detection periodically
-                    if len(screen_check_frames) < screen_history_max and frame_count % 3 == 0:
-                        screen_check_frames.append(frame.copy())
-                    
-                    # If we have enough frames, check for screen patterns
-                    if len(screen_check_frames) >= 3:
-                        # Check for regular refresh patterns
-                        screen_diffs = []
-                        for i in range(1, len(screen_check_frames)):
-                            prev = cv2.cvtColor(screen_check_frames[i-1], cv2.COLOR_BGR2GRAY)
-                            curr = cv2.cvtColor(screen_check_frames[i], cv2.COLOR_BGR2GRAY)
-                            diff = cv2.absdiff(prev, curr)
-                            screen_diffs.append(np.mean(diff))
-                        
-                        # Calculate variance of differences - screens tend to have consistent differences
-                        if len(screen_diffs) >= 2:
-                            screen_diff_variance = np.var(screen_diffs)
-                            screen_diff_mean = np.mean(screen_diffs)
-                            
-                            # Much stricter parameters for phone screen detection
-                            is_prev_screen = is_screen_detected
-                            
-                            # Phone screens typically have lower variance (more regular patterns)
-                            # and consistent non-zero mean (regular refresh rate causes consistent changes)
-                            if (screen_diff_variance < 0.5 and screen_diff_mean > 0.1) or \
-                               (screen_diff_variance < 1.0 and screen_diff_mean > 0.3 and screen_diff_mean < 2.0):
-                                is_screen_detected = True
-                            else:
-                                # Only clear screen detection after several clean frames
-                                if is_prev_screen:
-                                    # Keep detection active for a few more frames
-                                    screen_clear_count = getattr(self, 'screen_clear_count', 0) + 1
-                                    self.screen_clear_count = screen_clear_count
-                                    is_screen_detected = screen_clear_count < 10
-                                else:
-                                    is_screen_detected = False
-                                    self.screen_clear_count = 0
-                            
-                            if is_screen_detected:
-                                print(f"Screen detected! Variance: {screen_diff_variance:.2f}, Mean: {screen_diff_mean:.2f}")
             
             # Store current frame for next iteration
             previous_frame = frame.copy()
@@ -691,7 +642,7 @@ class CameraSystem:
                             cv2.drawContours(display_frame, [eye_hull], -1, (0, 255, 0), 1)
                         
                         # Only process blinks if we're very still
-                        process_blink = is_still_enough and not is_screen_detected
+                        process_blink = is_still_enough
                         
                         # Check for blink pattern - need stable EAR history
                         if len(ear_history) >= 3 and process_blink:
@@ -796,12 +747,6 @@ class CameraSystem:
                 stillness_color = (0, 255, 0) if is_still_enough else (0, 0, 255)
                 cv2.putText(display_frame, stillness_status, (display_frame.shape[1] - 120, 120),
                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, stillness_color, 1)
-                
-                # Display screen status
-                screen_status = "SCREEN DETECTED!" if is_screen_detected else "Live Face"
-                screen_color = (0, 0, 255) if is_screen_detected else (0, 255, 0)
-                cv2.putText(display_frame, screen_status, (display_frame.shape[1] - 120, 150),
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, screen_color, 1)
                 
                 cv2.putText(display_frame, "ESC: Cancel", (10, display_frame.shape[0] - 20),
                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
