@@ -331,25 +331,22 @@ class CameraSystem:
         
         try:
             # Try the modern tracking API (OpenCV 4.5.1+)
-            if hasattr(cv2, 'legacy'):
+            if hasattr(cv2, 'legacy') and hasattr(cv2.legacy, 'TrackerKCF'):
                 # Use legacy module in newer OpenCV versions
-                tracker = cv2.legacy.TrackerKCF_create()
-            elif hasattr(cv2, 'TrackerKCF_create'):
-                # OpenCV 3.x style
-                tracker = cv2.TrackerKCF_create()
+                tracker = cv2.legacy.TrackerKCF.create()
             elif hasattr(cv2, 'TrackerKCF'):
-                # OpenCV 4.x style
+                # OpenCV 3.x and 4.x style
                 tracker = cv2.TrackerKCF.create()
             else:
                 # Try other trackers if KCF is not available
-                if hasattr(cv2, 'legacy') and hasattr(cv2.legacy, 'TrackerCSRT_create'):
-                    tracker = cv2.legacy.TrackerCSRT_create()
-                elif hasattr(cv2, 'TrackerCSRT_create'):
-                    tracker = cv2.TrackerCSRT_create()
+                if hasattr(cv2, 'legacy') and hasattr(cv2.legacy, 'TrackerCSRT'):
+                    tracker = cv2.legacy.TrackerCSRT.create()
                 elif hasattr(cv2, 'TrackerCSRT'):
                     tracker = cv2.TrackerCSRT.create()
-                elif hasattr(cv2, 'legacy') and hasattr(cv2.legacy, 'TrackerMOSSE_create'):
-                    tracker = cv2.legacy.TrackerMOSSE_create()
+                elif hasattr(cv2, 'legacy') and hasattr(cv2.legacy, 'TrackerMOSSE'):
+                    tracker = cv2.legacy.TrackerMOSSE.create()
+                elif hasattr(cv2, 'TrackerMOSSE'):
+                    tracker = cv2.TrackerMOSSE.create()
                 else:
                     print("No suitable tracker found. Disabling tracking.")
                     tracker = None
