@@ -20,8 +20,8 @@ class CameraSystem:
         self.EAR_THRESHOLD = 0.20  # Higher threshold makes it harder to detect blinks
         # Number of consecutive frames the eye must be below threshold to count as a blink
         self.EAR_CONSEC_FRAMES = 1  # Detect blinks in a single frame
-        # Use higher resolution for liveness detection for better eye landmark detection
-        self.liveness_resolution = (640, 480)
+        # Use a much lower resolution for liveness detection
+        self.liveness_resolution = (320, 240)
         # Frame process rate (1 = process every frame, 2 = every other frame, etc.)
         self.process_nth_frame = 3
         # Use a separate thread for face detection to prevent UI blocking
@@ -503,7 +503,7 @@ class CameraSystem:
                 # (screens often have refresh patterns that real faces don't)
                 if len(motion_history) >= 4:
                     # Store frames for screen detection periodically
-                    if len(screen_check_frames) < screen_history_max and frame_count % 5 == 0:
+                    if len(screen_check_frames) < screen_history_max and frame_count % 3 == 0:
                         screen_check_frames.append(frame.copy())
                     
                     # If we have enough frames, check for screen patterns
@@ -521,11 +521,24 @@ class CameraSystem:
                             screen_diff_variance = np.var(screen_diffs)
                             screen_diff_mean = np.mean(screen_diffs)
                             
-                            # Low variance with non-zero mean often indicates screen refresh
-                            if screen_diff_variance < 2.0 and screen_diff_mean > 0.5:
+                            # Much stricter parameters for phone screen detection
+                            is_prev_screen = is_screen_detected
+                            
+                            # Phone screens typically have lower variance (more regular patterns)
+                            # and consistent non-zero mean (regular refresh rate causes consistent changes)
+                            if (screen_diff_variance < 0.5 and screen_diff_mean > 0.1) or \
+                               (screen_diff_variance < 1.0 and screen_diff_mean > 0.3 and screen_diff_mean < 2.0):
                                 is_screen_detected = True
                             else:
-                                is_screen_detected = False
+                                # Only clear screen detection after several clean frames
+                                if is_prev_screen:
+                                    # Keep detection active for a few more frames
+                                    screen_clear_count = getattr(self, 'screen_clear_count', 0) + 1
+                                    self.screen_clear_count = screen_clear_count
+                                    is_screen_detected = screen_clear_count < 10
+                                else:
+                                    is_screen_detected = False
+                                    self.screen_clear_count = 0
                             
                             if is_screen_detected:
                                 print(f"Screen detected! Variance: {screen_diff_variance:.2f}, Mean: {screen_diff_mean:.2f}")
