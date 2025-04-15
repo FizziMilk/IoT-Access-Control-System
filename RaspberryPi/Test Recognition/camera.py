@@ -428,6 +428,9 @@ class CameraSystem:
         fps_frame_count = 0
         fps = 0
         
+        # Initialize ear variable outside the scope to prevent reference errors
+        ear = 0.0
+        
         while (time.time() - start_time) < actual_timeout:
             ret, frame = cap.read()
             if not ret:
@@ -614,8 +617,38 @@ class CameraSystem:
                         # Check if we're in a high motion state
                         in_motion = high_motion_detected
                         
-                        # Check for blink pattern
+                        # Track vertical and horizontal eye ratio separately
+                        left_horizontal = dist.euclidean(left_eye[0], left_eye[3])
+                        left_vertical = (dist.euclidean(left_eye[1], left_eye[5]) + dist.euclidean(left_eye[2], left_eye[4])) / 2
+                        
+                        right_horizontal = dist.euclidean(right_eye[0], right_eye[3])
+                        right_vertical = (dist.euclidean(right_eye[1], right_eye[5]) + dist.euclidean(right_eye[2], right_eye[4])) / 2
+                        
+                        # Calculate horizontal to vertical ratio for both eyes
+                        left_ratio = left_vertical / left_horizontal
+                        right_ratio = right_vertical / right_horizontal
+                        
+                        # Track ratio history to detect vertical head movements
+                        ratio_avg = (left_ratio + right_ratio) / 2.0
+                        
+                        # Add to history for stability check
+                        if not hasattr(self, 'ratio_history'):
+                            self.ratio_history = []
+                            
+                        self.ratio_history.append(ratio_avg)
+                        if len(self.ratio_history) > 10:
+                            self.ratio_history.pop(0)
+                        
+                        # Calculate variability in ratios - high variation indicates vertical head movement
+                        ratio_std = np.std(self.ratio_history) if len(self.ratio_history) > 3 else 0
+                        vertical_movement = ratio_std > 0.03  # Threshold for vertical head movement
+                        
+                        # Check for blink pattern - need stable EAR history
                         if len(ear_history) >= 5:
+                            # EAR stability check to prevent false positives while still
+                            recent_ear_std = np.std(ear_history[-5:])
+                            ear_stable = recent_ear_std < 0.01  # Very small variation when truly stable
+                            
                             # Check if current EAR is below threshold - indicates closed eyes
                             if ear < adaptive_threshold:
                                 ear_thresh_counter += 1
@@ -626,36 +659,45 @@ class CameraSystem:
                             else:
                                 # Eyes are open now, if they were closed before, check if it was a blink
                                 if ear_thresh_counter >= self.EAR_CONSEC_FRAMES:
-                                    # Check for more evidence during high motion to avoid false positives
-                                    if in_motion:
-                                        # Get recent EAR values
-                                        recent_ear = ear_history[-5:]
+                                    # Get recent EAR values for pattern analysis
+                                    recent_ear = ear_history[-5:]
+                                    
+                                    # Calculate pattern metrics
+                                    ear_drop = max(recent_ear[:2]) - min(recent_ear[2:3])
+                                    ear_rise = max(recent_ear[4:]) - min(recent_ear[2:3])
+                                    
+                                    # Conditions for a valid blink:
+                                    valid_blink = False
+                                    
+                                    # 1. If no motion and stable EAR - easy to detect blinks
+                                    if not in_motion and not vertical_movement and ear_stable:
+                                        valid_blink = ear_drop > 0.02  # Minimal drop for still position
                                         
-                                        # Calculate drop and rise in EAR (clear blink pattern)
-                                        ear_drop = max(recent_ear[:2]) - min(recent_ear[2:3])
-                                        ear_rise = max(recent_ear[4:]) - min(recent_ear[2:3])
-                                        
-                                        # During motion: only count clear blink patterns
-                                        if ear_drop > 0.05 and ear_rise > 0.05:
-                                            blink_counter += 1
-                                    else:
-                                        # When head is stable: more sensitive detection
+                                    # 2. During motion - need strong evidence
+                                    elif in_motion or vertical_movement:
+                                        # During motion, check for clearer blink pattern with both drop and rise
+                                        valid_blink = (ear_drop > 0.05 and ear_rise > 0.05)
+                                    
+                                    # Count blink if valid
+                                    if valid_blink:
                                         blink_counter += 1
                                 
                                 # Reset counter after eyes reopen
                                 ear_thresh_counter = 0
+                            
+                            # Display vertical movement status
+                            if vertical_movement:
+                                cv2.putText(display_frame, "Vertical Head Motion", (10, display_frame.shape[0] - 60),
+                                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
             
-            # Check if we've detected a blink
-            if blink_counter > 0:
-                blink_detected = True
-            
-            # Display EAR value and blink count
-            cv2.putText(display_frame, f"EAR: {ear:.2f}", (10, 30),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-            cv2.putText(display_frame, f"Thresh: {adaptive_threshold:.2f}", (display_frame.shape[1] - 190, 30),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
-            cv2.putText(display_frame, f"Blinks: {blink_counter}", (10, 60),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+            # Display EAR value and blink count - only if face was detected
+            if last_face_location is not None and last_landmarks is not None:
+                cv2.putText(display_frame, f"EAR: {ear:.2f}", (10, 30),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                cv2.putText(display_frame, f"Thresh: {adaptive_threshold:.2f}", (display_frame.shape[1] - 190, 30),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
+                cv2.putText(display_frame, f"Blinks: {blink_counter}", (10, 60),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
             
             # Display time remaining
             time_left = int(actual_timeout - (time.time() - start_time))
@@ -678,7 +720,8 @@ class CameraSystem:
                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
             
             # Display instructions
-            if blink_detected:
+            if blink_counter > 0:
+                blink_detected = True
                 status = f"Blink detected! ({blink_counter} blinks) - Continuing for testing"
                 color = (0, 255, 0)
             else:
