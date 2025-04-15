@@ -423,6 +423,11 @@ class CameraSystem:
         motion_history_max = 5
         high_motion_detected = False
         
+        # Stillness tracking - only process blinks when still
+        stillness_frames_required = 10  # Need this many consecutive still frames
+        stillness_counter = 0
+        is_still_enough = False
+        
         # EAR history for detecting real blink patterns
         ear_history = []
         ear_history_max = 10
@@ -475,7 +480,19 @@ class CameraSystem:
                 # Detect high motion if average motion exceeds threshold
                 if len(motion_history) > 2:
                     avg_motion = sum(motion_history) / len(motion_history)
-                    high_motion_detected = avg_motion > 0.015  # Even more sensitive motion detection
+                    # Super strict threshold - almost no movement allowed
+                    high_motion_detected = avg_motion > 0.005  
+                    
+                    # Track stillness
+                    if high_motion_detected:
+                        # Reset stillness counter if motion detected
+                        stillness_counter = 0
+                        is_still_enough = False
+                    else:
+                        # Increment stillness counter
+                        stillness_counter += 1
+                        # Check if we've been still long enough
+                        is_still_enough = stillness_counter >= stillness_frames_required
             
             # Store current frame for next iteration
             previous_frame = frame.copy()
@@ -624,8 +641,11 @@ class CameraSystem:
                             eye_hull = cv2.convexHull(np.array(eye))
                             cv2.drawContours(display_frame, [eye_hull], -1, (0, 255, 0), 1)
                         
+                        # Only process blinks if we're very still
+                        process_blink = is_still_enough
+                        
                         # Check for blink pattern - need stable EAR history
-                        if len(ear_history) >= 3:
+                        if len(ear_history) >= 3 and process_blink:
                             # Check if current EAR is below threshold - indicates closed eyes
                             if ear < adaptive_threshold:
                                 ear_thresh_counter += 1
@@ -636,9 +656,17 @@ class CameraSystem:
                             else:
                                 # Eyes are open now, if they were closed before, check if it was a blink
                                 if ear_thresh_counter >= self.EAR_CONSEC_FRAMES:
-                                    # Simpler blink detection - just check if we were below threshold
-                                    blink_counter += 1
-                                    print(f"Blink detected! EAR: {ear:.3f}, Threshold: {adaptive_threshold:.3f}")
+                                    # Check if the EAR change is natural (photos will have unnatural changes)
+                                    if len(ear_history) >= 5:
+                                        # Calculate the EAR slope - needs to change gradually for real blinks
+                                        ear_diff = abs(ear_history[-1] - ear_history[-3])
+                                        ear_diff2 = abs(ear_history[-3] - ear_history[-5])
+                                        natural_blink = (ear_diff > 0.01 and ear_diff2 > 0.005)
+                                        
+                                        if natural_blink:
+                                            # Simpler blink detection - just check if we were below threshold
+                                            blink_counter += 1
+                                            print(f"Blink detected! EAR: {ear:.3f}, Threshold: {adaptive_threshold:.3f}")
                                 
                                 # Reset counter after eyes reopen
                                 ear_thresh_counter = 0
@@ -703,6 +731,12 @@ class CameraSystem:
                     color = (0, 0, 255)
                 cv2.putText(display_frame, status, (10, 120),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+                
+                # Display stillness status
+                stillness_status = f"Stillness: {stillness_counter}/{stillness_frames_required}"
+                stillness_color = (0, 255, 0) if is_still_enough else (0, 0, 255)
+                cv2.putText(display_frame, stillness_status, (display_frame.shape[1] - 120, 120),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, stillness_color, 1)
                 
                 cv2.putText(display_frame, "ESC: Cancel", (10, display_frame.shape[0] - 20),
                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
