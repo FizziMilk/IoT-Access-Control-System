@@ -406,6 +406,11 @@ class CameraSystem:
         self.process_nth_frame = 6 if tracker is not None else 2
         print(f"Processing every {self.process_nth_frame}th frame for detection")
         
+        # Position smoothing to reduce jitter
+        # Keep a history of recent face positions for smoothing
+        position_history = []
+        position_history_max = 3  # Number of positions to keep for smoothing
+        
         # Increase timeout slightly to allow for adaptation
         actual_timeout = timeout + 0.5
         
@@ -434,6 +439,9 @@ class CameraSystem:
             process_this_frame = (frame_count % self.process_nth_frame == 0)
             frame_count += 1
             
+            # Current face box (to be determined in this frame)
+            current_face_box = None
+            
             # Try to update tracker if active
             if tracker is not None and tracking_active:
                 try:
@@ -442,7 +450,7 @@ class CameraSystem:
                         # Convert from (x, y, width, height) to (top, right, bottom, left)
                         x, y, w, h = [int(v) for v in bbox]
                         left, top, right, bottom = x, y, x + w, y + h
-                        last_face_location = (top, right, bottom, left)
+                        current_face_box = (top, right, bottom, left)
                     else:
                         # If tracking failed, force detection on next frame
                         tracking_active = False
@@ -469,7 +477,7 @@ class CameraSystem:
                     bottom = int(bottom / downsample)
                     left = int(left / downsample)
                     
-                    last_face_location = (top, right, bottom, left)
+                    current_face_box = (top, right, bottom, left)
                     
                     # Initialize tracker if available and not active
                     if tracker is not None and not tracking_active:
@@ -496,7 +504,28 @@ class CameraSystem:
                         
                         last_landmarks = scaled_landmarks
             
-            # Use the last detected face and landmarks for processing (even in frames we didn't run detection)
+            # Apply position smoothing if we have a new face position
+            if current_face_box is not None:
+                # Add current position to history
+                position_history.append(current_face_box)
+                # Keep history at max length
+                if len(position_history) > position_history_max:
+                    position_history.pop(0)
+                
+                # Calculate smoothed position
+                if len(position_history) > 1:
+                    # Simple averaging for smoother transitions
+                    smoothed_top = sum(pos[0] for pos in position_history) // len(position_history)
+                    smoothed_right = sum(pos[1] for pos in position_history) // len(position_history)
+                    smoothed_bottom = sum(pos[2] for pos in position_history) // len(position_history)
+                    smoothed_left = sum(pos[3] for pos in position_history) // len(position_history)
+                    
+                    last_face_location = (smoothed_top, smoothed_right, smoothed_bottom, smoothed_left)
+                else:
+                    # If only one position, use it directly
+                    last_face_location = current_face_box
+            
+            # Use the last detected face and landmarks for processing
             if last_face_location is not None:
                 top, right, bottom, left = last_face_location
                 
