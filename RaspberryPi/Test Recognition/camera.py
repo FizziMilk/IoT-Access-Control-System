@@ -8,7 +8,6 @@ import threading
 import traceback
 import logging
 import os
-import feature
 from sklearn.metrics.pairwise import euclidean_distances
 from skimage import feature as skimage_feature
 
