@@ -20,8 +20,8 @@ class CameraSystem:
         self.EAR_THRESHOLD = 0.20  # Higher threshold makes it harder to detect blinks
         # Number of consecutive frames the eye must be below threshold to count as a blink
         self.EAR_CONSEC_FRAMES = 1  # Detect blinks in a single frame
-        # Use a much lower resolution for liveness detection
-        self.liveness_resolution = (320, 240)
+        # Use higher resolution for liveness detection for better eye landmark detection
+        self.liveness_resolution = (640, 480)
         # Frame process rate (1 = process every frame, 2 = every other frame, etc.)
         self.process_nth_frame = 3
         # Use a separate thread for face detection to prevent UI blocking
