@@ -29,6 +29,9 @@ class CameraSystem:
         self.stop_detection_thread = False
         # Flag to track if liveness passed has been logged
         self.has_logged_liveness_passed = False
+        # Autofocus liveness detection
+        self.focus_check_passed = False
+        self.use_focus_check = True  # Enable focus-based liveness detection
     
     def capture_face(self):
         """Capture an image from the camera with face detection"""
@@ -354,6 +357,141 @@ class CameraSystem:
             print("Traceback:", traceback.format_exc())
             return None
     
+    def perform_focus_liveness_check(self, cap, face_location):
+        """
+        Use autofocus manipulation to detect if a face is real or a flat image.
+        
+        Args:
+            cap: OpenCV video capture
+            face_location: Detected face coordinates (top, right, bottom, left)
+            
+        Returns:
+            bool: True if the face is likely real, False if possibly a photo
+        """
+        if not self.use_focus_check:
+            return True
+            
+        print("Performing focus-based liveness check...")
+        
+        # Store current focus settings to restore later
+        current_focus_auto = cap.get(cv2.CAP_PROP_AUTOFOCUS)
+        current_focus_abs = cap.get(cv2.CAP_PROP_FOCUS)
+        
+        # Disable autofocus for manual control
+        cap.set(cv2.CAP_PROP_AUTOFOCUS, 0)
+        
+        # Extract face region for analysis
+        top, right, bottom, left = face_location
+        face_height = bottom - top
+        
+        # Define focus test points (forehead and chin - different depths on real face)
+        forehead_y = top + int(face_height * 0.2)
+        chin_y = bottom - int(face_height * 0.2)
+        center_x = left + int((right - left) / 2)
+        
+        # Points to analyze
+        forehead_point = (center_x, forehead_y)
+        chin_point = (center_x, chin_y)
+        
+        # Test different focus levels
+        focus_levels = [0, 100, 255]  # Min, mid, max focus values
+        clarity_differences = []
+        
+        try:
+            for focus in focus_levels:
+                # Set focus
+                cap.set(cv2.CAP_PROP_FOCUS, focus)
+                # Allow focus to adjust
+                time.sleep(0.3)
+                
+                # Capture frame with this focus
+                ret, frame = cap.read()
+                if not ret:
+                    continue
+                
+                # Convert to grayscale for clarity analysis
+                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                
+                # Calculate local clarity at test points (using Laplacian variance)
+                forehead_clarity = self.calculate_clarity(gray, forehead_point)
+                chin_clarity = self.calculate_clarity(gray, chin_point)
+                
+                # Calculate relative clarity difference between points
+                relative_diff = abs(forehead_clarity - chin_clarity) / max(forehead_clarity, chin_clarity)
+                clarity_differences.append(relative_diff)
+                
+                # Display focus test in progress
+                cv2.circle(frame, forehead_point, 5, (0, 255, 0), -1)
+                cv2.circle(frame, chin_point, 5, (0, 0, 255), -1)
+                cv2.putText(frame, f"Focus: {focus}, Diff: {relative_diff:.3f}", 
+                           (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+                cv2.imshow("Focus Test", frame)
+                cv2.waitKey(1)
+                
+            # Analyze results
+            # Real faces show varying clarity differences across focus settings
+            # Flat images will have very similar differences
+            
+            # Calculate variance in clarity differences
+            variance = np.var(clarity_differences)
+            
+            # Higher variance indicates depth variation (real face)
+            is_real_face = variance > 0.001
+            
+            # Log and display result
+            print(f"Focus check variance: {variance:.6f} - {'REAL FACE' if is_real_face else 'POSSIBLE SPOOF'}")
+            
+            # Capture final result for display
+            ret, frame = cap.read()
+            if ret:
+                result_text = f"PASS: Real Face" if is_real_face else "FAIL: Possible Spoof"
+                color = (0, 255, 0) if is_real_face else (0, 0, 255)
+                cv2.putText(frame, result_text, (center_x - 100, top - 10),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+                cv2.imshow("Focus Test Result", frame)
+                cv2.waitKey(500)
+            
+            return is_real_face
+            
+        finally:
+            # Restore original camera settings
+            cap.set(cv2.CAP_PROP_AUTOFOCUS, current_focus_auto)
+            cap.set(cv2.CAP_PROP_FOCUS, current_focus_abs)
+    
+    def calculate_clarity(self, gray_img, point, region_size=20):
+        """
+        Calculate image clarity (sharpness) in a region around a point.
+        Uses Laplacian variance as a measure of sharpness.
+        
+        Args:
+            gray_img: Grayscale image
+            point: (x, y) center of region to analyze
+            region_size: Size of square region to analyze
+            
+        Returns:
+            float: Clarity measure (higher = sharper)
+        """
+        x, y = point
+        h, w = gray_img.shape
+        
+        # Ensure region is within image bounds
+        left = max(0, x - region_size // 2)
+        top = max(0, y - region_size // 2)
+        right = min(w, x + region_size // 2)
+        bottom = min(h, y + region_size // 2)
+        
+        if right <= left or bottom <= top:
+            return 0.0
+            
+        # Extract region
+        region = gray_img[top:bottom, left:right]
+        
+        # Apply Laplacian filter (edge detection)
+        laplacian = cv2.Laplacian(region, cv2.CV_64F)
+        
+        # Return variance of the Laplacian
+        return laplacian.var()
+    
     def detect_blink(self, timeout=7):
         """
         Detect if a person is blinking (liveness check)
@@ -603,6 +741,16 @@ class CameraSystem:
                     if face_size > max_face_size:
                         max_face_size = face_size
                         best_face_image = frame.copy()
+                        
+                        # Perform focus-based liveness check when we have a good face
+                        # Only do this once per session to avoid slowing down the process
+                        if not self.focus_check_passed and face_size > 10000:  # Large enough face
+                            self.focus_check_passed = self.perform_focus_liveness_check(cap, current_face_box)
+                            
+                            # If focus check failed, reset blink counter as additional security
+                            if not self.focus_check_passed:
+                                blink_counter = 0
+                                print("Focus check failed, resetting blink counter")
                 
                 # Process landmarks if available
                 if last_landmarks is not None and process_blink_this_frame:
@@ -707,10 +855,12 @@ class CameraSystem:
                         cv2.putText(display_frame, "HIGH MOTION DETECTED", 
                                     (20, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 0, 255), 2)
 
-                # Save the best face image when a blink is detected
-                if blink_detected and best_face_image is None and max_face_size > 0:
-                    best_face_image = frame.copy()
-                
+                # Display focus check status
+                focus_status = "Focus Check: PASSED" if self.focus_check_passed else "Focus Check: PENDING"
+                focus_color = (0, 255, 0) if self.focus_check_passed else (0, 165, 255)
+                cv2.putText(display_frame, focus_status, (10, display_frame.shape[0] - 40),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, focus_color, 1)
+
                 # Display time remaining
                 time_left = int(actual_timeout - (time.time() - start_time))
                 cv2.putText(display_frame, f"Time: {time_left}s", (10, 90),
