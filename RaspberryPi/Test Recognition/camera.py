@@ -8,8 +8,6 @@ import threading
 import traceback
 import logging
 import os
-import math
-from imutils import face_utils
 
 # Set up logger
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -390,13 +388,9 @@ class CameraSystem:
             original_autofocus = cap.get(cv2.CAP_PROP_AUTOFOCUS)
             original_focus = cap.get(cv2.CAP_PROP_FOCUS)
             
-            # Save current cap to self.cap for the texture check
-            self.cap = cap
-            self.current_face_location = face_location
-            
             # Run enhanced liveness checks
             focus_result = self.check_focus_depth(cap, face_location)
-            texture_result, texture_confidence = self.check_facial_texture()
+            texture_result = self.check_facial_texture(cap, face_location)
             
             # Combine results - require both checks to pass for real face
             is_real_face = focus_result and texture_result
@@ -425,7 +419,7 @@ class CameraSystem:
                 # Show texture test result
                 texture_status = "PASS" if texture_result else "FAIL"
                 texture_color = (0, 255, 0) if texture_result else (0, 0, 255)
-                cv2.putText(summary_frame, f"Texture Test: {texture_status} ({int(texture_confidence*100)}%)", (20, 180),
+                cv2.putText(summary_frame, f"Texture Test: {texture_status}", (20, 180),
                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, texture_color, 2)
                 
                 # Add instruction to press any key to continue
@@ -456,44 +450,37 @@ class CameraSystem:
     def check_focus_depth(self, cap, face_location):
         """
         Check if the face has proper 3D depth based on focus changes.
-        Returns:
-            tuple: (is_real_face, confidence_score)
         """
+        # Get our original focus test logic but in a separate function
         try:
             # Extract face region for analysis
             top, right, bottom, left = face_location
             face_height = bottom - top
-            face_width = right - left
             
-            print(f"Face dimensions for focus test: {face_width}x{face_height}")
-            
-            # Define focus test points with better separation
+            # Define focus test points - try different regions
             # Use eye region vs nose region (should have different depths)
-            eye_y = top + int(face_height * 0.25)  # Higher on face
-            nose_y = top + int(face_height * 0.55)  # Lower on face - increased separation
+            eye_y = top + int(face_height * 0.3)
+            nose_y = top + int(face_height * 0.5)
             center_x = left + int((right - left) / 2)
             
             # Points to analyze - ensure all coordinates are integers
             eye_point = (int(center_x), int(eye_y))
             nose_point = (int(center_x), int(nose_y))
             
-            # Add background point with better separation
+            # Add background point for comparison - ensure all values are integers
             frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-            bg_offset = int(max(100, face_width * 0.75))  # Ensure more distance from face
-            bg_x = max(30, left - bg_offset)  # Point far to the left of face
-            if bg_x < 30:  # If face too close to left edge, use right side
-                bg_x = min(frame_width - 30, right + bg_offset)
+            bg_x = max(0, left - int((right - left) * 0.5))  # Point to the left of face
+            if bg_x < 20:  # If face too close to left edge, use right side
+                bg_x = min(frame_width - 20, right + int((right - left) * 0.5))
             bg_point = (int(bg_x), int(eye_y))
             
-            print(f"Focus test points: Eye={eye_point}, Nose={nose_point}, Background={bg_point}")
-            
-            # Test with more extreme focus levels
-            focus_levels = [0, 100, 250]  # More distributed focus values
+            # Test more extreme focus levels with longer adjustment time
+            focus_levels = [0, 125, 250]  # Min, mid, max focus values
             clarity_values = []
             
             # Disable autofocus for manual control - be more aggressive
             cap.set(cv2.CAP_PROP_AUTOFOCUS, 0)
-            time.sleep(1.0)  # Give more time for autofocus to turn off
+            time.sleep(0.5)  # Give time for autofocus to turn off
             
             # Store diagnostic images
             diagnostic_images = []
@@ -504,26 +491,21 @@ class CameraSystem:
                 cap.set(cv2.CAP_PROP_FOCUS, focus)
                 
                 # Give more time for focus to adjust
-                time.sleep(1.5)  # Increased from 1.0 to 1.5
+                time.sleep(1.0)
                 
                 # Verify focus actually changed
                 current_focus = cap.get(cv2.CAP_PROP_FOCUS)
-                print(f"Actual focus: {current_focus}")
                 
-                # Capture multiple frames and use the last one to allow focus to stabilize
-                frames = []
-                for _ in range(7):  # Increased from 5 to 7
+                # Capture multiple frames and use the last one
+                for _ in range(5):
                     ret, frame = cap.read()
-                    if ret:
-                        frames.append(frame)
-                    time.sleep(0.2)  # Increased time between frames
+                    time.sleep(0.1)
+                    if not ret:
+                        break
                 
-                if not frames:
-                    print("Failed to capture frames")
+                if not ret:
+                    print("Failed to capture frame")
                     continue
-                
-                # Use last captured frame
-                frame = frames[-1]
                 
                 # Convert to grayscale for clarity analysis
                 gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -532,8 +514,6 @@ class CameraSystem:
                 eye_clarity = self.calculate_clarity(gray, eye_point, region_size=30)
                 nose_clarity = self.calculate_clarity(gray, nose_point, region_size=30)
                 bg_clarity = self.calculate_clarity(gray, bg_point, region_size=30)
-                
-                print(f"Clarity values - Eye: {eye_clarity:.2f}, Nose: {nose_clarity:.2f}, BG: {bg_clarity:.2f}")
                 
                 # Store values for analysis
                 clarity_values.append((focus, eye_clarity, nose_clarity, bg_clarity))
@@ -556,16 +536,6 @@ class CameraSystem:
                              (bg_point[0]+region_size//2, bg_point[1]+region_size//2),
                              (255, 0, 0), 2)
                 
-                # Add clarity values to the image
-                cv2.putText(debug_frame, f"Eye: {eye_clarity:.2f}", (20, 30), 
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
-                cv2.putText(debug_frame, f"Nose: {nose_clarity:.2f}", (20, 60), 
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
-                cv2.putText(debug_frame, f"BG: {bg_clarity:.2f}", (20, 90), 
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 0), 2)
-                cv2.putText(debug_frame, f"Focus: {focus} (actual: {current_focus:.1f})", (20, 120), 
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
-                
                 # Store debug frame
                 diagnostic_images.append(debug_frame.copy())
                 
@@ -579,36 +549,20 @@ class CameraSystem:
             # Calculate differences in how regions respond to focus
             if len(clarity_values) < 3:
                 print("Not enough clarity values to analyze")
-                return False, 0.0
+                return False
                 
-            # Check if focus changes had any significant effect (to detect if focus control is working)
-            eye_clarity_values = [c[1] for c in clarity_values]
-            nose_clarity_values = [c[2] for c in clarity_values]
-            bg_clarity_values = [c[3] for c in clarity_values]
+            eye_nose_correlation = np.corrcoef(
+                [c[1] for c in clarity_values], 
+                [c[2] for c in clarity_values]
+            )[0, 1]
             
-            # Calculate range of clarity values
-            eye_range = max(eye_clarity_values) - min(eye_clarity_values)
-            nose_range = max(nose_clarity_values) - min(nose_clarity_values)
-            bg_range = max(bg_clarity_values) - min(bg_clarity_values)
+            eye_bg_correlation = np.corrcoef(
+                [c[1] for c in clarity_values], 
+                [c[3] for c in clarity_values]
+            )[0, 1]
             
-            print(f"Clarity ranges - Eye: {eye_range:.2f}, Nose: {nose_range:.2f}, BG: {bg_range:.2f}")
-            
-            # If no region shows significant focus change, the test won't work
-            if max(eye_range, nose_range, bg_range) < 5.0:
-                print("WARNING: Focus changes had minimal effect on image clarity")
-                print("Focus control might not be working properly")
-                return True, 0.3  # Default to allow with low confidence
-                
-            # Calculate correlations
-            eye_nose_correlation = np.corrcoef(eye_clarity_values, nose_clarity_values)[0, 1]
-            eye_bg_correlation = np.corrcoef(eye_clarity_values, bg_clarity_values)[0, 1]
-            nose_bg_correlation = np.corrcoef(nose_clarity_values, bg_clarity_values)[0, 1]
-            
-            print(f"\nCorrelation - Eye-Nose: {eye_nose_correlation:.3f}, Eye-BG: {eye_bg_correlation:.3f}, Nose-BG: {nose_bg_correlation:.3f}")
-            
-            # Calculate differences between correlations
-            eye_nose_bg_diff = abs(eye_nose_correlation - eye_bg_correlation)
-            print(f"Eye-Nose vs Eye-BG difference: {eye_nose_bg_diff:.3f}")
+            print(f"\nCorrelation - Eye-Nose: {eye_nose_correlation:.3f}, Eye-BG: {eye_bg_correlation:.3f}")
+            print(f"Difference: {abs(eye_nose_correlation - eye_bg_correlation):.3f}")
             
             # Create a collage of all test images
             if len(diagnostic_images) >= 3:
@@ -622,432 +576,133 @@ class CameraSystem:
                 cv2.imshow("Focus Test Collage", display_collage)
                 cv2.imwrite("focus_test_collage.jpg", collage)
             
-            # Create summary image with results
-            summary_frame = diagnostic_images[-1].copy()
+            # Stricter criteria:
+            # 1. The difference between eye-nose and eye-bg correlations must be significant (> 0.3)
+            # 2. AND the correlations should NOT both be highly positive (indicates photo)
+            correlation_diff = abs(eye_nose_correlation - eye_bg_correlation)
+            both_positive = eye_nose_correlation > 0.8 and eye_bg_correlation > 0.8
             
-            # Adjusted criteria with reduced threshold for real-world conditions
-            # 1. The face is in focus (at least one focus setting has good clarity)
-            # 2. There should be some measurable difference in correlations
-            correlation_diff = max(
-                abs(eye_nose_correlation - eye_bg_correlation),
-                abs(nose_bg_correlation - eye_bg_correlation)
-            )
-            both_highly_positive = (
-                eye_nose_correlation > 0.95 and 
-                eye_bg_correlation > 0.95 and
-                nose_bg_correlation > 0.95
-            )
-            
-            # Real face passes if there's some difference in correlations or not all highly positive
-            is_real_face = correlation_diff > 0.1 or not both_highly_positive
-            
-            # Calculate confidence score (0.0-1.0)
-            confidence = 0.0
-            if is_real_face:
-                # Calculate confidence based on correlation difference (bigger difference = higher confidence)
-                diff_confidence = min(correlation_diff / 0.3, 1.0) * 0.7  # 0.3 is an ideal diff value
-                
-                # Add extra confidence if clarity ranges show good depth sensitivity
-                depth_sensitivity = max(eye_range, nose_range) / max(1.0, bg_range)
-                depth_confidence = min(depth_sensitivity / 2.0, 1.0) * 0.3
-                
-                confidence = diff_confidence + depth_confidence
-            else:
-                # If it's a photo, confidence is based on how close the correlations are
-                if both_highly_positive:
-                    confidence = 0.7 + 0.3 * min(1.0, (eye_nose_correlation + eye_bg_correlation + nose_bg_correlation) / 3.0 - 0.95) / 0.05
-                else:
-                    confidence = max(0.5, 1.0 - correlation_diff)
-                    
-                # Inverse the confidence since this indicates confidence it's NOT real
-                confidence = 1.0 - confidence
-            
-            # Add results to summary frame
-            result_text = "REAL FACE" if is_real_face else "POSSIBLE SPOOF"
-            result_color = (0, 255, 0) if is_real_face else (0, 0, 255)
-            cv2.putText(summary_frame, result_text, (20, 180), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.8, result_color, 2)
-            
-            cv2.putText(summary_frame, f"Eye-Nose Corr: {eye_nose_correlation:.3f}", (20, 210),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
-            cv2.putText(summary_frame, f"Eye-BG Corr: {eye_bg_correlation:.3f}", (20, 240),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
-            cv2.putText(summary_frame, f"Nose-BG Corr: {nose_bg_correlation:.3f}", (20, 270),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
-            cv2.putText(summary_frame, f"Difference: {correlation_diff:.3f}", (20, 300),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
-            cv2.putText(summary_frame, f"Confidence: {confidence:.2f}", (20, 330),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
-            
-            cv2.imshow("Focus Test Summary", summary_frame)
-            cv2.imwrite("focus_test_summary.jpg", summary_frame)
-            
-            return is_real_face
+            # Is this a real face based on focus test?
+            return correlation_diff > 0.3 and not both_positive
             
         except Exception as e:
             print(f"Error in focus depth check: {e}")
-            traceback.print_exc()
             return False
     
-    def check_facial_texture(self):
+    def check_facial_texture(self, cap, face_location):
         """
-        Perform facial texture analysis to detect if face is real or a photo
-        Returns:
-            tuple: (is_real_face, confidence_score)
+        Check for natural skin textures that are difficult to reproduce in photos.
         """
-        print("\n--- Starting Facial Texture Analysis ---")
-        
-        # Initialize face detector and shape predictor if not already done
-        if not hasattr(self, 'face_detector'):
-            self.face_detector = dlib.get_frontal_face_detector()
-        if not hasattr(self, 'shape_predictor'):
-            model_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 
-                                      "shape_predictor_68_face_landmarks.dat")
-            if not os.path.exists(model_path):
-                print(f"ERROR: Could not find shape predictor model at {model_path}")
-                return False, 0.0
-            self.shape_predictor = dlib.shape_predictor(model_path)
-        
-        # If this was called from perform_focus_liveness_check, use the saved cap and face_location
-        use_existing_face = hasattr(self, 'current_face_location') and self.current_face_location is not None
-        
-        # Save current camera settings
-        if not hasattr(self, 'cap') or self.cap is None:
-            # If no camera object available, create one
-            self.cap = cv2.VideoCapture(self.camera_id)
-            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.resolution[0])
-            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.resolution[1])
-        
-        original_resolution = self.cap.get(cv2.CAP_PROP_FRAME_WIDTH), self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
-        print(f"Original resolution: {original_resolution}")
-        
-        # Set to higher resolution for better texture analysis
-        target_resolution = (1920, 1080)
         try:
-            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, target_resolution[0])
-            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, target_resolution[1])
-            current_res = (self.cap.get(cv2.CAP_PROP_FRAME_WIDTH), self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-            print(f"Camera set to: {current_res}")
-        except Exception as e:
-            print(f"Failed to set resolution: {str(e)}")
-        
-        # Calculate resolution scale factor compared to 720p reference
-        # This is used to adjust thresholds based on the actual resolution
-        reference_res = 1280 * 720
-        actual_res = self.cap.get(cv2.CAP_PROP_FRAME_WIDTH) * self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
-        scale_factor = math.sqrt(actual_res / reference_res)
-        print(f"Resolution scale factor: {scale_factor:.2f}")
-        
-        # Number of frames to analyze for texture
-        num_frames = 3
-        frames = []
-        
-        # Prepare threshold values for different metrics
-        # These baseline values work well at 720p resolution
-        # Real skin typically has moderate gradients and high-frequency details
-        # Photos may be very smooth or have sharp, artificial gradients
-        
-        # Baseline thresholds for 720p resolution
-        gradient_min_threshold = 15  # Minimum average gradient (was 20)
-        gradient_max_threshold = 180  # Maximum average gradient (was 150)
-        std_min_threshold = 10       # Minimum standard deviation (was 15)
-        std_max_threshold = 120      # Maximum standard deviation (was 100)
-        detail_energy_threshold = 0.45  # Minimum high-frequency energy (was 0.6)
-        
-        # Scale thresholds based on resolution
-        # Linear scaling for gradient and std thresholds
-        gradient_min_threshold *= scale_factor * 0.65  # Reduce scaling impact
-        gradient_max_threshold *= scale_factor * 0.65  # Reduce scaling impact
-        std_min_threshold *= scale_factor * 0.65       # Reduce scaling impact
-        std_max_threshold *= scale_factor * 0.65       # Reduce scaling impact
-        
-        # Energy threshold doesn't scale linearly with resolution
-        # For higher resolution, we need a lower threshold since we have more detail
-        detail_energy_threshold /= (scale_factor * 0.5)
-        
-        print(f"Adjusted thresholds for current resolution:")
-        print(f"  Gradient range: {gradient_min_threshold:.2f}-{gradient_max_threshold:.2f}")
-        print(f"  Std dev range: {std_min_threshold:.2f}-{std_max_threshold:.2f}")
-        print(f"  Detail energy threshold: {detail_energy_threshold:.2f}")
-        
-        # If we have a pre-existing face location, use it to create a dlib rectangle
-        face_rect = None
-        if use_existing_face:
-            top, right, bottom, left = self.current_face_location
-            face_rect = dlib.rectangle(left, top, right, bottom)
+            # Capture a high-quality frame
+            # Set to highest resolution
+            original_width = cap.get(cv2.CAP_PROP_FRAME_WIDTH)
+            original_height = cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
             
-            # Capture just one frame since we already have a face location
-            ret, frame = self.cap.read()
-            if ret:
-                frames.append(frame)
-        else:
-            # Capture frames for analysis
-            for i in range(num_frames):
-                print(f"Capturing frame {i+1}/{num_frames}...")
-                ret, frame = self.cap.read()
-                if not ret:
-                    print("Failed to capture frame")
-                    continue
-                frames.append(frame)
-        
-        if len(frames) == 0:
-            print("No frames captured for texture analysis")
-            # Restore original camera settings
-            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, original_resolution[0])
-            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, original_resolution[1])
-            return False, 0.0
-        
-        # Create diagnostic image
-        diagnostic_img = frames[0].copy()
-        
-        # Save a copy of the high-res image
-        cv2.imwrite("highres_texture_check.jpg", diagnostic_img)
-        
-        # Initialize texture metrics
-        gradient_averages = []
-        std_averages = []
-        detail_energy_averages = []
-        
-        # Store ROIs for visualization
-        roi_regions = []
-        
-        # Process each frame
-        for frame_idx, frame in enumerate(frames):
+            # Temporarily increase resolution if possible
+            try:
+                cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
+                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
+            except:
+                pass  # If resolution change fails, continue with current resolution
+                
+            ret, frame = cap.read()
+            if not ret:
+                print("Failed to capture frame for texture analysis")
+                return True  # Default to pass if we can't capture a frame
+                
+            # Extract face details
+            top, right, bottom, left = face_location
+            face_width = right - left
+            face_height = bottom - top
+            
+            # Only analyze faces that are large enough for meaningful texture analysis
+            min_face_size = 120  # Minimum dimensions in pixels
+            if face_width < min_face_size or face_height < min_face_size:
+                print(f"Face too small for reliable texture analysis: {face_width}x{face_height}")
+                return True  # Default to pass for small faces
+            
             # Convert to grayscale for texture analysis
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             
-            # Use existing face location or detect faces
-            if face_rect is not None:
-                faces = [face_rect]
-            else:
-                # Detect faces
-                faces = self.face_detector(gray)
-                
-            if len(faces) == 0:
-                print(f"No face detected in frame {frame_idx+1}")
-                continue
+            # Extract the cheek region (usually has good skin texture)
+            cheek_x = left + int(face_width * 0.7)  # Right cheek
+            cheek_y = top + int(face_height * 0.5)  # Middle of face
+            cheek_size = int(min(face_width, face_height) * 0.15)  # Proportional to face size
             
-            # Get largest face
-            largest_face = max(faces, key=lambda rect: rect.width() * rect.height())
+            # Ensure region is within image bounds
+            x1 = max(0, cheek_x - cheek_size // 2)
+            y1 = max(0, cheek_y - cheek_size // 2)
+            x2 = min(frame.shape[1] - 1, cheek_x + cheek_size // 2)
+            y2 = min(frame.shape[0] - 1, cheek_y + cheek_size // 2)
             
-            # Get facial landmarks
-            shape = self.shape_predictor(gray, largest_face)
-            landmarks = face_utils.shape_to_np(shape)
+            # Extract cheek region
+            cheek = gray[y1:y2, x1:x2]
             
-            # Define regions to analyze (forehead, left cheek, right cheek, chin)
-            face_width = largest_face.width()
-            face_height = largest_face.height()
+            # Basic texture metrics
+            # 1. Local Binary Pattern (simplified)
+            # 2. Gradient magnitude analysis
             
-            # Print face size for diagnostics
-            print(f"Face size: {face_width}x{face_height} pixels")
+            # Calculate gradient magnitudes (Sobel operator)
+            sobelx = cv2.Sobel(cheek, cv2.CV_64F, 1, 0, ksize=3)
+            sobely = cv2.Sobel(cheek, cv2.CV_64F, 0, 1, ksize=3)
+            gradient_magnitude = np.sqrt(sobelx**2 + sobely**2)
             
-            # Calculate forehead region (above eyes)
-            left_eye_avg = np.mean(landmarks[36:42], axis=0).astype(int)
-            right_eye_avg = np.mean(landmarks[42:48], axis=0).astype(int)
-            eye_y = min(left_eye_avg[1], right_eye_avg[1])
-            forehead_y = max(eye_y - int(face_height * 0.15), largest_face.top())
-            forehead_h = eye_y - forehead_y
-            forehead_roi = (
-                largest_face.left() + int(face_width * 0.25), 
-                forehead_y,
-                int(face_width * 0.5), 
-                forehead_h
+            # Calculate texture statistics
+            mean_gradient = np.mean(gradient_magnitude)
+            std_gradient = np.std(gradient_magnitude)
+            
+            # Apply a high-pass filter to capture fine details
+            blurred = cv2.GaussianBlur(cheek, (5, 5), 0)
+            high_freq = cheek.astype(np.float32) - blurred.astype(np.float32)
+            high_freq_energy = np.sum(high_freq**2) / (cheek_size**2)
+            
+            # Display texture analysis
+            # Create a debug visualization
+            debug_texture = frame.copy()
+            cv2.rectangle(debug_texture, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            cv2.putText(debug_texture, f"Gradient: {mean_gradient:.2f}", (10, 30), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+            cv2.putText(debug_texture, f"Std: {std_gradient:.2f}", (10, 60), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+            cv2.putText(debug_texture, f"Detail: {high_freq_energy:.2f}", (10, 90), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+            
+            # Show texture analysis image
+            cv2.imshow("Texture Analysis", debug_texture)
+            cv2.imwrite("texture_analysis.jpg", debug_texture)
+            
+            # Decision logic for texture analysis
+            # Real skin typically has:
+            # 1. Moderate gradient (not too smooth, not too sharp)
+            # 2. High frequency details (pores, fine lines)
+            # 3. Appropriate standard deviation
+            
+            # Photos often have:
+            # 1. Either very smooth gradients (poor quality prints) 
+            # 2. Or very sharp gradients (sharp edges, moiré patterns)
+            # 3. Lower high-frequency energy due to printing limitations
+            
+            # Thresholds determined experimentally
+            is_real_texture = (
+                mean_gradient > 5.0 and mean_gradient < 50.0 and  # Reasonable gradient range
+                std_gradient > 3.0 and std_gradient < 30.0 and    # Healthy variation
+                high_freq_energy > 10.0                           # Sufficient fine details
             )
             
-            # Get cheek regions
-            nose_tip = landmarks[33]
-            left_cheek_roi = (
-                largest_face.left() + int(face_width * 0.1),
-                nose_tip[1],
-                int(face_width * 0.25),
-                int(face_height * 0.2)
-            )
+            # Restore original resolution
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, original_width)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, original_height)
             
-            right_cheek_roi = (
-                nose_tip[0] + int(face_width * 0.15),
-                nose_tip[1],
-                int(face_width * 0.25),
-                int(face_height * 0.2)
-            )
+            print(f"Texture analysis - Mean gradient: {mean_gradient:.2f}, Std: {std_gradient:.2f}, Detail: {high_freq_energy:.2f}")
+            print(f"Texture check result: {'PASS' if is_real_texture else 'FAIL'}")
             
-            # Get chin region
-            mouth_bottom = landmarks[57]
-            chin_roi = (
-                largest_face.left() + int(face_width * 0.33),
-                mouth_bottom[1],
-                int(face_width * 0.33),
-                int(face_height * 0.15)
-            )
+            return is_real_texture
             
-            # Store regions for the first frame for visualization
-            if frame_idx == 0:
-                roi_regions = [forehead_roi, left_cheek_roi, right_cheek_roi, chin_roi]
-                
-            # Analyze texture in each region
-            regions = [
-                ("Forehead", gray[forehead_roi[1]:forehead_roi[1]+forehead_roi[3], 
-                              forehead_roi[0]:forehead_roi[0]+forehead_roi[2]]),
-                ("Left Cheek", gray[left_cheek_roi[1]:left_cheek_roi[1]+left_cheek_roi[3], 
-                                 left_cheek_roi[0]:left_cheek_roi[0]+left_cheek_roi[2]]),
-                ("Right Cheek", gray[right_cheek_roi[1]:right_cheek_roi[1]+right_cheek_roi[3], 
-                                  right_cheek_roi[0]:right_cheek_roi[0]+right_cheek_roi[2]]),
-                ("Chin", gray[chin_roi[1]:chin_roi[1]+chin_roi[3], 
-                           chin_roi[0]:chin_roi[0]+chin_roi[2]])
-            ]
-            
-            # Process each facial region
-            frame_gradients = []
-            frame_stds = []
-            frame_energies = []
-            
-            for region_name, region_img in regions:
-                if region_img.size == 0:
-                    print(f"Warning: {region_name} region is empty")
-                    continue
-                
-                # Calculate gradient magnitude (Sobel)
-                sobelx = cv2.Sobel(region_img, cv2.CV_64F, 1, 0, ksize=3)
-                sobely = cv2.Sobel(region_img, cv2.CV_64F, 0, 1, ksize=3)
-                gradient_magnitude = np.sqrt(sobelx**2 + sobely**2)
-                avg_gradient = np.mean(gradient_magnitude)
-                
-                # Calculate standard deviation (local contrast)
-                std_dev = np.std(region_img.astype(float))
-                
-                # Calculate high-frequency energy using DCT
-                dct = cv2.dct(region_img.astype(float))
-                # Mask out low frequencies (keep top-right, bottom-left, bottom-right quadrants)
-                mask = np.ones(dct.shape, dtype=float)
-                mask[:dct.shape[0]//2, :dct.shape[1]//2] = 0  # Zero out top-left quadrant
-                masked_dct = dct * mask
-                # Energy ratio of high frequencies to total
-                total_energy = np.sum(dct**2)
-                high_freq_energy = np.sum(masked_dct**2)
-                energy_ratio = high_freq_energy / total_energy if total_energy > 0 else 0
-                
-                # Store metrics
-                frame_gradients.append(avg_gradient)
-                frame_stds.append(std_dev)
-                frame_energies.append(energy_ratio)
-                
-                if frame_idx == 0:  # Only print detailed region metrics for first frame
-                    print(f"{region_name}: Grad={avg_gradient:.2f}, Std={std_dev:.2f}, Energy={energy_ratio:.2f}")
-            
-            # Average the metrics across regions for this frame
-            if frame_gradients:
-                gradient_averages.append(np.mean(frame_gradients))
-                std_averages.append(np.mean(frame_stds))
-                detail_energy_averages.append(np.mean(frame_energies))
-        
-        # Clear the stored face location after processing
-        if hasattr(self, 'current_face_location'):
-            self.current_face_location = None
-            
-        # Restore original camera settings
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, original_resolution[0])
-        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, original_resolution[1])
-        
-        # Final results - average across frames
-        if not gradient_averages:
-            print("No valid texture measurements")
-            return False, 0.0
-        
-        avg_gradient = np.mean(gradient_averages)
-        avg_std = np.mean(std_averages)
-        avg_energy = np.mean(detail_energy_averages)
-        
-        print("\nFinal texture metrics:")
-        print(f"Average gradient: {avg_gradient:.2f}")
-        print(f"Average std: {avg_std:.2f}")
-        print(f"Average detail energy: {avg_energy:.4f}")
-        
-        # Visualize regions on the diagnostic image
-        for i, roi in enumerate(roi_regions):
-            color = (0, 255, 0)  # Green
-            cv2.rectangle(diagnostic_img, 
-                         (roi[0], roi[1]), 
-                         (roi[0] + roi[2], roi[1] + roi[3]), 
-                         color, 2)
-            region_names = ["Forehead", "Left Cheek", "Right Cheek", "Chin"]
-            cv2.putText(diagnostic_img, region_names[i], 
-                       (roi[0], roi[1] - 5), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
-        
-        # Save the texture analysis visualization
-        cv2.imwrite("texture_analysis.jpg", diagnostic_img)
-        
-        # Check if texture metrics fall within expected ranges for real skin
-        gradient_check = gradient_min_threshold <= avg_gradient <= gradient_max_threshold
-        std_check = std_min_threshold <= avg_std <= std_max_threshold
-        energy_check = avg_energy >= detail_energy_threshold
-        
-        # Calculate confidence score (0-100%)
-        confidence = 0.0
-        
-        # Gradient confidence
-        if avg_gradient < gradient_min_threshold:
-            gradient_conf = max(0, avg_gradient / gradient_min_threshold * 100)
-        elif avg_gradient > gradient_max_threshold:
-            gradient_conf = max(0, (100 - (avg_gradient - gradient_max_threshold) / gradient_max_threshold * 100))
-        else:
-            # Within range - calculate how centered it is in the acceptable range
-            gradient_range = gradient_max_threshold - gradient_min_threshold
-            optimal_gradient = (gradient_min_threshold + gradient_max_threshold) / 2
-            distance_from_optimal = abs(avg_gradient - optimal_gradient)
-            gradient_conf = 100 - (distance_from_optimal / (gradient_range / 2) * 20)  # Penalize up to 20%
-        
-        # Standard deviation confidence
-        if avg_std < std_min_threshold:
-            std_conf = max(0, avg_std / std_min_threshold * 100)
-        elif avg_std > std_max_threshold:
-            std_conf = max(0, (100 - (avg_std - std_max_threshold) / std_max_threshold * 100))
-        else:
-            # Within range - calculate how centered it is in the acceptable range
-            std_range = std_max_threshold - std_min_threshold
-            optimal_std = (std_min_threshold + std_max_threshold) / 2
-            distance_from_optimal = abs(avg_std - optimal_std)
-            std_conf = 100 - (distance_from_optimal / (std_range / 2) * 20)  # Penalize up to 20%
-        
-        # Energy confidence - linear scaling
-        energy_conf = min(100, avg_energy / detail_energy_threshold * 100)
-        
-        # Weighted average of confidences
-        confidence = (gradient_conf * 0.4 + std_conf * 0.4 + energy_conf * 0.2) / 100.0
-        
-        # Result with threshold checks
-        is_real_texture = gradient_check and std_check and energy_check
-        
-        # Create a result visualization
-        result_img = diagnostic_img.copy()
-        
-        # Add text with results
-        text_lines = [
-            f"Gradient: {avg_gradient:.2f} ({gradient_check})",
-            f"Std Dev: {avg_std:.2f} ({std_check})",
-            f"Energy: {avg_energy:.4f} ({energy_check})",
-            f"Real Texture: {is_real_texture}",
-            f"Confidence: {confidence:.2f}"
-        ]
-        
-        # Draw a semi-transparent box for text background
-        overlay = result_img.copy()
-        x, y = 10, 30
-        h_line = 25  # height per line
-        cv2.rectangle(overlay, (5, 5), (380, y + h_line * len(text_lines) + 5), (0, 0, 0), -1)
-        cv2.addWeighted(overlay, 0.7, result_img, 0.3, 0, result_img)
-        
-        # Add each line of text
-        for i, line in enumerate(text_lines):
-            y_pos = y + i * h_line
-            text_color = (0, 255, 0) if "True" in line else (0, 255, 255) if "Confidence" in line else (0, 0, 255)
-            cv2.putText(result_img, line, (10, y_pos), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, text_color, 2)
-        
-        # Save the result visualization
-        cv2.imwrite("texture_analysis_result.jpg", result_img)
-        
-        print(f"Texture analysis result: {is_real_texture} (Confidence: {confidence:.2f})")
-        return is_real_texture, confidence
+        except Exception as e:
+            print(f"Error in texture analysis: {e}")
+            print(traceback.format_exc())
+            return True  # Default to allowing through on error
     
     def calculate_clarity(self, gray_img, point, region_size=20):
         """
@@ -1600,33 +1255,25 @@ class CameraSystem:
         return blink_detected, best_face_image
     
     def cleanup_diagnostic_images(self):
-        """Clean up any diagnostic images from previous tests"""
+        """Clean up diagnostic images created during focus testing"""
         try:
-            # Define files to clean
-            files_to_clean = [
-                "clarity_test.jpg",
-                "focus_test_summary.jpg", 
-                "focus_area_eye.jpg", 
-                "focus_area_nose.jpg", 
-                "focus_area_bg.jpg",
-                "highres_texture_check.jpg",
-                "texture_analysis.jpg",
-                "texture_analysis_result.jpg"
-            ]
+            # Focus levels used in the test
+            focus_levels = [0, 125, 250]
             
-            # Add focus test images for different levels
-            for level in [0, 100, 250]:
-                files_to_clean.append(f"focus_test_{level}.jpg")
+            # Remove all focus test images
+            files_to_clean = [f"focus_test_{level}.jpg" for level in focus_levels]
+            files_to_clean.extend(["focus_test_collage.jpg", "focus_test_result.jpg"])
             
-            # Try to remove each file
-            for file in files_to_clean:
-                if os.path.exists(file):
-                    os.remove(file)
-                    print(f"Removed: {file}")
-                    
+            for filename in files_to_clean:
+                if os.path.exists(filename):
+                    os.remove(filename)
+                    print(f"Removed {filename}")
+                else:
+                    print(f"File not found: {filename}")
         except Exception as e:
-            print(f"Warning: Couldn't clean up some files: {str(e)}")
-    
+            print(f"Error cleaning up diagnostic images: {e}")
+            # Continue even if cleanup fails
+        
     # Replace the simplified placeholder with our real implementation
     def capture_face_with_liveness(self):
         """
@@ -1656,334 +1303,6 @@ class CameraSystem:
             tuple: (success, face_image)
         """
         return self.detect_blink(timeout)
-
-    def checkFaceIsReal(self):
-        """Perform a sequence of tests to determine if a face is real or a photo"""
-        self.cleanup_diagnostic_images()  # Clean up any previous test files
-
-        print("Starting facial reality check...")
-        
-        # Ensure we have a camera object
-        if not hasattr(self, 'cap') or self.cap is None:
-            self.cap = cv2.VideoCapture(self.camera_id)
-            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.resolution[0])
-            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.resolution[1])
-        
-        # Capture a face to work with
-        frame = self.capture_face()
-        if frame is None:
-            print("No face captured, aborting test")
-            return False, 0.0
-            
-        # Convert to grayscale for face detection
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        
-        # Initialize face detector if not already done
-        if not hasattr(self, 'face_detector'):
-            self.face_detector = dlib.get_frontal_face_detector()
-            
-        # Detect face
-        faces = self.face_detector(gray)
-        if not faces:
-            print("No face detected in captured image")
-            return False, 0.0
-            
-        # Get the largest face
-        face = max(faces, key=lambda rect: rect.width() * rect.height())
-        
-        # Convert dlib rectangle to face_location tuple (top, right, bottom, left)
-        face_location = (face.top(), face.right(), face.bottom(), face.left())
-        
-        # Save face location for focus and texture tests
-        self.current_face_location = face_location
-
-        # Step 1: Check focus/depth test - passing the face location
-        focus_result, focus_score = self.check_focus_depth(self.cap, face_location)
-        
-        # Step 2: Check texture detail - this will use the saved face location
-        texture_result, texture_score = self.check_facial_texture()
-        
-        # Step 3: Calculate overall result and confidence
-        is_real = focus_result and texture_result
-        
-        # Calculate confidence as average of normalized scores
-        confidence = (focus_score + texture_score) / 2.0
-        
-        result_str = "REAL FACE" if is_real else "FAKE (PHOTO)"
-        conf_pct = int(confidence * 100)
-        
-        print(f"\nFINAL RESULT: {result_str} (Confidence: {conf_pct}%)")
-        print(f"  - Focus/Depth Test: {'PASSED' if focus_result else 'FAILED'} ({int(focus_score*100)}%)")
-        print(f"  - Texture Test: {'PASSED' if texture_result else 'FAILED'} ({int(texture_score*100)}%)")
-        
-        # Clean up
-        if hasattr(self, 'cap') and self.cap is not None:
-            self.cap.release()
-            self.cap = None
-        
-        return is_real, confidence
-        
-    def check_facial_texture(self):
-        """Check facial texture for signs of a real face vs a photo"""
-        print("\nPerforming facial texture analysis...")
-        
-        # Save current camera settings to restore later
-        original_resolution = (self.cap.get(cv2.CAP_PROP_FRAME_WIDTH), self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        print(f"Original camera resolution: {original_resolution}")
-        
-        # Set to 1080p resolution for texture analysis
-        target_resolution = (1920, 1080)
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, target_resolution[0])
-        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, target_resolution[1])
-        actual_width = self.cap.get(cv2.CAP_PROP_FRAME_WIDTH)
-        actual_height = self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
-        print(f"Set camera to {actual_width}x{actual_height} resolution for texture analysis")
-        
-        # Capture frames for analysis
-        frames = []
-        face_rects = []
-        
-        # Capture multiple frames for stability
-        for i in range(5):
-            ret, frame = self.cap.read()
-            if not ret:
-                continue
-                
-            # Convert to grayscale for texture analysis
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            
-            # Detect face
-            faces = self.face_detector(gray)
-            if len(faces) == 0:
-                continue
-                
-            # Get the largest face
-            face = max(faces, key=lambda rect: rect.area())
-            face_rects.append(face)
-            frames.append((frame, gray))
-        
-        if not frames:
-            print("Could not capture any frames with faces for texture analysis")
-            return False, 0.0
-            
-        # Use the most recent stable frame
-        frame, gray = frames[-1]
-        face = face_rects[-1]
-        
-        # Extract facial regions (forehead, cheek, chin)
-        landmarks = self.shape_predictor(gray, face)
-        
-        # Calculate face size in pixels
-        face_width = face.width()
-        face_height = face.height()
-        print(f"Face size: {face_width}x{face_height} pixels")
-        
-        # Size of the region to analyze - adjust based on face size
-        region_size = min(50, int(min(face_width, face_height) / 10))
-        
-        # Get regions of interest
-        regions = []
-        region_names = []
-
-        # Forehead
-        forehead_x = (landmarks.part(27).x + landmarks.part(21).x + landmarks.part(22).x) // 3
-        forehead_y = landmarks.part(21).y - region_size
-        forehead_y = max(forehead_y, 0)  # Ensure within image bounds
-        regions.append((forehead_x, forehead_y, region_size))
-        region_names.append("Forehead")
-        
-        # Left cheek
-        left_cheek_x = landmarks.part(31).x - region_size
-        left_cheek_y = landmarks.part(31).y 
-        regions.append((left_cheek_x, left_cheek_y, region_size))
-        region_names.append("Left Cheek")
-        
-        # Right cheek
-        right_cheek_x = landmarks.part(35).x
-        right_cheek_y = landmarks.part(35).y
-        regions.append((right_cheek_x, right_cheek_y, region_size))
-        region_names.append("Right Cheek")
-        
-        # Chin
-        chin_x = landmarks.part(8).x
-        chin_y = landmarks.part(8).y - region_size
-        regions.append((chin_x, chin_y, region_size))
-        region_names.append("Chin")
-        
-        # Create copy of frame for visualization
-        vis_frame = frame.copy()
-        
-        # Calculate texture statistics for each region
-        avg_gradient = 0
-        avg_std = 0
-        avg_detail_energy = 0
-        valid_regions = 0
-        
-        texture_results = []
-        
-        # Set fixed thresholds based on typical real skin values at 1080p
-        # These are empirical values that work well at 1080p resolution
-        gradient_min = 10.0
-        gradient_max = 180.0
-        std_min = 6.0
-        std_max = 100.0
-        energy_threshold = 0.5
-        
-        for i, (x, y, size) in enumerate(regions):
-            # Make sure region is within image bounds
-            if x < 0 or y < 0 or x + size >= gray.shape[1] or y + size >= gray.shape[0]:
-                continue
-                
-            # Extract region
-            region = gray[y:y+size, x:x+size]
-            
-            # Calculate gradient magnitude
-            sobel_x = cv2.Sobel(region, cv2.CV_64F, 1, 0, ksize=3)
-            sobel_y = cv2.Sobel(region, cv2.CV_64F, 0, 1, ksize=3)
-            gradient_mag = np.sqrt(np.square(sobel_x) + np.square(sobel_y))
-            avg_region_gradient = np.mean(gradient_mag)
-            
-            # Calculate standard deviation of intensity (local contrast)
-            std_dev = np.std(region.astype(np.float64))
-            
-            # Calculate high-frequency energy (detail)
-            # Use Laplacian for edge detection
-            laplacian = cv2.Laplacian(region, cv2.CV_64F)
-            energy = np.mean(np.abs(laplacian)) / 255.0  # Normalize
-            
-            # Add to averages
-            avg_gradient += avg_region_gradient
-            avg_std += std_dev
-            avg_detail_energy += energy
-            valid_regions += 1
-            
-            # Draw region on visualization
-            cv2.rectangle(vis_frame, (x, y), (x+size, y+size), (0, 255, 0), 2)
-            cv2.putText(vis_frame, region_names[i], (x, y-5), 
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
-            
-            # Save results for this region
-            texture_results.append({
-                "region": region_names[i],
-                "gradient": avg_region_gradient,
-                "std_dev": std_dev,
-                "energy": energy
-            })
-            
-        # Save high-res frame with regions marked
-        cv2.imwrite("highres_texture_check.jpg", vis_frame)
-        
-        if valid_regions == 0:
-            print("No valid regions found for texture analysis")
-            
-            # Restore original resolution
-            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, original_resolution[0])
-            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, original_resolution[1])
-            return False, 0.0
-            
-        # Calculate averages
-        avg_gradient /= valid_regions
-        avg_std /= valid_regions
-        avg_detail_energy /= valid_regions
-        
-        # Create visualization for texture analysis
-        texture_vis = np.zeros((400, 800, 3), dtype=np.uint8)
-        
-        # Display the results
-        y_offset = 30
-        cv2.putText(texture_vis, "Facial Texture Analysis", (20, y_offset), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 255, 255), 2)
-        y_offset += 40
-        
-        for result in texture_results:
-            text = f"{result['region']}: Gradient={result['gradient']:.2f}, StdDev={result['std_dev']:.2f}, Energy={result['energy']:.2f}"
-            cv2.putText(texture_vis, text, (20, y_offset), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 1)
-            y_offset += 30
-            
-        y_offset += 10
-        cv2.putText(texture_vis, f"Average Gradient: {avg_gradient:.2f} (Threshold: {gradient_min:.2f}-{gradient_max:.2f})", 
-                   (20, y_offset), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (100, 255, 100), 2)
-        y_offset += 30
-        cv2.putText(texture_vis, f"Average StdDev: {avg_std:.2f} (Threshold: {std_min:.2f}-{std_max:.2f})", 
-                   (20, y_offset), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (100, 255, 100), 2)
-        y_offset += 30
-        cv2.putText(texture_vis, f"Average Detail Energy: {avg_detail_energy:.2f} (Threshold: {energy_threshold:.2f})", 
-                   (20, y_offset), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (100, 255, 100), 2)
-                   
-        # Determine if texture appears to be real skin
-        # Real skin typically has moderate gradients and high-frequency details
-        # Photos may be very smooth (low gradient) or have sharp edges (high gradient)
-        gradient_in_range = gradient_min <= avg_gradient <= gradient_max
-        std_in_range = std_min <= avg_std <= std_max
-        sufficient_detail = avg_detail_energy >= energy_threshold
-        
-        # Decision
-        is_real_texture = gradient_in_range and std_in_range and sufficient_detail
-        texture_score = 0.0
-        
-        # Calculate confidence score (0.0 to 1.0)
-        if is_real_texture:
-            # If all checks pass, calculate how well within the ranges
-            gradient_score = 1.0 - min(abs(avg_gradient - (gradient_min + gradient_max)/2), (gradient_max - gradient_min)/2) / ((gradient_max - gradient_min)/2)
-            std_score = 1.0 - min(abs(avg_std - (std_min + std_max)/2), (std_max - std_min)/2) / ((std_max - std_min)/2)
-            energy_score = min(avg_detail_energy / (energy_threshold * 2), 1.0)
-            texture_score = (gradient_score + std_score + energy_score) / 3.0
-        else:
-            # If any check fails, calculate partial score
-            checks_passed = 0
-            if gradient_in_range:
-                checks_passed += 1
-            if std_in_range:
-                checks_passed += 1
-            if sufficient_detail:
-                checks_passed += 1
-            texture_score = checks_passed / 3.0 * 0.6  # Max 60% confidence if not all checks pass
-        
-        # Add result to visualization
-        y_offset += 40
-        result_text = "REAL TEXTURE" if is_real_texture else "FAKE TEXTURE (PHOTO)"
-        color = (0, 255, 0) if is_real_texture else (0, 0, 255)
-        cv2.putText(texture_vis, f"RESULT: {result_text}", (20, y_offset), cv2.FONT_HERSHEY_SIMPLEX, 0.9, color, 2)
-        y_offset += 30
-        cv2.putText(texture_vis, f"Confidence: {int(texture_score*100)}%", (20, y_offset), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
-        
-        # Save visualization
-        cv2.imwrite("texture_analysis.jpg", texture_vis)
-        
-        # Create final result image
-        result_img = np.zeros((600, 1000, 3), dtype=np.uint8)
-        
-        # Add captured image with detected regions
-        captured_h, captured_w = vis_frame.shape[:2]
-        scale_factor = min(500 / captured_h, 500 / captured_w)
-        resized_capture = cv2.resize(vis_frame, (int(captured_w * scale_factor), int(captured_h * scale_factor)))
-        
-        h, w = resized_capture.shape[:2]
-        result_img[50:50+h, 50:50+w] = resized_capture
-        
-        # Add result text
-        y_offset = 50 + h + 40
-        result_text = "REAL TEXTURE" if is_real_texture else "FAKE TEXTURE (PHOTO)"
-        color = (0, 255, 0) if is_real_texture else (0, 0, 255)
-        cv2.putText(result_img, f"Texture Analysis Result: {result_text}", 
-                   (50, y_offset), cv2.FONT_HERSHEY_SIMPLEX, 1.0, color, 2)
-                   
-        # Save the result image
-        cv2.imwrite("texture_analysis_result.jpg", result_img)
-        
-        # Print results
-        print(f"Texture Analysis Results:")
-        print(f"  Average Gradient: {avg_gradient:.2f} (Threshold: {gradient_min:.2f}-{gradient_max:.2f})")
-        print(f"  Average StdDev: {avg_std:.2f} (Threshold: {std_min:.2f}-{std_max:.2f})")
-        print(f"  Average Detail Energy: {avg_detail_energy:.2f} (Threshold: {energy_threshold:.2f})")
-        print(f"  Texture appears to be {'real skin' if is_real_texture else 'a photo'}")
-        print(f"  Confidence: {int(texture_score*100)}%")
-        
-        # Restore original resolution
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, original_resolution[0])
-        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, original_resolution[1])
-        print(f"Restored camera to original resolution: {original_resolution}")
-        
-        return is_real_texture, texture_score
 
 # For demonstration
 if __name__ == "__main__":
