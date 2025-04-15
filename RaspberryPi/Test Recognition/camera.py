@@ -331,29 +331,29 @@ class CameraSystem:
         print(f"OpenCV version: {cv2.__version__}")
         
         try:
-            # Try the best performing tracker first (CSRT - accurate but slower)
-            if hasattr(cv2, 'legacy') and hasattr(cv2.legacy, 'TrackerCSRT'):
-                print("Using legacy.TrackerCSRT - best accuracy")
-                return cv2.legacy.TrackerCSRT.create()
-            elif hasattr(cv2, 'TrackerCSRT'):
-                print("Using TrackerCSRT - best accuracy")
-                return cv2.TrackerCSRT.create()
-                
-            # Try KCF next (good balance of speed and accuracy)
+            # Try KCF first (good balance of speed and accuracy)
             if hasattr(cv2, 'legacy') and hasattr(cv2.legacy, 'TrackerKCF'):
-                print("Using legacy.TrackerKCF - good balance")
+                print("Using legacy.TrackerKCF - good balance of speed and accuracy")
                 return cv2.legacy.TrackerKCF.create()
             elif hasattr(cv2, 'TrackerKCF'):
-                print("Using TrackerKCF - good balance")
+                print("Using TrackerKCF - good balance of speed and accuracy")
                 return cv2.TrackerKCF.create()
-                
-            # Try MOSSE (fastest but less accurate)
-            if hasattr(cv2, 'legacy') and hasattr(cv2.legacy, 'TrackerMOSSE'):
-                print("Using legacy.TrackerMOSSE - fastest")
+            
+            # Try MOSSE next (fastest but less accurate)
+            elif hasattr(cv2, 'legacy') and hasattr(cv2.legacy, 'TrackerMOSSE'):
+                print("Using legacy.TrackerMOSSE - fastest tracker")
                 return cv2.legacy.TrackerMOSSE.create()
             elif hasattr(cv2, 'TrackerMOSSE'):
-                print("Using TrackerMOSSE - fastest")
+                print("Using TrackerMOSSE - fastest tracker")
                 return cv2.TrackerMOSSE.create()
+                
+            # Try CSRT last (most accurate but slowest)
+            elif hasattr(cv2, 'legacy') and hasattr(cv2.legacy, 'TrackerCSRT'):
+                print("Using legacy.TrackerCSRT - most accurate but slower")
+                return cv2.legacy.TrackerCSRT.create()
+            elif hasattr(cv2, 'TrackerCSRT'):
+                print("Using TrackerCSRT - most accurate but slower")
+                return cv2.TrackerCSRT.create()
                 
             print("No suitable tracker found in opencv-contrib-python")
             return None
@@ -402,7 +402,7 @@ class CameraSystem:
         max_face_size = 0
         
         # Downsample factor for face detection (to speed up processing)
-        downsample = 0.3  # Even smaller for better performance
+        downsample = 0.25  # Even smaller for better performance
         
         # Frame counter for processing only every nth frame
         frame_count = 0
@@ -420,7 +420,7 @@ class CameraSystem:
         
         # If tracker is available, process fewer frames
         if tracker is not None:
-            self.process_nth_frame = 5  # Process every 5th frame for detection
+            self.process_nth_frame = 6  # Process every 6th frame for detection with KCF
             print(f"Tracking enabled - processing every {self.process_nth_frame}th frame")
         else:
             # Process more frames if tracking isn't available
@@ -430,11 +430,23 @@ class CameraSystem:
         # Increase timeout slightly to allow for adaptation
         actual_timeout = timeout + 0.5
         
+        # Track FPS
+        fps_start_time = time.time()
+        fps_frame_count = 0
+        fps = 0
+        
         while (time.time() - start_time) < actual_timeout:
             ret, frame = cap.read()
             if not ret:
                 print("Failed to capture frame")
                 break
+            
+            # FPS calculation
+            fps_frame_count += 1
+            if fps_frame_count >= 10:
+                fps = fps_frame_count / (time.time() - fps_start_time)
+                fps_frame_count = 0
+                fps_start_time = time.time()
             
             # Create a copy for display
             display_frame = frame.copy()
@@ -612,6 +624,11 @@ class CameraSystem:
                 fps = frame_count / (time.time() - start_time)
                 cv2.putText(display_frame, f"FPS: {fps:.1f}", (display_frame.shape[1] - 120, 30), 
                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
+            
+            # Display tracking status
+            tracking_status = "Tracking" if (tracker is not None and tracking_active) else "Detecting"
+            cv2.putText(display_frame, tracking_status, (display_frame.shape[1] - 120, 60),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
             
             # Display instructions
             if blink_detected:
