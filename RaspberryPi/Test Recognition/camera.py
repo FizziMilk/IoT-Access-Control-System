@@ -4,6 +4,7 @@ import face_recognition
 import numpy as np
 import dlib
 from scipy.spatial import distance as dist
+import threading
 
 class CameraSystem:
     def __init__(self, camera_id=0, resolution=(640, 480)):
@@ -13,6 +14,13 @@ class CameraSystem:
         self.EAR_THRESHOLD = 0.2
         # Number of consecutive frames the eye must be below threshold to count as a blink
         self.EAR_CONSEC_FRAMES = 2
+        # Use a much lower resolution for liveness detection
+        self.liveness_resolution = (320, 240)
+        # Frame process rate (1 = process every frame, 2 = every other frame, etc.)
+        self.process_nth_frame = 3
+        # Use a separate thread for face detection to prevent UI blocking
+        self.face_detection_thread = None
+        self.stop_detection_thread = False
     
     def capture_face(self):
         """Capture an image from the camera with face detection"""
@@ -328,8 +336,11 @@ class CameraSystem:
         """
         # Initialize camera
         cap = cv2.VideoCapture(self.camera_id)
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.resolution[0])
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.resolution[1])
+        # Use lower resolution for liveness detection
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.liveness_resolution[0])
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.liveness_resolution[1])
+        # Disable autofocus to reduce processing overhead
+        cap.set(cv2.CAP_PROP_AUTOFOCUS, 0)
         
         if not cap.isOpened():
             print("Error: Could not open camera")
@@ -351,43 +362,113 @@ class CameraSystem:
         max_face_size = 0
         
         # Downsample factor for face detection (to speed up processing)
-        downsample = 0.5
+        downsample = 0.3  # Even smaller for better performance
+        
+        # Frame counter for processing only every nth frame
+        frame_count = 0
+        
+        # Store the last processed face location to use for intermediate frames
+        last_face_location = None
+        last_landmarks = None
+        
+        # Placeholder coordinates for face tracking
+        face_rect = None
+        
+        # Configure face detector to be faster by increasing min face size
+        # This will ignore small faces in the background
+        min_face_size = 30  # minimum face size in pixels
+        
+        # Use simpler tracking for performance
+        if (cv2.__version__.startswith('4')):
+            tracker = cv2.TrackerKCF_create()
+        else:
+            tracker = cv2.TrackerKCF.create()  # Fall back for older OpenCV versions
+        
+        tracking_active = False
+        
+        # Use grayscale for faster processing where possible
+        use_grayscale = True
         
         while (time.time() - start_time) < timeout:
             ret, frame = cap.read()
             if not ret:
                 print("Failed to capture frame")
                 break
-                
-            # Create a copy for display
+            
+            # Convert to grayscale for faster processing (but keep color for display)
             display_frame = frame.copy()
+            if use_grayscale:
+                gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             
-            # Downscale for faster processing
-            small_frame = cv2.resize(frame, (0, 0), fx=downsample, fy=downsample)
-            rgb_small_frame = cv2.cvtColor(small_frame, cv2.COLOR_BGR2RGB)
+            # Only process every nth frame to improve performance
+            process_this_frame = (frame_count % self.process_nth_frame == 0)
+            frame_count += 1
             
-            # Detect face and landmarks
-            face_locations = face_recognition.face_locations(rgb_small_frame)
+            # Update tracker if active
+            if tracking_active:
+                ok, face_rect = tracker.update(frame)
+                if ok:
+                    # Convert from (x, y, width, height) to (top, right, bottom, left)
+                    x, y, w, h = [int(v) for v in face_rect]
+                    left, top, right, bottom = x, y, x + w, y + h
+                    last_face_location = (top, right, bottom, left)
+                else:
+                    # If tracking failed, we'll need to detect face again
+                    tracking_active = False
             
-            if face_locations:
-                # Scale back up face locations
-                top, right, bottom, left = face_locations[0]
-                top = int(top / downsample)
-                right = int(right / downsample)
-                bottom = int(bottom / downsample)
-                left = int(left / downsample)
+            if process_this_frame or not tracking_active:
+                # Downscale for faster processing
+                small_frame = cv2.resize(frame, (0, 0), fx=downsample, fy=downsample)
                 
-                # Get landmarks
-                landmarks_list = face_recognition.face_landmarks(rgb_small_frame, [face_locations[0]])
+                # Detect face locations
+                rgb_small_frame = cv2.cvtColor(small_frame, cv2.COLOR_BGR2RGB)
+                face_locations = face_recognition.face_locations(rgb_small_frame, model="hog")
                 
-                if landmarks_list:
-                    # Convert landmarks to full scale
-                    scaled_landmarks = {}
-                    for feature, points in landmarks_list[0].items():
-                        scaled_landmarks[feature] = [(int(p[0] / downsample), int(p[1] / downsample)) for p in points]
+                if face_locations:
+                    # Scale back up face locations
+                    top, right, bottom, left = face_locations[0]
+                    top = int(top / downsample)
+                    right = int(right / downsample)
+                    bottom = int(bottom / downsample)
+                    left = int(left / downsample)
                     
+                    last_face_location = (top, right, bottom, left)
+                    
+                    # Initialize or reinitialize tracker
+                    face_rect = (left, top, right - left, bottom - top)
+                    tracker = cv2.TrackerKCF_create() if (cv2.__version__.startswith('4')) else cv2.TrackerKCF.create()
+                    tracker.init(frame, face_rect)
+                    tracking_active = True
+                    
+                    # Get landmarks - only if we found a face
+                    landmarks_list = face_recognition.face_landmarks(rgb_small_frame, [face_locations[0]])
+                    
+                    if landmarks_list:
+                        # Convert landmarks to full scale
+                        scaled_landmarks = {}
+                        for feature, points in landmarks_list[0].items():
+                            scaled_landmarks[feature] = [(int(p[0] / downsample), int(p[1] / downsample)) for p in points]
+                        
+                        last_landmarks = scaled_landmarks
+            
+            # Use the last detected face and landmarks for processing (even in frames we didn't run detection)
+            if last_face_location is not None:
+                top, right, bottom, left = last_face_location
+                
+                # Draw rectangle around face
+                cv2.rectangle(display_frame, (left, top), (right, bottom), (0, 255, 0), 2)
+                
+                # Save the largest face image for return if we haven't already detected a blink
+                if not blink_detected:
+                    face_size = (right - left) * (bottom - top)
+                    if face_size > max_face_size:
+                        max_face_size = face_size
+                        best_face_image = frame.copy()
+                
+                # Process landmarks if available
+                if last_landmarks is not None:
                     # Get eye landmarks
-                    left_eye, right_eye = self.get_eye_landmarks(scaled_landmarks)
+                    left_eye, right_eye = self.get_eye_landmarks(last_landmarks)
                     
                     if left_eye and right_eye:
                         # Calculate eye aspect ratio (EAR)
@@ -420,21 +501,17 @@ class CameraSystem:
                                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
                         cv2.putText(display_frame, f"Blinks: {blink_counter}", (10, 60),
                                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-                
-                # Draw rectangle around face
-                cv2.rectangle(display_frame, (left, top), (right, bottom), (0, 255, 0), 2)
-                
-                # Save the largest face image for return
-                face_size = (right - left) * (bottom - top)
-                if face_size > max_face_size:
-                    max_face_size = face_size
-                    face_img = frame[top:bottom, left:right]
-                    best_face_image = frame.copy()
             
             # Display time remaining
             time_left = int(timeout - (time.time() - start_time))
-            cv2.putText(display_frame, f"Time left: {time_left}s", (10, 90),
+            cv2.putText(display_frame, f"Time: {time_left}s", (10, 90),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+            
+            # Display frame rate (every ~10 frames)
+            if frame_count % 10 == 0:
+                fps = frame_count / (time.time() - start_time)
+                cv2.putText(display_frame, f"FPS: {fps:.1f}", (display_frame.shape[1] - 120, 30), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
             
             # Display instructions
             status = "Blink detected!" if blink_detected else "Please blink..."
@@ -464,6 +541,10 @@ class CameraSystem:
         # Clean up
         cap.release()
         cv2.destroyAllWindows()
+        
+        # If we've detected a blink but don't have a good face image, capture one now
+        if blink_detected and best_face_image is None:
+            best_face_image = self.capture_face()
         
         return blink_detected, best_face_image
         

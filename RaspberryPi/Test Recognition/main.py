@@ -17,9 +17,10 @@ def main():
         print("4. Delete user")
         print("5. Generate encoding for backend")
         print(f"6. Toggle liveness detection (currently: {'ON' if use_liveness else 'OFF'})")
+        print("7. Test liveness detection")
         print("0. Exit")
         
-        choice = input("\nEnter choice (0-6): ")
+        choice = input("\nEnter choice (0-7): ")
         
         if choice == "1":
             face_system.register_new_user(use_liveness=use_liveness)
@@ -41,6 +42,13 @@ def main():
         elif choice == "6":
             use_liveness = not use_liveness
             print(f"Liveness detection turned {'ON' if use_liveness else 'OFF'}")
+        elif choice == "7":
+            print("Testing liveness detection...")
+            success, _ = face_system.camera.detect_liveness()
+            if success:
+                print("Liveness check passed! Real person detected.")
+            else:
+                print("Liveness check failed or cancelled.")
         elif choice == "0":
             print("Exiting...")
             break
