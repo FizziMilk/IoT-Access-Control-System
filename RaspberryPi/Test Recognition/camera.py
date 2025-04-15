@@ -695,6 +695,104 @@ class CameraSystem:
         # Wait for camera to initialize
         time.sleep(0.5)
         
+        # First, let's capture a face for focus and texture tests
+        print("Positioning face for initial checks. Please remain still...")
+        
+        # Try to capture a good face frame for initial tests
+        face_location = None
+        face_frame = None
+        face_detected = False
+        
+        # Give user time to position face
+        start_positioning = time.time()
+        positioning_timeout = 5  # 5 seconds to position face
+        
+        while not face_detected and (time.time() - start_positioning) < positioning_timeout:
+            ret, frame = cap.read()
+            if not ret:
+                print("Failed to capture frame")
+                break
+                
+            # Display frame
+            display_frame = frame.copy()
+            cv2.putText(display_frame, "Position your face for initial checks...", 
+                       (20, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+            cv2.putText(display_frame, f"Time left: {int(positioning_timeout - (time.time() - start_positioning))}s", 
+                       (20, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+            
+            # Detect face
+            small_frame = cv2.resize(frame, (0, 0), fx=0.5, fy=0.5)
+            rgb_small_frame = cv2.cvtColor(small_frame, cv2.COLOR_BGR2RGB)
+            face_locations = face_recognition.face_locations(rgb_small_frame)
+            
+            if face_locations:
+                # Scale back up
+                top, right, bottom, left = face_locations[0]
+                top *= 2
+                right *= 2
+                bottom *= 2
+                left *= 2
+                
+                face_location = (top, right, bottom, left)
+                face_frame = frame.copy()
+                
+                # Draw rectangle around face
+                cv2.rectangle(display_frame, (left, top), (right, bottom), (0, 255, 0), 2)
+                face_size = (right - left) * (bottom - top)
+                
+                # If face is large enough, we can proceed
+                if face_size > 10000:
+                    face_detected = True
+                    cv2.putText(display_frame, "Face detected! Starting tests...", 
+                               (20, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+            
+            cv2.imshow("Positioning", display_frame)
+            key = cv2.waitKey(1) & 0xFF
+            if key == 27:  # ESC
+                cap.release()
+                cv2.destroyAllWindows()
+                return False, None
+        
+        cv2.destroyWindow("Positioning")
+        
+        # If we couldn't find a face in time, inform user and continue anyway
+        if not face_detected:
+            print("Could not detect face clearly. Continuing with tests anyway...")
+            # Try one more time to get a face
+            ret, frame = cap.read()
+            if ret:
+                small_frame = cv2.resize(frame, (0, 0), fx=0.5, fy=0.5)
+                rgb_small_frame = cv2.cvtColor(small_frame, cv2.COLOR_BGR2RGB)
+                face_locations = face_recognition.face_locations(rgb_small_frame)
+                if face_locations:
+                    top, right, bottom, left = face_locations[0]
+                    top *= 2
+                    right *= 2
+                    bottom *= 2
+                    left *= 2
+                    face_location = (top, right, bottom, left)
+                    face_frame = frame.copy()
+                    face_detected = True
+        
+        # If we have a face, run the focus and texture tests
+        if face_detected:
+            print("Running initial security checks...")
+            
+            # Run focus test first
+            focus_result = self.perform_focus_liveness_check(cap, face_location)
+            
+            # Store result for later use
+            self.focus_check_passed = focus_result
+            
+            # Reset camera to optimal settings for blink detection after focus test
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.liveness_resolution[0])
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.liveness_resolution[1])
+            cap.set(cv2.CAP_PROP_AUTOFOCUS, 0)
+            
+            # Wait for camera to adjust after settings change
+            time.sleep(0.5)
+        
+        # Now start blink detection
         print("Blink detection started. Please look at the camera and blink normally.")
         print("The program will continue running for the full time period to allow for testing.")
         
@@ -705,7 +803,7 @@ class CameraSystem:
         start_time = time.time()
         
         # Keep the best face image for return
-        best_face_image = None
+        best_face_image = face_frame if face_detected else None
         max_face_size = 0
         
         # Downsample factor for face detection (to speed up processing)
@@ -715,7 +813,7 @@ class CameraSystem:
         frame_count = 0
         
         # Store the last processed face location to use for intermediate frames
-        last_face_location = None
+        last_face_location = face_location if face_detected else None
         last_landmarks = None
         
         # For adaptive EAR threshold
@@ -920,10 +1018,17 @@ class CameraSystem:
                         max_face_size = face_size
                         best_face_image = frame.copy()
                         
-                        # Perform focus-based liveness check when we have a good face
-                        # Only do this once per session to avoid slowing down the process
-                        if not self.focus_check_passed and face_size > 10000:  # Large enough face
+                        # Only perform focus liveness check if it wasn't already done in the initialization phase
+                        # and we don't yet have a result
+                        if not self.focus_check_passed and face_size > 10000 and last_face_location is None:
+                            print("Running focus check during blink detection (only if not done earlier)...")
                             self.focus_check_passed = self.perform_focus_liveness_check(cap, current_face_box)
+                            
+                            # Reset camera settings after focus check
+                            cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.liveness_resolution[0])
+                            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.liveness_resolution[1])
+                            cap.set(cv2.CAP_PROP_AUTOFOCUS, 0)
+                            time.sleep(0.5)  # Give camera time to adjust
                             
                             # If focus check failed, reset blink counter as additional security
                             if not self.focus_check_passed:
