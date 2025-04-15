@@ -326,31 +326,37 @@ class CameraSystem:
     
     def create_tracker(self):
         """Create a tracking object compatible with the installed OpenCV version"""
-        # Check OpenCV version and create appropriate tracker
-        major_ver, minor_ver, _ = cv2.__version__.split('.')
+        # Modern versions of OpenCV use a different tracking API
+        tracker = None
         
         try:
-            if int(major_ver) >= 4:
-                # OpenCV 4.x
-                tracker = cv2.TrackerKCF.create()
-            elif int(major_ver) == 3:
-                # OpenCV 3.x
+            # Try the modern tracking API (OpenCV 4.5.1+)
+            if hasattr(cv2, 'legacy'):
+                # Use legacy module in newer OpenCV versions
+                tracker = cv2.legacy.TrackerKCF_create()
+            elif hasattr(cv2, 'TrackerKCF_create'):
+                # OpenCV 3.x style
                 tracker = cv2.TrackerKCF_create()
+            elif hasattr(cv2, 'TrackerKCF'):
+                # OpenCV 4.x style
+                tracker = cv2.TrackerKCF.create()
             else:
-                # Fallback to CSRT for older versions or if KCF fails
-                try:
-                    if int(major_ver) >= 4:
-                        tracker = cv2.TrackerCSRT.create() 
-                    else:
-                        tracker = cv2.TrackerCSRT_create()
-                except:
-                    print("Could not create tracker - will use basic detection instead")
+                # Try other trackers if KCF is not available
+                if hasattr(cv2, 'legacy') and hasattr(cv2.legacy, 'TrackerCSRT_create'):
+                    tracker = cv2.legacy.TrackerCSRT_create()
+                elif hasattr(cv2, 'TrackerCSRT_create'):
+                    tracker = cv2.TrackerCSRT_create()
+                elif hasattr(cv2, 'TrackerCSRT'):
+                    tracker = cv2.TrackerCSRT.create()
+                elif hasattr(cv2, 'legacy') and hasattr(cv2.legacy, 'TrackerMOSSE_create'):
+                    tracker = cv2.legacy.TrackerMOSSE_create()
+                else:
+                    print("No suitable tracker found. Disabling tracking.")
                     tracker = None
         except Exception as e:
             print(f"Error creating tracker: {e}")
-            # Disable tracking if unavailable
             tracker = None
-            
+        
         return tracker
     
     def detect_blink(self, timeout=7):
@@ -379,6 +385,7 @@ class CameraSystem:
         time.sleep(0.5)
         
         print("Blink detection started. Please look at the camera and blink normally.")
+        print("The program will continue running for the full time period to allow for testing.")
         
         # Variables for blink detection
         blink_counter = 0
@@ -403,10 +410,16 @@ class CameraSystem:
         # For adaptive EAR threshold
         ear_values = []
         
-        # Disable tracking if it's not available
-        # Create a tracker (or None if not available)
+        # Try to create a tracker
         tracker = self.create_tracker()
         tracking_active = False
+        
+        # Check if tracker is available, otherwise increase processing frequency
+        use_tracking = tracker is not None
+        if not use_tracking:
+            print("Tracking not available, using more frequent face detection instead")
+            # Process more frames if tracking is disabled
+            self.process_nth_frame = 2
         
         # Use grayscale for faster processing where possible
         use_grayscale = True
@@ -429,8 +442,8 @@ class CameraSystem:
             process_this_frame = (frame_count % self.process_nth_frame == 0)
             frame_count += 1
             
-            # Update tracker if active and available
-            if tracker is not None and tracking_active:
+            # Try to update tracker if active and available
+            if use_tracking and tracking_active:
                 try:
                     ok, face_rect = tracker.update(frame)
                     if ok:
@@ -444,8 +457,10 @@ class CameraSystem:
                 except Exception as e:
                     print(f"Tracking error: {e}")
                     tracking_active = False
+                    # Disable tracking completely if it gives errors
+                    use_tracking = False
             
-            if process_this_frame or not tracking_active or tracker is None:
+            if process_this_frame or not tracking_active or not use_tracking:
                 # Downscale for faster processing
                 small_frame = cv2.resize(frame, (0, 0), fx=downsample, fy=downsample)
                 
@@ -463,18 +478,17 @@ class CameraSystem:
                     
                     last_face_location = (top, right, bottom, left)
                     
-                    # Initialize tracker if available
-                    if tracker is not None:
+                    # Initialize tracker if available and tracking is enabled
+                    if use_tracking and tracker is not None:
                         try:
                             face_rect = (left, top, right - left, bottom - top)
-                            # Create a new tracker for each initialization
-                            tracker = self.create_tracker()
-                            if tracker is not None:
-                                tracker.init(frame, face_rect)
-                                tracking_active = True
+                            tracker.init(frame, face_rect)
+                            tracking_active = True
                         except Exception as e:
                             print(f"Tracker initialization error: {e}")
                             tracking_active = False
+                            # Disable tracking completely if it gives errors
+                            use_tracking = False
                     
                     # Get landmarks - only if we found a face
                     landmarks_list = face_recognition.face_landmarks(rgb_small_frame, [face_locations[0]])
@@ -570,8 +584,12 @@ class CameraSystem:
                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
             
             # Display instructions
-            status = "Blink detected!" if blink_detected else "Please blink..."
-            color = (0, 255, 0) if blink_detected else (0, 0, 255)
+            if blink_detected:
+                status = f"Blink detected! ({blink_counter} blinks) - Continuing for testing"
+                color = (0, 255, 0)
+            else:
+                status = "Please blink..."
+                color = (0, 0, 255)
             cv2.putText(display_frame, status, (10, 120),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
             
@@ -588,11 +606,10 @@ class CameraSystem:
                 cv2.destroyAllWindows()
                 return False, None
             
-            # If we've detected a blink and have a face image, we can finish early
-            if blink_detected and best_face_image is not None:
-                # Wait a bit to show the success message
-                time.sleep(1)
-                break
+            # Continue running even after blink is detected (removed early exit)
+            # Save the face image when a blink is first detected
+            if blink_detected and best_face_image is None and max_face_size > 0:
+                best_face_image = frame.copy()
         
         # Clean up
         cap.release()
