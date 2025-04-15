@@ -390,6 +390,12 @@ class CameraSystem:
             original_autofocus = cap.get(cv2.CAP_PROP_AUTOFOCUS)
             original_focus = cap.get(cv2.CAP_PROP_FOCUS)
             
+            # Capture frame for texture analysis
+            ret, frame = cap.read()
+            if not ret:
+                print("ERROR: Failed to capture frame for texture analysis")
+                return True
+            
             # Run enhanced liveness checks
             focus_result = self.check_focus_depth(cap, face_location)
             texture_result = self.analyze_facial_texture(frame)
