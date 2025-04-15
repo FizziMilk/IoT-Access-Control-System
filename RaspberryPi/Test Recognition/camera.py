@@ -11,9 +11,9 @@ class CameraSystem:
         self.camera_id = camera_id
         self.resolution = resolution
         # EAR threshold for blink detection
-        self.EAR_THRESHOLD = 0.2
+        self.EAR_THRESHOLD = 0.25  # Higher threshold to detect blinks more easily
         # Number of consecutive frames the eye must be below threshold to count as a blink
-        self.EAR_CONSEC_FRAMES = 2
+        self.EAR_CONSEC_FRAMES = 1  # Reduced to detect faster blinks
         # Use a much lower resolution for liveness detection
         self.liveness_resolution = (320, 240)
         # Frame process rate (1 = process every frame, 2 = every other frame, etc.)
@@ -324,6 +324,35 @@ class CameraSystem:
         
         return left_eye, right_eye
     
+    def create_tracker(self):
+        """Create a tracking object compatible with the installed OpenCV version"""
+        # Check OpenCV version and create appropriate tracker
+        major_ver, minor_ver, _ = cv2.__version__.split('.')
+        
+        try:
+            if int(major_ver) >= 4:
+                # OpenCV 4.x
+                tracker = cv2.TrackerKCF.create()
+            elif int(major_ver) == 3:
+                # OpenCV 3.x
+                tracker = cv2.TrackerKCF_create()
+            else:
+                # Fallback to CSRT for older versions or if KCF fails
+                try:
+                    if int(major_ver) >= 4:
+                        tracker = cv2.TrackerCSRT.create() 
+                    else:
+                        tracker = cv2.TrackerCSRT_create()
+                except:
+                    print("Could not create tracker - will use basic detection instead")
+                    tracker = None
+        except Exception as e:
+            print(f"Error creating tracker: {e}")
+            # Disable tracking if unavailable
+            tracker = None
+            
+        return tracker
+    
     def detect_blink(self, timeout=7):
         """
         Detect if a person is blinking (liveness check)
@@ -371,25 +400,21 @@ class CameraSystem:
         last_face_location = None
         last_landmarks = None
         
-        # Placeholder coordinates for face tracking
-        face_rect = None
+        # For adaptive EAR threshold
+        ear_values = []
         
-        # Configure face detector to be faster by increasing min face size
-        # This will ignore small faces in the background
-        min_face_size = 30  # minimum face size in pixels
-        
-        # Use simpler tracking for performance
-        if (cv2.__version__.startswith('4')):
-            tracker = cv2.TrackerKCF_create()
-        else:
-            tracker = cv2.TrackerKCF.create()  # Fall back for older OpenCV versions
-        
+        # Disable tracking if it's not available
+        # Create a tracker (or None if not available)
+        tracker = self.create_tracker()
         tracking_active = False
         
         # Use grayscale for faster processing where possible
         use_grayscale = True
         
-        while (time.time() - start_time) < timeout:
+        # Increase timeout slightly to allow for adaptation
+        actual_timeout = timeout + 0.5
+        
+        while (time.time() - start_time) < actual_timeout:
             ret, frame = cap.read()
             if not ret:
                 print("Failed to capture frame")
@@ -404,19 +429,23 @@ class CameraSystem:
             process_this_frame = (frame_count % self.process_nth_frame == 0)
             frame_count += 1
             
-            # Update tracker if active
-            if tracking_active:
-                ok, face_rect = tracker.update(frame)
-                if ok:
-                    # Convert from (x, y, width, height) to (top, right, bottom, left)
-                    x, y, w, h = [int(v) for v in face_rect]
-                    left, top, right, bottom = x, y, x + w, y + h
-                    last_face_location = (top, right, bottom, left)
-                else:
-                    # If tracking failed, we'll need to detect face again
+            # Update tracker if active and available
+            if tracker is not None and tracking_active:
+                try:
+                    ok, face_rect = tracker.update(frame)
+                    if ok:
+                        # Convert from (x, y, width, height) to (top, right, bottom, left)
+                        x, y, w, h = [int(v) for v in face_rect]
+                        left, top, right, bottom = x, y, x + w, y + h
+                        last_face_location = (top, right, bottom, left)
+                    else:
+                        # If tracking failed, we'll need to detect face again
+                        tracking_active = False
+                except Exception as e:
+                    print(f"Tracking error: {e}")
                     tracking_active = False
             
-            if process_this_frame or not tracking_active:
+            if process_this_frame or not tracking_active or tracker is None:
                 # Downscale for faster processing
                 small_frame = cv2.resize(frame, (0, 0), fx=downsample, fy=downsample)
                 
@@ -434,11 +463,18 @@ class CameraSystem:
                     
                     last_face_location = (top, right, bottom, left)
                     
-                    # Initialize or reinitialize tracker
-                    face_rect = (left, top, right - left, bottom - top)
-                    tracker = cv2.TrackerKCF_create() if (cv2.__version__.startswith('4')) else cv2.TrackerKCF.create()
-                    tracker.init(frame, face_rect)
-                    tracking_active = True
+                    # Initialize tracker if available
+                    if tracker is not None:
+                        try:
+                            face_rect = (left, top, right - left, bottom - top)
+                            # Create a new tracker for each initialization
+                            tracker = self.create_tracker()
+                            if tracker is not None:
+                                tracker.init(frame, face_rect)
+                                tracking_active = True
+                        except Exception as e:
+                            print(f"Tracker initialization error: {e}")
+                            tracking_active = False
                     
                     # Get landmarks - only if we found a face
                     landmarks_list = face_recognition.face_landmarks(rgb_small_frame, [face_locations[0]])
@@ -478,14 +514,32 @@ class CameraSystem:
                         # Average the EAR of both eyes
                         ear = (left_ear + right_ear) / 2.0
                         
+                        # Add to history for adaptive thresholding
+                        ear_values.append(ear)
+                        
+                        # Calculate adaptive threshold if we have enough data
+                        # (only after the first second or so)
+                        adaptive_threshold = self.EAR_THRESHOLD
+                        if len(ear_values) > 10:
+                            # Use the 70th percentile as our baseline open eye EAR
+                            open_eye_ear = np.percentile(ear_values, 70)
+                            # Set threshold to 80% of the open eye EAR
+                            adaptive_threshold = open_eye_ear * 0.8
+                            # But don't go below the minimum threshold
+                            adaptive_threshold = max(adaptive_threshold, self.EAR_THRESHOLD)
+                        
                         # Draw eye contours
                         for eye in [left_eye, right_eye]:
                             eye_hull = cv2.convexHull(np.array(eye))
                             cv2.drawContours(display_frame, [eye_hull], -1, (0, 255, 0), 1)
                         
                         # Check if EAR is below threshold
-                        if ear < self.EAR_THRESHOLD:
+                        if ear < adaptive_threshold:
                             ear_thresh_counter += 1
+                            # Draw RED eye contours when eyes are detected as closed
+                            for eye in [left_eye, right_eye]:
+                                eye_hull = cv2.convexHull(np.array(eye))
+                                cv2.drawContours(display_frame, [eye_hull], -1, (0, 0, 255), 2)
                         else:
                             # If eyes were closed for enough frames, count as a blink
                             if ear_thresh_counter >= self.EAR_CONSEC_FRAMES:
@@ -499,11 +553,13 @@ class CameraSystem:
                         # Display EAR value and blink count
                         cv2.putText(display_frame, f"EAR: {ear:.2f}", (10, 30),
                                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                        cv2.putText(display_frame, f"Thresh: {adaptive_threshold:.2f}", (display_frame.shape[1] - 190, 30),
+                                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
                         cv2.putText(display_frame, f"Blinks: {blink_counter}", (10, 60),
                                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
             
             # Display time remaining
-            time_left = int(timeout - (time.time() - start_time))
+            time_left = int(actual_timeout - (time.time() - start_time))
             cv2.putText(display_frame, f"Time: {time_left}s", (10, 90),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
             
