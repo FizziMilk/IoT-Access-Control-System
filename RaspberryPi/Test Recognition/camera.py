@@ -682,14 +682,11 @@ class CameraSystem:
         
         # Initialize camera
         cap = cv2.VideoCapture(self.camera_id)
-        # Use slightly higher resolution for better eye landmark detection
+        # Use lower resolution for blink detection to maintain high framerate
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.liveness_resolution[0])
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.liveness_resolution[1])
         # Disable autofocus to reduce processing overhead
         cap.set(cv2.CAP_PROP_AUTOFOCUS, 0)
-        
-        # Enable high performance mode with minimal UI rendering
-        high_performance_mode = True
         
         if not cap.isOpened():
             print("Error: Could not open camera")
@@ -698,116 +695,7 @@ class CameraSystem:
         # Wait for camera to initialize
         time.sleep(0.5)
         
-        # First, let's capture a face for focus and texture tests
-        print("Positioning face for initial checks. Please remain still...")
-        
-        # Try to capture a good face frame for initial tests
-        face_location = None
-        face_frame = None
-        face_detected = False
-        
-        # Give user time to position face
-        start_positioning = time.time()
-        positioning_timeout = 5  # 5 seconds to position face
-        
-        # Initialize frame counter
-        frame_count = 0
-        
-        while not face_detected and (time.time() - start_positioning) < positioning_timeout:
-            ret, frame = cap.read()
-            if not ret:
-                print("Failed to capture frame")
-                break
-                
-            # Display frame
-            if high_performance_mode:
-                # In high performance mode, only update display every few frames to save processing power
-                display_update_needed = (frame_count % 3 == 0)
-                if display_update_needed:
-                    display_frame = frame.copy()
-            else:
-                display_frame = frame.copy()
-            
-            cv2.putText(display_frame, "Position your face for initial checks...", 
-                       (20, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-            cv2.putText(display_frame, f"Time left: {int(positioning_timeout - (time.time() - start_positioning))}s", 
-                       (20, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-            
-            # Detect face
-            small_frame = cv2.resize(frame, (0, 0), fx=0.5, fy=0.5)
-            rgb_small_frame = cv2.cvtColor(small_frame, cv2.COLOR_BGR2RGB)
-            face_locations = face_recognition.face_locations(rgb_small_frame)
-            
-            if face_locations:
-                # Scale back up
-                top, right, bottom, left = face_locations[0]
-                top *= 2
-                right *= 2
-                bottom *= 2
-                left *= 2
-                
-                face_location = (top, right, bottom, left)
-                face_frame = frame.copy()
-                
-                # Draw rectangle around face
-                cv2.rectangle(display_frame, (left, top), (right, bottom), (0, 255, 0), 2)
-                face_size = (right - left) * (bottom - top)
-                
-                # If face is large enough, we can proceed
-                if face_size > 10000:
-                    face_detected = True
-                    cv2.putText(display_frame, "Face detected! Starting tests...", 
-                               (20, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-            
-            cv2.imshow("Positioning", display_frame)
-            key = cv2.waitKey(1) & 0xFF
-            if key == 27:  # ESC
-                cap.release()
-                cv2.destroyAllWindows()
-                return False, None
-        
-        cv2.destroyWindow("Positioning")
-        
-        # If we couldn't find a face in time, inform user and continue anyway
-        if not face_detected:
-            print("Could not detect face clearly. Continuing with tests anyway...")
-            # Try one more time to get a face
-            ret, frame = cap.read()
-            if ret:
-                small_frame = cv2.resize(frame, (0, 0), fx=0.5, fy=0.5)
-                rgb_small_frame = cv2.cvtColor(small_frame, cv2.COLOR_BGR2RGB)
-                face_locations = face_recognition.face_locations(rgb_small_frame)
-                if face_locations:
-                    top, right, bottom, left = face_locations[0]
-                    top *= 2
-                    right *= 2
-                    bottom *= 2
-                    left *= 2
-                    face_location = (top, right, bottom, left)
-                    face_frame = frame.copy()
-                    face_detected = True
-        
-        # If we have a face, run the focus and texture tests
-        if face_detected:
-            print("Running initial security checks...")
-            
-            # Run focus test first
-            focus_result = self.perform_focus_liveness_check(cap, face_location)
-            
-            # Store result for later use
-            self.focus_check_passed = focus_result
-            
-            # Reset camera to optimal settings for blink detection after focus test
-            cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.liveness_resolution[0])
-            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.liveness_resolution[1])
-            cap.set(cv2.CAP_PROP_AUTOFOCUS, 0)
-            
-            # Wait for camera to adjust after settings change
-            time.sleep(0.5)
-        
-        # Now start blink detection
         print("Blink detection started. Please look at the camera and blink normally.")
-        print("The program will continue running for the full time period to allow for testing.")
         
         # Variables for blink detection
         blink_counter = 0
@@ -816,30 +704,12 @@ class CameraSystem:
         start_time = time.time()
         
         # Keep the best face image for return
-        best_face_image = face_frame if face_detected else None
+        best_face_image = None
         max_face_size = 0
+        face_location = None
         
-        # Downsample factor for face detection (to speed up processing)
-        downsample = 0.25
-        
-        # Store the last processed face location to use for intermediate frames
-        last_face_location = face_location if face_detected else None
-        last_landmarks = None
-        
-        # For adaptive EAR threshold
-        ear_values = []
-        
-        # Create tracker once at the beginning
-        tracker = self.create_tracker()
-        tracking_active = False
-        
-        # Set frame processing rate - process more frequently to catch blinks better
-        self.process_nth_frame = 2 if tracker is not None else 1
-        print(f"Processing every {self.process_nth_frame}th frame for detection")
-        
-        # Position smoothing to reduce jitter
-        position_history = []
-        position_history_max = 5  # Increased number of frames for smoother tracking
+        # For tracking
+        frame_count = 0
         
         # Motion detection variables
         previous_frame = None
@@ -856,18 +726,29 @@ class CameraSystem:
         ear_history = []
         ear_history_max = 10
         
-        # Increase timeout slightly to allow for adaptation
-        actual_timeout = timeout + 0.5
+        # For adaptive EAR threshold
+        ear_values = []
+        
+        # Position smoothing to reduce jitter
+        position_history = []
+        position_history_max = 5
         
         # Track FPS
         fps_start_time = time.time()
         fps_frame_count = 0
         fps = 0
+        last_face_location = None
+        last_landmarks = None
         
         # Initialize ear variable outside the scope to prevent reference errors
         ear = 0.0
         
-        while (time.time() - start_time) < actual_timeout:
+        # Create tracker
+        tracker = self.create_tracker()
+        tracking_active = False
+        
+        # Process every frame for better blink detection reliability
+        while (time.time() - start_time) < timeout:
             ret, frame = cap.read()
             if not ret:
                 print("Failed to capture frame")
@@ -881,18 +762,12 @@ class CameraSystem:
                 fps_start_time = time.time()
             
             # Create a copy for display
-            if high_performance_mode:
-                # In high performance mode, only update display every few frames to save processing power
-                display_update_needed = (frame_count % 3 == 0)
-                if display_update_needed:
-                    display_frame = frame.copy()
-            else:
-                display_frame = frame.copy()
+            display_frame = frame.copy()
             
             # Detect global motion between frames
-            if previous_frame is not None and frame_count % 4 == 0:  # Only check motion every 4th frame
+            if previous_frame is not None:
                 # Convert frames to grayscale for motion detection
-                # Use lower resolution for motion detection
+                # Use lower resolution for motion detection to save CPU
                 motion_scale = 0.25
                 small_prev = cv2.resize(previous_frame, (0, 0), fx=motion_scale, fy=motion_scale)
                 small_curr = cv2.resize(frame, (0, 0), fx=motion_scale, fy=motion_scale)
@@ -915,8 +790,8 @@ class CameraSystem:
                 # Detect high motion if average motion exceeds threshold
                 if len(motion_history) > 2:
                     avg_motion = sum(motion_history) / len(motion_history)
-                    # Super strict threshold - almost no movement allowed
-                    high_motion_detected = avg_motion > 0.005  
+                    # Adjust motion threshold based on testing
+                    high_motion_detected = avg_motion > 0.005
                     
                     # Track stillness
                     if high_motion_detected:
@@ -929,22 +804,15 @@ class CameraSystem:
                         # Check if we've been still long enough
                         is_still_enough = stillness_counter >= stillness_frames_required
             
-            # Store current frame for next iteration - only store every 4th frame
-            if frame_count % 4 == 0:
-                previous_frame = frame.copy()
+            # Store current frame for next iteration
+            previous_frame = frame.copy()
             
-            # Only process every nth frame to improve performance
-            # Process more frames for better blink detection
-            process_this_frame = (frame_count % 4 == 0)  # Only run face detection every 4th frame
+            # Alternate between tracking and detection to maintain performance
+            process_this_frame = (frame_count % 3 == 0)
             frame_count += 1
             
-            # For blink detection, try to process every frame when possible
-            process_blink_this_frame = True
-            
-            # Current face box (to be determined in this frame)
-            current_face_box = None
-            
             # Try to update tracker if active
+            current_face_box = None
             if tracker is not None and tracking_active:
                 try:
                     ok, bbox = tracker.update(frame)
@@ -964,25 +832,23 @@ class CameraSystem:
             
             # Run face detection when needed
             if process_this_frame or not tracking_active:
-                # Downscale for faster processing - use more aggressive downsampling
-                downsample = 0.3  # More aggressive downsampling
-                small_frame = cv2.resize(frame, (0, 0), fx=downsample, fy=downsample)
-                
-                # Detect face locations
+                # Detect face locations with efficient downsampling
+                small_frame = cv2.resize(frame, (0, 0), fx=0.25, fy=0.25)
                 rgb_small_frame = cv2.cvtColor(small_frame, cv2.COLOR_BGR2RGB)
                 face_locations = face_recognition.face_locations(rgb_small_frame, model="hog")
                 
                 if face_locations:
                     # Scale back up face locations
                     top, right, bottom, left = face_locations[0]
-                    top = int(top / downsample)
-                    right = int(right / downsample)
-                    bottom = int(bottom / downsample)
-                    left = int(left / downsample)
+                    top *= 4
+                    right *= 4
+                    bottom *= 4
+                    left *= 4
                     
                     current_face_box = (top, right, bottom, left)
+                    face_location = current_face_box  # Store this for later focus check
                     
-                    # Initialize tracker if available and not active
+                    # Initialize tracker if available
                     if tracker is not None and not tracking_active:
                         try:
                             # Initialize with current face location
@@ -994,30 +860,26 @@ class CameraSystem:
                                 print("Failed to initialize tracker")
                         except Exception as e:
                             print(f"Tracker initialization error: {e}")
-                            tracking_active = False
                     
-                    # Get landmarks - only if we found a face
+                    # Get landmarks for blink detection
                     landmarks_list = face_recognition.face_landmarks(rgb_small_frame, [face_locations[0]])
                     
                     if landmarks_list:
                         # Convert landmarks to full scale
                         scaled_landmarks = {}
                         for feature, points in landmarks_list[0].items():
-                            scaled_landmarks[feature] = [(int(p[0] / downsample), int(p[1] / downsample)) for p in points]
+                            scaled_landmarks[feature] = [(p[0] * 4, p[1] * 4) for p in points]
                         
                         last_landmarks = scaled_landmarks
             
-            # Apply position smoothing if we have a new face position
+            # Apply smoothing for face position
             if current_face_box is not None:
-                # Add current position to history
                 position_history.append(current_face_box)
-                # Keep history at max length
                 if len(position_history) > position_history_max:
                     position_history.pop(0)
                 
                 # Calculate smoothed position
                 if len(position_history) > 1:
-                    # Simple averaging for smoother transitions
                     smoothed_top = sum(pos[0] for pos in position_history) // len(position_history)
                     smoothed_right = sum(pos[1] for pos in position_history) // len(position_history)
                     smoothed_bottom = sum(pos[2] for pos in position_history) // len(position_history)
@@ -1025,28 +887,23 @@ class CameraSystem:
                     
                     last_face_location = (smoothed_top, smoothed_right, smoothed_bottom, smoothed_left)
                 else:
-                    # If only one position, use it directly
                     last_face_location = current_face_box
             
-            # Use the last detected face and landmarks for processing
+            # Use the last detected face and landmarks for blink processing
             if last_face_location is not None:
                 top, right, bottom, left = last_face_location
                 
                 # Draw rectangle around face
                 cv2.rectangle(display_frame, (left, top), (right, bottom), (0, 255, 0), 2)
                 
-                # Save the largest face image for return if we haven't already detected a blink
-                if not blink_detected:
-                    face_size = (right - left) * (bottom - top)
-                    if face_size > max_face_size:
-                        max_face_size = face_size
-                        best_face_image = frame.copy()
-                        
-                        # We no longer run focus checks during blink detection for better performance
-                        # Focus check is done only in the initialization phase
+                # Save the largest face image for return
+                face_size = (right - left) * (bottom - top)
+                if face_size > max_face_size:
+                    max_face_size = face_size
+                    best_face_image = frame.copy()
                 
-                # Process landmarks if available
-                if last_landmarks is not None and process_blink_this_frame:
+                # Process eye landmarks if available
+                if last_landmarks is not None:
                     # Get eye landmarks
                     left_eye, right_eye = self.get_eye_landmarks(last_landmarks)
                     
@@ -1063,16 +920,15 @@ class CameraSystem:
                         if len(ear_history) > ear_history_max:
                             ear_history.pop(0)
                         
-                        # Add to history for adaptive thresholding
+                        # Add to baseline values for adaptive thresholding
                         ear_values.append(ear)
                         
-                        # Calculate adaptive threshold if we have enough data
-                        # (only after the first second or so)
+                        # Calculate adaptive threshold after sufficient samples
                         adaptive_threshold = self.EAR_THRESHOLD
                         if len(ear_values) > 10:
                             # Use the 70th percentile as our baseline open eye EAR
                             open_eye_ear = np.percentile(ear_values, 70)
-                            # Set threshold to 75% of the open eye EAR (less sensitive)
+                            # Set threshold to 75% of the open eye EAR
                             adaptive_threshold = open_eye_ear * 0.75
                             # But don't go below the minimum threshold
                             adaptive_threshold = max(adaptive_threshold, self.EAR_THRESHOLD)
@@ -1082,30 +938,27 @@ class CameraSystem:
                             eye_hull = cv2.convexHull(np.array(eye))
                             cv2.drawContours(display_frame, [eye_hull], -1, (0, 255, 0), 1)
                         
-                        # Only process blinks if we're very still
-                        process_blink = is_still_enough
-                        
-                        # Check for blink pattern - need stable EAR history
-                        if len(ear_history) >= 3 and process_blink:
-                            # Check if current EAR is below threshold - indicates closed eyes
+                        # Only process blinks when relatively still
+                        if is_still_enough and len(ear_history) >= 3:
+                            # Check if current EAR is below threshold (eyes closed)
                             if ear < adaptive_threshold:
                                 ear_thresh_counter += 1
-                                # Draw RED eye contours when eyes are detected as closed
+                                # Draw RED eye contours for closed eyes
                                 for eye in [left_eye, right_eye]:
                                     eye_hull = cv2.convexHull(np.array(eye))
                                     cv2.drawContours(display_frame, [eye_hull], -1, (0, 0, 255), 2)
                             else:
-                                # Eyes are open now, if they were closed before, check if it was a blink
+                                # Eyes are open now, check if it was a blink
                                 if ear_thresh_counter >= self.EAR_CONSEC_FRAMES:
-                                    # Check if the EAR change is natural (photos will have unnatural changes)
+                                    # Check for natural blink pattern
                                     if len(ear_history) >= 5:
-                                        # Calculate the EAR slope - needs to change gradually for real blinks
+                                        # Calculate EAR differences to verify natural transition
                                         ear_diff = abs(ear_history[-1] - ear_history[-3])
                                         ear_diff2 = abs(ear_history[-3] - ear_history[-5])
                                         
-                                        # More strict natural blink detection
+                                        # Verify blink pattern
                                         natural_blink_pattern = (
-                                            # Check for proper sequence: open -> closed -> open
+                                            # Sequence: open -> closed -> open
                                             ear_history[-5] > ear_history[-3] and 
                                             ear_history[-3] < ear_history[-1] and
                                             # Check reasonable differences
@@ -1115,56 +968,38 @@ class CameraSystem:
                                         )
                                         
                                         if natural_blink_pattern:
-                                            # Simpler blink detection - just check if we were below threshold
                                             blink_counter += 1
                                             print(f"Blink detected! EAR: {ear:.3f}, Threshold: {adaptive_threshold:.3f}")
+                                            blink_detected = True
                                 
                                 # Reset counter after eyes reopen
                                 ear_thresh_counter = 0
-
-                # Display EAR value and blink count - only if face was detected
-                if last_face_location is not None and last_landmarks is not None:
-                    # Format EAR value for display
-                    ear_text = f"EAR: {ear:.2f}"
-                    cv2.putText(display_frame, ear_text, (20, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-                    
-                    # Display blink counter
-                    cv2.putText(display_frame, f"Blinks: {blink_counter}", (20, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-                    
-                    # Check for multiple blinks (2+) to validate liveness
-                    if blink_counter >= 2:
-                        #LOGGER.info("Multiple blinks detected - liveness check passed")
-                        cv2.putText(display_frame, f"LIVENESS PASSED - {blink_counter} BLINKS", 
-                                    (20, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-                        liveness_passed = True
-                        
-                        # Only log this once per session to avoid log spam
-                        if not self.has_logged_liveness_passed and liveness_passed:
-                            LOGGER.info("Liveness check passed - Multiple blinks detected")
-                            self.has_logged_liveness_passed = True
                 
-                # Reduce UI rendering - only show essential information
+                # Display EAR value and blink count
+                ear_text = f"EAR: {ear:.2f}"
+                cv2.putText(display_frame, ear_text, (20, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                
+                # Display blink counter
+                cv2.putText(display_frame, f"Blinks: {blink_counter}", (20, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                
                 # Display time remaining
-                time_left = int(actual_timeout - (time.time() - start_time))
+                time_left = int(timeout - (time.time() - start_time))
                 cv2.putText(display_frame, f"Time: {time_left}s", (10, 90),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
                 
-                # Less frequent UI updates in high performance mode
-                if not high_performance_mode or (frame_count % 10 == 0):
-                    # Display motion status
-                    motion_status = "High Motion" if high_motion_detected else "Stable"
-                    motion_color = (0, 0, 255) if high_motion_detected else (0, 255, 0)
-                    cv2.putText(display_frame, motion_status, (display_frame.shape[1] - 120, 90),
-                              cv2.FONT_HERSHEY_SIMPLEX, 0.5, motion_color, 1)
-                    
-                    # Display frame rate
-                    cv2.putText(display_frame, f"FPS: {fps:.1f}", (display_frame.shape[1] - 120, 30), 
-                              cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
+                # Display FPS
+                cv2.putText(display_frame, f"FPS: {fps:.1f}", (display_frame.shape[1] - 120, 30), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
                 
-                # Display instructions
+                # Display motion status
+                motion_status = "High Motion" if high_motion_detected else "Stable"
+                motion_color = (0, 0, 255) if high_motion_detected else (0, 255, 0)
+                cv2.putText(display_frame, motion_status, (display_frame.shape[1] - 120, 90),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, motion_color, 1)
+                
+                # Display blink status
                 if blink_counter > 0:
-                    blink_detected = True
-                    status = f"Blink detected! ({blink_counter} blinks)"
+                    status = f"Blink detected! ({blink_counter})"
                     color = (0, 255, 0)
                 else:
                     status = "Please blink naturally..."
@@ -1172,105 +1007,111 @@ class CameraSystem:
                 cv2.putText(display_frame, status, (10, 120),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
                 
-                # Only show in non-high performance mode or infrequently
-                if not high_performance_mode or (frame_count % 10 == 0):
-                    # Display stillness status
-                    stillness_status = f"Stillness: {stillness_counter}/{stillness_frames_required}"
-                    stillness_color = (0, 255, 0) if is_still_enough else (0, 0, 255)
-                    cv2.putText(display_frame, stillness_status, (display_frame.shape[1] - 120, 120),
-                              cv2.FONT_HERSHEY_SIMPLEX, 0.5, stillness_color, 1)
-                    
-                    cv2.putText(display_frame, "ESC: Cancel", (10, display_frame.shape[0] - 20),
-                              cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+                # Display stillness status
+                stillness_status = f"Stillness: {stillness_counter}/{stillness_frames_required}"
+                stillness_color = (0, 255, 0) if is_still_enough else (0, 0, 255)
+                cv2.putText(display_frame, stillness_status, (display_frame.shape[1] - 120, 120),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, stillness_color, 1)
                 
-                # Show the frame - only update display periodically in high performance mode
-                if not high_performance_mode or display_update_needed:
-                    cv2.imshow("Liveness Detection", display_frame)
-                
-                # Check for key press
-                key = cv2.waitKey(1) & 0xFF
-                if key == 27:  # ESC key
-                    # Store result before exiting
-                    liveness_result = False
-                    best_face_img = None if best_face_image is None else best_face_image.copy()
-                    
-                    # Clean up main camera
-                    cap.release()
-                    cv2.destroyWindow("Liveness Detection")
-                    
-                    # Create result message for canceled test
-                    result_frame = np.zeros((480, 640, 3), dtype=np.uint8) if best_face_img is None else best_face_img
-                    cv2.putText(result_frame, "LIVENESS CHECK CANCELED", 
-                                (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
-                    cv2.putText(result_frame, "Press any key to exit...", 
-                                (20, result_frame.shape[0] - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
-                    cv2.imshow("Liveness Result", result_frame)
-                    cv2.waitKey(0)  # Wait for key press
-                    cv2.destroyAllWindows()
-                    
-                    # No need to clean up diagnostic images in ESC case
-                    # as they may contain useful debug information
-                    
-                    return False, None
-                
-                # Continue running even after blink is detected (removed early exit)
-                # Save the face image when a blink is first detected
-                if blink_detected and best_face_image is None and max_face_size > 0:
-                    best_face_image = frame.copy()
-                
-                # Check for multiple blinks (2+) to validate liveness
-                if blink_counter >= 2:
-                    #LOGGER.info("Multiple blinks detected - liveness check passed")
-                    cv2.putText(display_frame, f"LIVENESS PASSED - {blink_counter} BLINKS", 
-                                (20, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-                    liveness_passed = True
-                    
-                    # Only log this once per session to avoid log spam
-                    if not self.has_logged_liveness_passed and liveness_passed:
-                        LOGGER.info("Liveness check passed - Multiple blinks detected")
-                        self.has_logged_liveness_passed = True
-                        
-                    # Show high motion warning if detected
-                    if high_motion_detected:
-                        cv2.putText(display_frame, "HIGH MOTION DETECTED", 
-                                    (20, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 0, 255), 2)
+                cv2.putText(display_frame, "ESC: Cancel", (10, display_frame.shape[0] - 20),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+            
+            # Show the frame
+            cv2.imshow("Liveness Detection", display_frame)
+            
+            # Check for key press
+            key = cv2.waitKey(1) & 0xFF
+            if key == 27:  # ESC key
+                cap.release()
+                cv2.destroyAllWindows()
+                return False, None
+            
+            # Early exit if enough blinks detected
+            if blink_counter >= 2 and time.time() - start_time > timeout/2:
+                print("Multiple blinks detected - proceeding to additional checks")
+                break
         
-        # Clean up
+        # Clean up from blink detection
         cap.release()
         cv2.destroyAllWindows()
         
-        # If we've detected a blink but don't have a good face image, capture one now
-        if blink_detected and best_face_image is None:
-            best_face_image = self.capture_face()
+        # STEP 2: Only perform focus and texture tests AFTER blink detection is complete
+        # This keeps the framerate high during the critical blink detection phase
+        self.focus_check_passed = False
         
-        # Show final result and wait for user to acknowledge
-        if blink_counter > 0:
-            result_message = "PASSED" if blink_counter >= 2 else "INCOMPLETE"
-            result_color = (0, 255, 0) if blink_counter >= 2 else (0, 165, 255)
+        if blink_detected and face_location is not None:
+            # Create new camera for these tests to ensure clean state
+            focus_cap = cv2.VideoCapture(self.camera_id)
+            
+            # Wait for camera to initialize
+            time.sleep(0.5)
+            
+            print("Blink check complete. Now performing additional security checks...")
+            
+            # Run focus test first if we have a valid face
+            if focus_cap.isOpened():
+                # Capture fresh frame for texture analysis
+                ret, texture_frame = focus_cap.read()
+                
+                if ret:
+                    # Run focus and texture tests
+                    focus_result = self.perform_focus_liveness_check(focus_cap, face_location)
+                    texture_result = self.analyze_facial_texture(texture_frame)
+                    
+                    # Store focus result
+                    self.focus_check_passed = focus_result
+                    
+                    # Display results
+                    result_frame = best_face_image.copy() if best_face_image is not None else np.zeros((480, 640, 3), dtype=np.uint8)
+                    
+                    # Display final liveness results
+                    if blink_counter >= 2:
+                        result_message = "PASSED"
+                        result_color = (0, 255, 0)
+                    else:
+                        result_message = "INCOMPLETE"
+                        result_color = (0, 165, 255)
+                        
+                    cv2.putText(result_frame, f"LIVENESS CHECK {result_message}", 
+                                (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.8, result_color, 2)
+                    cv2.putText(result_frame, f"Detected {blink_counter} blinks", 
+                                (20, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                    
+                    # Add focus test result
+                    focus_result_text = "PASSED" if self.focus_check_passed else "FAILED"
+                    focus_color = (0, 255, 0) if self.focus_check_passed else (0, 0, 255)
+                    cv2.putText(result_frame, f"Focus Check: {focus_result_text}", 
+                                (20, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.7, focus_color, 2)
+                    
+                    # Add texture test result
+                    texture_result_text = "PASSED" if texture_result else "FAILED"
+                    texture_color = (0, 255, 0) if texture_result else (0, 0, 255)
+                    cv2.putText(result_frame, f"Texture Check: {texture_result_text}", 
+                                (20, 160), cv2.FONT_HERSHEY_SIMPLEX, 0.7, texture_color, 2)
+                
+                # Clean up focus camera
+                focus_cap.release()
+            
+            # Final step: Show results and wait for user acknowledgment
+            cv2.putText(result_frame, "Press any key to continue...", 
+                        (20, result_frame.shape[0] - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
+            cv2.imshow("Liveness Result", result_frame)
+            cv2.waitKey(0)
+            cv2.destroyAllWindows()
         else:
-            result_message = "FAILED"
-            result_color = (0, 0, 255)
-            
-        result_frame = best_face_image.copy() if best_face_image is not None else np.zeros((480, 640, 3), dtype=np.uint8)
-        cv2.putText(result_frame, f"LIVENESS CHECK {result_message}", 
-                    (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.8, result_color, 2)
-        cv2.putText(result_frame, f"Detected {blink_counter} blinks", 
-                    (20, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+            # Show failed result
+            result_frame = np.zeros((480, 640, 3), dtype=np.uint8)
+            cv2.putText(result_frame, "LIVENESS CHECK FAILED", 
+                        (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+            cv2.putText(result_frame, "No blinks detected.", 
+                        (20, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+            cv2.putText(result_frame, "Press any key to continue...", 
+                        (20, result_frame.shape[0] - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
+            cv2.imshow("Liveness Result", result_frame)
+            cv2.waitKey(0)
+            cv2.destroyAllWindows()
         
-        # Add focus test result if it was performed
-        if hasattr(self, 'focus_check_passed'):
-            focus_result = "PASSED" if self.focus_check_passed else "FAILED"
-            focus_color = (0, 255, 0) if self.focus_check_passed else (0, 0, 255)
-            cv2.putText(result_frame, f"Focus Check: {focus_result}", 
-                        (20, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.7, focus_color, 2)
-            
-        cv2.putText(result_frame, "Press any key to continue...", 
-                    (20, result_frame.shape[0] - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
-        cv2.imshow("Liveness Result", result_frame)
-        cv2.waitKey(0)  # Wait for any key press
-        cv2.destroyAllWindows()
-        
-        # Clean up any diagnostic images generated during focus testing
+        # Clean up any diagnostic images
         self.cleanup_diagnostic_images()
         
         return blink_detected, best_face_image
