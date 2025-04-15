@@ -7,6 +7,7 @@ from scipy.spatial import distance as dist
 import threading
 import traceback
 import logging
+import os
 
 # Set up logger
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -572,6 +573,9 @@ class CameraSystem:
         Returns:
             tuple: (success, face_image)
         """
+        # Reset focus check at the start of each detection session
+        self.focus_check_passed = False
+        
         # Initialize camera
         cap = cv2.VideoCapture(self.camera_id)
         # Use slightly higher resolution for better eye landmark detection
@@ -1011,7 +1015,36 @@ class CameraSystem:
         if blink_detected and best_face_image is None:
             best_face_image = self.capture_face()
         
+        # Show final result and wait for user to acknowledge
+        if blink_detected:
+            result_frame = best_face_image.copy() if best_face_image is not None else np.zeros((480, 640, 3), dtype=np.uint8)
+            cv2.putText(result_frame, f"LIVENESS CHECK {'PASSED' if blink_counter >= 2 else 'INCOMPLETE'}", 
+                        (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+            cv2.putText(result_frame, f"Detected {blink_counter} blinks", 
+                        (20, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+            cv2.putText(result_frame, "Press any key to continue...", 
+                        (20, result_frame.shape[0] - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
+            cv2.imshow("Liveness Result", result_frame)
+            cv2.waitKey(0)  # Wait for any key press
+            cv2.destroyAllWindows()
+            
+            # Clean up any diagnostic images generated during focus testing
+            self.cleanup_diagnostic_images()
+        
         return blink_detected, best_face_image
+    
+    def cleanup_diagnostic_images(self):
+        """Clean up diagnostic images created during focus testing"""
+        try:
+            # Remove all focus test images
+            for filename in ["focus_test_0.jpg", "focus_test_100.jpg", "focus_test_255.jpg", 
+                            "focus_test_collage.jpg", "focus_test_result.jpg"]:
+                if os.path.exists(filename):
+                    os.remove(filename)
+                    print(f"Removed {filename}")
+        except Exception as e:
+            print(f"Error cleaning up diagnostic images: {e}")
+            # Continue even if cleanup fails
         
     # Replace the simplified placeholder with our real implementation
     def capture_face_with_liveness(self):
