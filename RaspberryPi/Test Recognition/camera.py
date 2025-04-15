@@ -16,10 +16,10 @@ class CameraSystem:
     def __init__(self, camera_id=0, resolution=(640, 480)):
         self.camera_id = camera_id
         self.resolution = resolution
-        # EAR threshold for blink detection - more sensitive
-        self.EAR_THRESHOLD = 0.17  # Even lower threshold to catch more blinks
+        # EAR threshold for blink detection - less sensitive (harder to register)
+        self.EAR_THRESHOLD = 0.20  # Higher threshold makes it harder to detect blinks
         # Number of consecutive frames the eye must be below threshold to count as a blink
-        self.EAR_CONSEC_FRAMES = 1  # Fast blink detection
+        self.EAR_CONSEC_FRAMES = 2  # Require longer eye closure to count as blink
         # Use a much lower resolution for liveness detection
         self.liveness_resolution = (320, 240)
         # Frame process rate (1 = process every frame, 2 = every other frame, etc.)
@@ -475,7 +475,7 @@ class CameraSystem:
                 # Detect high motion if average motion exceeds threshold
                 if len(motion_history) > 2:
                     avg_motion = sum(motion_history) / len(motion_history)
-                    high_motion_detected = avg_motion > 0.035  # Stricter threshold to better detect head movement
+                    high_motion_detected = avg_motion > 0.025  # Lower threshold to detect movement more easily
             
             # Store current frame for next iteration
             previous_frame = frame.copy()
@@ -611,8 +611,8 @@ class CameraSystem:
                         if len(ear_values) > 10:
                             # Use the 70th percentile as our baseline open eye EAR
                             open_eye_ear = np.percentile(ear_values, 70)
-                            # Set threshold to 80% of the open eye EAR
-                            adaptive_threshold = open_eye_ear * 0.8
+                            # Set threshold to 75% of the open eye EAR (less sensitive)
+                            adaptive_threshold = open_eye_ear * 0.75
                             # But don't go below the minimum threshold
                             adaptive_threshold = max(adaptive_threshold, self.EAR_THRESHOLD)
                         
