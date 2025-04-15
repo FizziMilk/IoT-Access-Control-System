@@ -397,6 +397,10 @@ class CameraSystem:
         focus_levels = [0, 100, 255]  # Min, mid, max focus values
         clarity_differences = []
         
+        # Store diagnostic images
+        diagnostic_images = []
+        all_clarity_values = []
+        
         try:
             for focus in focus_levels:
                 # Set focus
@@ -416,18 +420,48 @@ class CameraSystem:
                 forehead_clarity = self.calculate_clarity(gray, forehead_point)
                 chin_clarity = self.calculate_clarity(gray, chin_point)
                 
+                # Store all clarity values for debugging
+                all_clarity_values.append((focus, forehead_clarity, chin_clarity))
+                
                 # Calculate relative clarity difference between points
                 relative_diff = abs(forehead_clarity - chin_clarity) / max(forehead_clarity, chin_clarity)
                 clarity_differences.append(relative_diff)
                 
-                # Display focus test in progress
-                cv2.circle(frame, forehead_point, 5, (0, 255, 0), -1)
-                cv2.circle(frame, chin_point, 5, (0, 0, 255), -1)
-                cv2.putText(frame, f"Focus: {focus}, Diff: {relative_diff:.3f}", 
-                           (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
-                cv2.imshow("Focus Test", frame)
+                # Create diagnostic visualization
+                debug_frame = frame.copy()
+                
+                # Highlight test regions with rectangles
+                region_size = 20
+                cv2.rectangle(debug_frame, 
+                             (forehead_point[0]-region_size//2, forehead_point[1]-region_size//2),
+                             (forehead_point[0]+region_size//2, forehead_point[1]+region_size//2),
+                             (0, 255, 0), 2)
+                cv2.rectangle(debug_frame, 
+                             (chin_point[0]-region_size//2, chin_point[1]-region_size//2),
+                             (chin_point[0]+region_size//2, chin_point[1]+region_size//2),
+                             (0, 0, 255), 2)
+                
+                # Show clarity values
+                cv2.putText(debug_frame, f"Forehead: {forehead_clarity:.2f}", (10, 50), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+                cv2.putText(debug_frame, f"Chin: {chin_clarity:.2f}", (10, 80), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+                cv2.putText(debug_frame, f"Diff: {relative_diff:.3f}", (10, 110), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 0), 2)
+                
+                cv2.putText(debug_frame, f"Focus: {focus}", (10, 30), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+                
+                # Store debug frame
+                diagnostic_images.append(debug_frame)
+                
+                # Show the diagnostic image
+                cv2.imshow(f"Focus Test - Level {focus}", debug_frame)
                 cv2.waitKey(1)
                 
+                # Save diagnostic image
+                cv2.imwrite(f"focus_test_{focus}.jpg", debug_frame)
+            
             # Analyze results
             # Real faces show varying clarity differences across focus settings
             # Flat images will have very similar differences
@@ -438,18 +472,54 @@ class CameraSystem:
             # Higher variance indicates depth variation (real face)
             is_real_face = variance > 0.001
             
-            # Log and display result
-            print(f"Focus check variance: {variance:.6f} - {'REAL FACE' if is_real_face else 'POSSIBLE SPOOF'}")
+            # Detailed debug output
+            print("\nDetailed Focus Test Results:")
+            print("=" * 50)
+            print(f"{'Focus':<10} {'Forehead':<15} {'Chin':<15} {'Difference':<15}")
+            print("-" * 50)
+            for i, values in enumerate(all_clarity_values):
+                focus, forehead, chin = values
+                diff = clarity_differences[i]
+                print(f"{focus:<10.0f} {forehead:<15.3f} {chin:<15.3f} {diff:<15.3f}")
+            print("-" * 50)
+            print(f"Variance: {variance:.6f}")
+            print(f"Result: {'REAL FACE' if is_real_face else 'POSSIBLE SPOOF'}")
+            print("=" * 50)
             
-            # Capture final result for display
+            # Final summary display
             ret, frame = cap.read()
             if ret:
-                result_text = f"PASS: Real Face" if is_real_face else "FAIL: Possible Spoof"
+                summary_frame = frame.copy()
+                
+                # Create a collage of all test images
+                if len(diagnostic_images) >= 3:
+                    h, w = diagnostic_images[0].shape[:2]
+                    collage = np.zeros((h, w*3, 3), dtype=np.uint8)
+                    for i, img in enumerate(diagnostic_images[:3]):
+                        collage[0:h, i*w:(i+1)*w] = img
+                    
+                    # Resize for display
+                    display_collage = cv2.resize(collage, (0, 0), fx=0.7, fy=0.7)
+                    cv2.imshow("Focus Test Collage", display_collage)
+                    cv2.imwrite("focus_test_collage.jpg", collage)
+                
+                # Display final result
+                result_text = f"PASS: Real Face (var={variance:.6f})" if is_real_face else f"FAIL: Possible Spoof (var={variance:.6f})"
                 color = (0, 255, 0) if is_real_face else (0, 0, 255)
-                cv2.putText(frame, result_text, (center_x - 100, top - 10),
+                cv2.putText(summary_frame, result_text, (center_x - 150, top - 10),
                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
-                cv2.imshow("Focus Test Result", frame)
-                cv2.waitKey(500)
+                
+                # Show all clarity differences
+                for i, diff in enumerate(clarity_differences):
+                    cv2.putText(summary_frame, f"Diff {i}: {diff:.3f}", (20, 150 + i*30),
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
+                
+                cv2.putText(summary_frame, f"Variance: {variance:.6f}", (20, 150 + len(clarity_differences)*30),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
+                
+                cv2.imshow("Focus Test Result", summary_frame)
+                cv2.imwrite("focus_test_result.jpg", summary_frame)
+                cv2.waitKey(1000)  # Show result for longer
             
             return is_real_face
             
