@@ -12,7 +12,7 @@ class CameraSystem:
         self.camera_id = camera_id
         self.resolution = resolution
         # EAR threshold for blink detection - more sensitive
-        self.EAR_THRESHOLD = 0.23  # Lower threshold to catch more blinks
+        self.EAR_THRESHOLD = 0.19  # Lower threshold to catch more blinks
         # Number of consecutive frames the eye must be below threshold to count as a blink
         self.EAR_CONSEC_FRAMES = 1  # Fast blink detection
         # Use a much lower resolution for liveness detection
@@ -22,6 +22,8 @@ class CameraSystem:
         # Use a separate thread for face detection to prevent UI blocking
         self.face_detection_thread = None
         self.stop_detection_thread = False
+        # Flag to track if liveness passed has been logged
+        self.has_logged_liveness_passed = False
     
     def capture_face(self):
         """Capture an image from the camera with face detection"""
@@ -636,7 +638,7 @@ class CameraSystem:
                                     ear_drop = max(recent_ear[:2]) - min(recent_ear[2:3])
                                     
                                     # Simplified blink detection criteria - no vertical motion checks
-                                    valid_blink = ear_drop > 0.02  # Simple threshold for detecting a blink
+                                    valid_blink = ear_drop > 0.015  # Reduced threshold for detecting a blink
                                     
                                     # Count blink if valid
                                     if valid_blink:
