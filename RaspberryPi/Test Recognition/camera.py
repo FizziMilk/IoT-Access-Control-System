@@ -5,6 +5,7 @@ import numpy as np
 import dlib
 from scipy.spatial import distance as dist
 import threading
+import traceback
 
 class CameraSystem:
     def __init__(self, camera_id=0, resolution=(640, 480)):
@@ -326,32 +327,67 @@ class CameraSystem:
     
     def create_tracker(self):
         """Create a tracking object compatible with the installed OpenCV version"""
-        # Modern versions of OpenCV use a different tracking API
+        # Print OpenCV version for diagnostic purposes
+        print(f"OpenCV version: {cv2.__version__}")
+        
+        # Let's check what trackers are available
+        available_trackers = dir(cv2)
+        legacy_trackers = []
+        if hasattr(cv2, 'legacy'):
+            legacy_trackers = dir(cv2.legacy)
+            
+        print("Looking for available trackers...")
+        tracker_names = ["TrackerKCF", "TrackerCSRT", "TrackerMOSSE"]
+        for name in tracker_names:
+            if name in available_trackers:
+                print(f"Found {name} in cv2")
+            if hasattr(cv2, 'legacy') and name in legacy_trackers:
+                print(f"Found {name} in cv2.legacy")
+                
+        # Simplified tracker creation approach
         tracker = None
         
         try:
-            # Try the modern tracking API (OpenCV 4.5.1+)
-            if hasattr(cv2, 'legacy') and hasattr(cv2.legacy, 'TrackerKCF'):
-                # Use legacy module in newer OpenCV versions
+            # If we're on OpenCV 4.5.1+ with legacy module
+            if hasattr(cv2, 'legacy') and hasattr(cv2.legacy, 'TrackerCSRT'):
+                print("Using legacy.TrackerCSRT - best performance")
+                tracker = cv2.legacy.TrackerCSRT.create()
+            
+            # If we're on OpenCV 4.x or 3.x with standard API 
+            elif hasattr(cv2, 'TrackerCSRT'):
+                print("Using TrackerCSRT - best performance")
+                tracker = cv2.TrackerCSRT.create()
+                
+            # Try KCF as fallback
+            elif hasattr(cv2, 'legacy') and hasattr(cv2.legacy, 'TrackerKCF'):
+                print("Using legacy.TrackerKCF")
                 tracker = cv2.legacy.TrackerKCF.create()
+                
             elif hasattr(cv2, 'TrackerKCF'):
-                # OpenCV 3.x and 4.x style
+                print("Using TrackerKCF")
                 tracker = cv2.TrackerKCF.create()
+                
+            # Last resort - use MOSSE (very fast but less accurate)
+            elif hasattr(cv2, 'legacy') and hasattr(cv2.legacy, 'TrackerMOSSE'):
+                print("Using legacy.TrackerMOSSE - faster but less accurate")
+                tracker = cv2.legacy.TrackerMOSSE.create()
+                
+            elif hasattr(cv2, 'TrackerMOSSE'):
+                print("Using TrackerMOSSE - faster but less accurate")
+                tracker = cv2.TrackerMOSSE.create()
+                
             else:
-                # Try other trackers if KCF is not available
-                if hasattr(cv2, 'legacy') and hasattr(cv2.legacy, 'TrackerCSRT'):
-                    tracker = cv2.legacy.TrackerCSRT.create()
-                elif hasattr(cv2, 'TrackerCSRT'):
-                    tracker = cv2.TrackerCSRT.create()
-                elif hasattr(cv2, 'legacy') and hasattr(cv2.legacy, 'TrackerMOSSE'):
-                    tracker = cv2.legacy.TrackerMOSSE.create()
-                elif hasattr(cv2, 'TrackerMOSSE'):
-                    tracker = cv2.TrackerMOSSE.create()
+                print("No suitable tracker found in OpenCV installation")
+                if hasattr(cv2, 'Tracker_create'):
+                    print("Found Tracker_create, trying generic tracker")
+                    tracker = cv2.Tracker_create("KCF")
                 else:
-                    print("No suitable tracker found. Disabling tracking.")
+                    print("Disabling tracking functionality")
                     tracker = None
+                    
         except Exception as e:
             print(f"Error creating tracker: {e}")
+            print("Traceback:", traceback.format_exc())
             tracker = None
         
         return tracker
