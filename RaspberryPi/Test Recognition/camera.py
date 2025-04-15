@@ -369,77 +369,92 @@ class CameraSystem:
         Returns:
             bool: True if the face is likely real, False if possibly a photo
         """
-        if not self.use_focus_check:
-            return True
-            
-        print("Performing focus-based liveness check...")
-        
-        # Verify camera properties and capabilities
-        print("\nCamera Properties:")
-        print(f"CAP_PROP_AUTOFOCUS supported: {cap.get(cv2.CAP_PROP_AUTOFOCUS) != -1}")
-        print(f"CAP_PROP_FOCUS supported: {cap.get(cv2.CAP_PROP_FOCUS) != -1}")
-        print(f"Current autofocus setting: {cap.get(cv2.CAP_PROP_AUTOFOCUS)}")
-        print(f"Current focus setting: {cap.get(cv2.CAP_PROP_FOCUS)}")
-        
-        # Test if we can actually control focus
-        initial_focus = cap.get(cv2.CAP_PROP_FOCUS)
-        print(f"Initial focus value: {initial_focus}")
-        
-        # Try to set focus to a different value
-        test_focus = 0 if initial_focus > 100 else 255
-        success = cap.set(cv2.CAP_PROP_FOCUS, test_focus)
-        print(f"Set focus to {test_focus}: {'SUCCESS' if success else 'FAILED'}")
-        
-        # Verify the change
-        time.sleep(1.0)  # Give more time for focus to adjust
-        new_focus = cap.get(cv2.CAP_PROP_FOCUS)
-        print(f"After setting, focus value is: {new_focus}")
-        
-        focus_control_working = abs(new_focus - initial_focus) > 10
-        print(f"Focus control is working: {'YES' if focus_control_working else 'NO'}")
-        
-        if not focus_control_working:
-            print("WARNING: Cannot control camera focus. Using alternative detection method.")
-            # Return based on alternative detection (always true for now)
-            return True
-        
-        # Store current focus settings to restore later
-        current_focus_auto = cap.get(cv2.CAP_PROP_AUTOFOCUS)
-        current_focus_abs = cap.get(cv2.CAP_PROP_FOCUS)
-        
-        # Disable autofocus for manual control - be more aggressive
-        cap.set(cv2.CAP_PROP_AUTOFOCUS, 0)
-        time.sleep(0.5)  # Give time for autofocus to turn off
-        
-        # Extract face region for analysis
-        top, right, bottom, left = face_location
-        face_height = bottom - top
-        
-        # Define focus test points - try different regions
-        # Use eye region vs nose region (should have different depths)
-        eye_y = top + int(face_height * 0.3)
-        nose_y = top + int(face_height * 0.5)
-        center_x = left + int((right - left) / 2)
-        
-        # Points to analyze
-        eye_point = (center_x, eye_y)
-        nose_point = (center_x, nose_y)
-        
-        # Add background point for comparison
-        bg_x = max(0, left - int((right - left) * 0.5))  # Point to the left of face
-        if bg_x < 20:  # If face too close to left edge, use right side
-            bg_x = min(cap.get(cv2.CAP_PROP_FRAME_WIDTH) - 20, right + int((right - left) * 0.5))
-        bg_point = (bg_x, eye_y)
-        
-        # Test more extreme focus levels with longer adjustment time
-        focus_levels = [0, 125, 250]  # Min, mid, max focus values
-        clarity_values = []
-        clarity_differences = []
-        
-        # Store diagnostic images
-        diagnostic_images = []
+        # Store original settings to restore at the end
+        original_autofocus = None
+        original_focus = None
         
         try:
+            if not self.use_focus_check:
+                return True
+                
+            print("Performing focus-based liveness check...")
+            
+            # Verify face_location is valid
+            if face_location is None or len(face_location) != 4:
+                print("ERROR: Invalid face location")
+                return True
+                
+            # Verify camera properties and capabilities
+            print("\nCamera Properties:")
+            print(f"CAP_PROP_AUTOFOCUS supported: {cap.get(cv2.CAP_PROP_AUTOFOCUS) != -1}")
+            print(f"CAP_PROP_FOCUS supported: {cap.get(cv2.CAP_PROP_FOCUS) != -1}")
+            print(f"Current autofocus setting: {cap.get(cv2.CAP_PROP_AUTOFOCUS)}")
+            print(f"Current focus setting: {cap.get(cv2.CAP_PROP_FOCUS)}")
+            
+            # Test if we can actually control focus
+            initial_focus = cap.get(cv2.CAP_PROP_FOCUS)
+            print(f"Initial focus value: {initial_focus}")
+            
+            # Try to set focus to a different value
+            test_focus = 0 if initial_focus > 100 else 255
+            success = cap.set(cv2.CAP_PROP_FOCUS, test_focus)
+            print(f"Set focus to {test_focus}: {'SUCCESS' if success else 'FAILED'}")
+            
+            # Verify the change
+            time.sleep(1.0)  # Give more time for focus to adjust
+            new_focus = cap.get(cv2.CAP_PROP_FOCUS)
+            print(f"After setting, focus value is: {new_focus}")
+            
+            focus_control_working = abs(new_focus - initial_focus) > 10
+            print(f"Focus control is working: {'YES' if focus_control_working else 'NO'}")
+            
+            if not focus_control_working:
+                print("WARNING: Cannot control camera focus. Using alternative detection method.")
+                # Return based on alternative detection (always true for now)
+                return True
+            
+            # Store current focus settings to restore later
+            original_autofocus = cap.get(cv2.CAP_PROP_AUTOFOCUS)
+            original_focus = cap.get(cv2.CAP_PROP_FOCUS)
+            
+            # Disable autofocus for manual control - be more aggressive
+            cap.set(cv2.CAP_PROP_AUTOFOCUS, 0)
+            time.sleep(0.5)  # Give time for autofocus to turn off
+            
+            # Extract face region for analysis
+            top, right, bottom, left = face_location
+            face_height = bottom - top
+            
+            # Define focus test points - try different regions
+            # Use eye region vs nose region (should have different depths)
+            eye_y = top + int(face_height * 0.3)
+            nose_y = top + int(face_height * 0.5)
+            center_x = left + int((right - left) / 2)
+            
+            # Points to analyze - ensure all coordinates are integers
+            eye_point = (int(center_x), int(eye_y))
+            nose_point = (int(center_x), int(nose_y))
+            
+            # Add background point for comparison - ensure all values are integers
+            frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            bg_x = max(0, left - int((right - left) * 0.5))  # Point to the left of face
+            if bg_x < 20:  # If face too close to left edge, use right side
+                bg_x = min(frame_width - 20, right + int((right - left) * 0.5))
+            bg_point = (int(bg_x), int(eye_y))
+            
+            # Verify points are valid integers and within frame
+            print(f"Eye point: {eye_point}, type: {type(eye_point[0])}, {type(eye_point[1])}")
+            print(f"Nose point: {nose_point}, type: {type(nose_point[0])}, {type(nose_point[1])}")
+            print(f"Background point: {bg_point}, type: {type(bg_point[0])}, {type(bg_point[1])}")
+            
+            # Test more extreme focus levels with longer adjustment time
+            focus_levels = [0, 125, 250]  # Min, mid, max focus values
+            clarity_values = []
+            clarity_differences = []
+            
+            # Store diagnostic images
+            diagnostic_images = []
+            
             for focus in focus_levels:
                 # Set focus
                 print(f"Setting focus to {focus}")
@@ -655,10 +670,19 @@ class CameraSystem:
             
             return is_real_face
             
+        except Exception as e:
+            print(f"Error in focus liveness check: {e}")
+            print(traceback.format_exc())
+            return True  # Default to allowing the user through if focus check fails
         finally:
-            # Restore original camera settings
-            cap.set(cv2.CAP_PROP_AUTOFOCUS, current_focus_auto)
-            cap.set(cv2.CAP_PROP_FOCUS, current_focus_abs)
+            # Restore original camera settings if they were saved
+            if original_autofocus is not None and original_focus is not None:
+                try:
+                    print("Restoring original camera settings")
+                    cap.set(cv2.CAP_PROP_AUTOFOCUS, original_autofocus)
+                    cap.set(cv2.CAP_PROP_FOCUS, original_focus)
+                except Exception as e:
+                    print(f"Error restoring camera settings: {e}")
     
     def calculate_clarity(self, gray_img, point, region_size=20):
         """
@@ -673,26 +697,39 @@ class CameraSystem:
         Returns:
             float: Clarity measure (higher = sharper)
         """
-        x, y = point
-        h, w = gray_img.shape
-        
-        # Ensure region is within image bounds
-        left = max(0, x - region_size // 2)
-        top = max(0, y - region_size // 2)
-        right = min(w, x + region_size // 2)
-        bottom = min(h, y + region_size // 2)
-        
-        if right <= left or bottom <= top:
-            return 0.0
+        try:
+            # Ensure point coordinates are integers
+            x, y = int(point[0]), int(point[1])
+            region_size = int(region_size)
+            h, w = gray_img.shape
             
-        # Extract region
-        region = gray_img[top:bottom, left:right]
-        
-        # Apply Laplacian filter (edge detection)
-        laplacian = cv2.Laplacian(region, cv2.CV_64F)
-        
-        # Return variance of the Laplacian
-        return laplacian.var()
+            # Print debugging info
+            print(f"Image shape: {gray_img.shape}, Point: ({x}, {y}), Region size: {region_size}")
+            
+            # Ensure region is within image bounds
+            left = max(0, x - region_size // 2)
+            top = max(0, y - region_size // 2)
+            right = min(w, x + region_size // 2)
+            bottom = min(h, y + region_size // 2)
+            
+            # Print debug info for region bounds
+            print(f"Region bounds: left={left}, top={top}, right={right}, bottom={bottom}")
+            
+            if right <= left or bottom <= top:
+                print("WARNING: Invalid region bounds")
+                return 0.0
+                
+            # Extract region
+            region = gray_img[top:bottom, left:right]
+            
+            # Apply Laplacian filter (edge detection)
+            laplacian = cv2.Laplacian(region, cv2.CV_64F)
+            
+            # Return variance of the Laplacian
+            return laplacian.var()
+        except Exception as e:
+            print(f"Error in calculate_clarity: {e}")
+            return 0.0
     
     def detect_blink(self, timeout=7):
         """
@@ -1200,12 +1237,19 @@ class CameraSystem:
     def cleanup_diagnostic_images(self):
         """Clean up diagnostic images created during focus testing"""
         try:
+            # Focus levels used in the test
+            focus_levels = [0, 125, 250]
+            
             # Remove all focus test images
-            for filename in ["focus_test_0.jpg", "focus_test_100.jpg", "focus_test_255.jpg", 
-                            "focus_test_collage.jpg", "focus_test_result.jpg"]:
+            files_to_clean = [f"focus_test_{level}.jpg" for level in focus_levels]
+            files_to_clean.extend(["focus_test_collage.jpg", "focus_test_result.jpg"])
+            
+            for filename in files_to_clean:
                 if os.path.exists(filename):
                     os.remove(filename)
                     print(f"Removed {filename}")
+                else:
+                    print(f"File not found: {filename}")
         except Exception as e:
             print(f"Error cleaning up diagnostic images: {e}")
             # Continue even if cleanup fails
