@@ -1432,6 +1432,10 @@ class CameraSystem:
                 cv2.putText(display_frame, "LIVENESS CONFIRMED!", 
                           (display_frame.shape[1]//2 - 150, 110), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
                 
+                # Add a prompt to press any key to continue
+                cv2.putText(display_frame, "Press any key to continue...", 
+                          (display_frame.shape[1]//2 - 150, 150), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+                
             # Show the frame
             cv2.imshow("Liveness Detection", display_frame)
             
@@ -1464,17 +1468,41 @@ class CameraSystem:
             elif key == 27:  # ESC key
                 break
             elif all_passed:
-                # Wait a moment to show the success message
-                time.sleep(2)
+                # Wait for a keypress before continuing
+                print("Liveness confirmed! Press any key to continue...")
+                cv2.putText(display_frame, "LIVENESS CONFIRMED! Press any key to continue...", 
+                          (10, display_frame.shape[0] - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                cv2.imshow("Liveness Detection", display_frame)
+                cv2.waitKey(0)  # Wait indefinitely until a key is pressed
                 break
                 
         # Clean up
         cap.release()
         cv2.destroyWindow("Liveness Detection")
-        cv2.destroyWindow("Texture Tests Results")
-        cv2.destroyWindow("Texture Debug Visualization")
-        cv2.destroyWindow("Texture Tests Gallery")
-        cv2.waitKey(1)  # Required to properly close windows
+        
+        # Close any other windows that might be open
+        try:
+            cv2.destroyWindow("Texture Tests Results")
+            cv2.destroyWindow("Texture Debug Visualization")
+            cv2.destroyWindow("Texture Tests Gallery")
+        except:
+            # Windows may already be closed
+            pass
+            
+        # Force a small wait to properly close windows
+        cv2.waitKey(1)
+        
+        # If we exited because of timeout without confirming liveness
+        if not all_passed and time.time() - start_time >= timeout:
+            print("Liveness detection timed out! Press any key to continue...")
+            timeout_frame = np.zeros((300, 600, 3), dtype=np.uint8)
+            cv2.putText(timeout_frame, "LIVENESS DETECTION TIMED OUT", 
+                      (50, 100), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+            cv2.putText(timeout_frame, "Press any key to continue...", 
+                      (150, 150), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+            cv2.imshow("Timeout", timeout_frame)
+            cv2.waitKey(0)
+            cv2.destroyWindow("Timeout")
         
         # Return the results
         return all_passed, face_image
