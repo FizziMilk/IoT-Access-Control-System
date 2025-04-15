@@ -19,7 +19,7 @@ class CameraSystem:
         # EAR threshold for blink detection - less sensitive (harder to register)
         self.EAR_THRESHOLD = 0.20  # Higher threshold makes it harder to detect blinks
         # Number of consecutive frames the eye must be below threshold to count as a blink
-        self.EAR_CONSEC_FRAMES = 2  # Require longer eye closure to count as blink
+        self.EAR_CONSEC_FRAMES = 1  # Detect blinks in a single frame
         # Use a much lower resolution for liveness detection
         self.liveness_resolution = (320, 240)
         # Frame process rate (1 = process every frame, 2 = every other frame, etc.)
@@ -475,7 +475,7 @@ class CameraSystem:
                 # Detect high motion if average motion exceeds threshold
                 if len(motion_history) > 2:
                     avg_motion = sum(motion_history) / len(motion_history)
-                    high_motion_detected = avg_motion > 0.025  # Lower threshold to detect movement more easily
+                    high_motion_detected = avg_motion > 0.015  # Even more sensitive motion detection
             
             # Store current frame for next iteration
             previous_frame = frame.copy()
