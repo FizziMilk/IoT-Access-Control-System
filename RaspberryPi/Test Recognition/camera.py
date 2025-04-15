@@ -688,6 +688,9 @@ class CameraSystem:
         # Disable autofocus to reduce processing overhead
         cap.set(cv2.CAP_PROP_AUTOFOCUS, 0)
         
+        # Enable high performance mode with minimal UI rendering
+        high_performance_mode = True
+        
         if not cap.isOpened():
             print("Error: Could not open camera")
             return False, None
@@ -714,7 +717,14 @@ class CameraSystem:
                 break
                 
             # Display frame
-            display_frame = frame.copy()
+            if high_performance_mode:
+                # In high performance mode, only update display every few frames to save processing power
+                display_update_needed = (frame_count % 3 == 0)
+                if display_update_needed:
+                    display_frame = frame.copy()
+            else:
+                display_frame = frame.copy()
+            
             cv2.putText(display_frame, "Position your face for initial checks...", 
                        (20, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
             cv2.putText(display_frame, f"Time left: {int(positioning_timeout - (time.time() - start_positioning))}s", 
@@ -871,13 +881,24 @@ class CameraSystem:
                 fps_start_time = time.time()
             
             # Create a copy for display
-            display_frame = frame.copy()
+            if high_performance_mode:
+                # In high performance mode, only update display every few frames to save processing power
+                display_update_needed = (frame_count % 3 == 0)
+                if display_update_needed:
+                    display_frame = frame.copy()
+            else:
+                display_frame = frame.copy()
             
             # Detect global motion between frames
-            if previous_frame is not None:
+            if previous_frame is not None and frame_count % 4 == 0:  # Only check motion every 4th frame
                 # Convert frames to grayscale for motion detection
-                gray1 = cv2.cvtColor(previous_frame, cv2.COLOR_BGR2GRAY)
-                gray2 = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                # Use lower resolution for motion detection
+                motion_scale = 0.25
+                small_prev = cv2.resize(previous_frame, (0, 0), fx=motion_scale, fy=motion_scale)
+                small_curr = cv2.resize(frame, (0, 0), fx=motion_scale, fy=motion_scale)
+                
+                gray1 = cv2.cvtColor(small_prev, cv2.COLOR_BGR2GRAY)
+                gray2 = cv2.cvtColor(small_curr, cv2.COLOR_BGR2GRAY)
                 
                 # Calculate absolute difference between frames
                 diff = cv2.absdiff(gray1, gray2)
@@ -908,11 +929,13 @@ class CameraSystem:
                         # Check if we've been still long enough
                         is_still_enough = stillness_counter >= stillness_frames_required
             
-            # Store current frame for next iteration
-            previous_frame = frame.copy()
+            # Store current frame for next iteration - only store every 4th frame
+            if frame_count % 4 == 0:
+                previous_frame = frame.copy()
             
             # Only process every nth frame to improve performance
-            process_this_frame = (frame_count % self.process_nth_frame == 0)
+            # Process more frames for better blink detection
+            process_this_frame = (frame_count % 4 == 0)  # Only run face detection every 4th frame
             frame_count += 1
             
             # For blink detection, try to process every frame when possible
@@ -941,7 +964,8 @@ class CameraSystem:
             
             # Run face detection when needed
             if process_this_frame or not tracking_active:
-                # Downscale for faster processing
+                # Downscale for faster processing - use more aggressive downsampling
+                downsample = 0.3  # More aggressive downsampling
                 small_frame = cv2.resize(frame, (0, 0), fx=downsample, fy=downsample)
                 
                 # Detect face locations
@@ -1118,42 +1142,29 @@ class CameraSystem:
                         if not self.has_logged_liveness_passed and liveness_passed:
                             LOGGER.info("Liveness check passed - Multiple blinks detected")
                             self.has_logged_liveness_passed = True
-                    
-                    # Show high motion warning if detected
-                    if high_motion_detected:
-                        cv2.putText(display_frame, "HIGH MOTION DETECTED", 
-                                    (20, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 0, 255), 2)
-
-                # Display focus check status
-                focus_status = "Focus Check: PASSED" if self.focus_check_passed else "Focus Check: PENDING"
-                focus_color = (0, 255, 0) if self.focus_check_passed else (0, 165, 255)
-                cv2.putText(display_frame, focus_status, (10, display_frame.shape[0] - 40),
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, focus_color, 1)
-
+                
+                # Reduce UI rendering - only show essential information
                 # Display time remaining
                 time_left = int(actual_timeout - (time.time() - start_time))
                 cv2.putText(display_frame, f"Time: {time_left}s", (10, 90),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
                 
-                # Display motion status
-                motion_status = "High Motion" if high_motion_detected else "Stable"
-                motion_color = (0, 0, 255) if high_motion_detected else (0, 255, 0)
-                cv2.putText(display_frame, motion_status, (display_frame.shape[1] - 120, 90),
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, motion_color, 1)
-                
-                # Display frame rate
-                cv2.putText(display_frame, f"FPS: {fps:.1f}", (display_frame.shape[1] - 120, 30), 
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
-                
-                # Display tracking status
-                tracking_status = "Tracking" if (tracker is not None and tracking_active) else "Detecting"
-                cv2.putText(display_frame, tracking_status, (display_frame.shape[1] - 120, 60),
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
+                # Less frequent UI updates in high performance mode
+                if not high_performance_mode or (frame_count % 10 == 0):
+                    # Display motion status
+                    motion_status = "High Motion" if high_motion_detected else "Stable"
+                    motion_color = (0, 0, 255) if high_motion_detected else (0, 255, 0)
+                    cv2.putText(display_frame, motion_status, (display_frame.shape[1] - 120, 90),
+                              cv2.FONT_HERSHEY_SIMPLEX, 0.5, motion_color, 1)
+                    
+                    # Display frame rate
+                    cv2.putText(display_frame, f"FPS: {fps:.1f}", (display_frame.shape[1] - 120, 30), 
+                              cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
                 
                 # Display instructions
                 if blink_counter > 0:
                     blink_detected = True
-                    status = f"Blink detected! ({blink_counter} blinks) - Continuing for testing"
+                    status = f"Blink detected! ({blink_counter} blinks)"
                     color = (0, 255, 0)
                 else:
                     status = "Please blink naturally..."
@@ -1161,17 +1172,20 @@ class CameraSystem:
                 cv2.putText(display_frame, status, (10, 120),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
                 
-                # Display stillness status
-                stillness_status = f"Stillness: {stillness_counter}/{stillness_frames_required}"
-                stillness_color = (0, 255, 0) if is_still_enough else (0, 0, 255)
-                cv2.putText(display_frame, stillness_status, (display_frame.shape[1] - 120, 120),
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, stillness_color, 1)
+                # Only show in non-high performance mode or infrequently
+                if not high_performance_mode or (frame_count % 10 == 0):
+                    # Display stillness status
+                    stillness_status = f"Stillness: {stillness_counter}/{stillness_frames_required}"
+                    stillness_color = (0, 255, 0) if is_still_enough else (0, 0, 255)
+                    cv2.putText(display_frame, stillness_status, (display_frame.shape[1] - 120, 120),
+                              cv2.FONT_HERSHEY_SIMPLEX, 0.5, stillness_color, 1)
+                    
+                    cv2.putText(display_frame, "ESC: Cancel", (10, display_frame.shape[0] - 20),
+                              cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
                 
-                cv2.putText(display_frame, "ESC: Cancel", (10, display_frame.shape[0] - 20),
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-                
-                # Show the frame
-                cv2.imshow("Liveness Detection", display_frame)
+                # Show the frame - only update display periodically in high performance mode
+                if not high_performance_mode or display_update_needed:
+                    cv2.imshow("Liveness Detection", display_frame)
                 
                 # Check for key press
                 key = cv2.waitKey(1) & 0xFF
