@@ -617,38 +617,8 @@ class CameraSystem:
                         # Check if we're in a high motion state
                         in_motion = high_motion_detected
                         
-                        # Track vertical and horizontal eye ratio separately
-                        left_horizontal = dist.euclidean(left_eye[0], left_eye[3])
-                        left_vertical = (dist.euclidean(left_eye[1], left_eye[5]) + dist.euclidean(left_eye[2], left_eye[4])) / 2
-                        
-                        right_horizontal = dist.euclidean(right_eye[0], right_eye[3])
-                        right_vertical = (dist.euclidean(right_eye[1], right_eye[5]) + dist.euclidean(right_eye[2], right_eye[4])) / 2
-                        
-                        # Calculate horizontal to vertical ratio for both eyes
-                        left_ratio = left_vertical / left_horizontal
-                        right_ratio = right_vertical / right_horizontal
-                        
-                        # Track ratio history to detect vertical head movements
-                        ratio_avg = (left_ratio + right_ratio) / 2.0
-                        
-                        # Add to history for stability check
-                        if not hasattr(self, 'ratio_history'):
-                            self.ratio_history = []
-                            
-                        self.ratio_history.append(ratio_avg)
-                        if len(self.ratio_history) > 10:
-                            self.ratio_history.pop(0)
-                        
-                        # Calculate variability in ratios - high variation indicates vertical head movement
-                        ratio_std = np.std(self.ratio_history) if len(self.ratio_history) > 3 else 0
-                        vertical_movement = ratio_std > 0.05  # Increased threshold to reduce false positives
-                        
                         # Check for blink pattern - need stable EAR history
                         if len(ear_history) >= 5:
-                            # EAR stability check to prevent false positives while still
-                            recent_ear_std = np.std(ear_history[-5:])
-                            ear_stable = recent_ear_std < 0.01  # Very small variation when truly stable
-                            
                             # Check if current EAR is below threshold - indicates closed eyes
                             if ear < adaptive_threshold:
                                 ear_thresh_counter += 1
@@ -664,23 +634,9 @@ class CameraSystem:
                                     
                                     # Calculate pattern metrics
                                     ear_drop = max(recent_ear[:2]) - min(recent_ear[2:3])
-                                    ear_rise = max(recent_ear[4:]) - min(recent_ear[2:3])
                                     
-                                    # Conditions for a valid blink:
-                                    valid_blink = False
-                                    
-                                    # 1. If no motion and stable EAR - make it very easy to detect blinks
-                                    if not in_motion and not vertical_movement:
-                                        valid_blink = ear_drop > 0.015  # Even lower threshold for still position
-                                        
-                                    # 2. During lower motion - moderate requirements
-                                    elif vertical_movement and not in_motion:
-                                        valid_blink = ear_drop > 0.03  # Medium threshold
-                                        
-                                    # 3. During high motion - need stronger evidence
-                                    else:
-                                        # Still make this more lenient
-                                        valid_blink = (ear_drop > 0.04)  # Reduced threshold, don't require rise
+                                    # Simplified blink detection criteria - no vertical motion checks
+                                    valid_blink = ear_drop > 0.02  # Simple threshold for detecting a blink
                                     
                                     # Count blink if valid
                                     if valid_blink:
@@ -688,69 +644,102 @@ class CameraSystem:
                                 
                                 # Reset counter after eyes reopen
                                 ear_thresh_counter = 0
-                            
-                            # Display vertical movement status
-                            if vertical_movement:
-                                cv2.putText(display_frame, "Vertical Head Motion", (10, display_frame.shape[0] - 60),
-                                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
-            
-            # Display EAR value and blink count - only if face was detected
-            if last_face_location is not None and last_landmarks is not None:
-                cv2.putText(display_frame, f"EAR: {ear:.2f}", (10, 30),
+
+                # Display EAR value and blink count - only if face was detected
+                if last_face_location is not None and last_landmarks is not None:
+                    # Format EAR value for display
+                    ear_text = f"EAR: {ear:.2f}"
+                    cv2.putText(display_frame, ear_text, (20, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                    
+                    # Display blink counter
+                    cv2.putText(display_frame, f"Blinks: {blink_counter}", (20, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                    
+                    # Check for multiple blinks (2+) to validate liveness
+                    if blink_counter >= 2:
+                        #LOGGER.info("Multiple blinks detected - liveness check passed")
+                        cv2.putText(display_frame, f"LIVENESS PASSED - {blink_counter} BLINKS", 
+                                    (20, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                        liveness_passed = True
+                        
+                        # Only log this once per session to avoid log spam
+                        if not self.has_logged_liveness_passed and liveness_passed:
+                            LOGGER.info("Liveness check passed - Multiple blinks detected")
+                            self.has_logged_liveness_passed = True
+                    
+                    # Show high motion warning if detected
+                    if high_motion_detected:
+                        cv2.putText(display_frame, "HIGH MOTION DETECTED", 
+                                    (20, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 0, 255), 2)
+
+                # Save the best face image when a blink is detected
+                if blink_detected and best_face_image is None and max_face_size > 0:
+                    best_face_image = frame.copy()
+                
+                # Display time remaining
+                time_left = int(actual_timeout - (time.time() - start_time))
+                cv2.putText(display_frame, f"Time: {time_left}s", (10, 90),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-                cv2.putText(display_frame, f"Thresh: {adaptive_threshold:.2f}", (display_frame.shape[1] - 190, 30),
+                
+                # Display motion status
+                motion_status = "High Motion" if high_motion_detected else "Stable"
+                motion_color = (0, 0, 255) if high_motion_detected else (0, 255, 0)
+                cv2.putText(display_frame, motion_status, (display_frame.shape[1] - 120, 90),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, motion_color, 1)
+                
+                # Display frame rate
+                cv2.putText(display_frame, f"FPS: {fps:.1f}", (display_frame.shape[1] - 120, 30), 
                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
-                cv2.putText(display_frame, f"Blinks: {blink_counter}", (10, 60),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-            
-            # Display time remaining
-            time_left = int(actual_timeout - (time.time() - start_time))
-            cv2.putText(display_frame, f"Time: {time_left}s", (10, 90),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-            
-            # Display motion status
-            motion_status = "High Motion" if high_motion_detected else "Stable"
-            motion_color = (0, 0, 255) if high_motion_detected else (0, 255, 0)
-            cv2.putText(display_frame, motion_status, (display_frame.shape[1] - 120, 90),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, motion_color, 1)
-            
-            # Display frame rate
-            cv2.putText(display_frame, f"FPS: {fps:.1f}", (display_frame.shape[1] - 120, 30), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
-            
-            # Display tracking status
-            tracking_status = "Tracking" if (tracker is not None and tracking_active) else "Detecting"
-            cv2.putText(display_frame, tracking_status, (display_frame.shape[1] - 120, 60),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
-            
-            # Display instructions
-            if blink_counter > 0:
-                blink_detected = True
-                status = f"Blink detected! ({blink_counter} blinks) - Continuing for testing"
-                color = (0, 255, 0)
-            else:
-                status = "Please blink naturally..."
-                color = (0, 0, 255)
-            cv2.putText(display_frame, status, (10, 120),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
-            
-            cv2.putText(display_frame, "ESC: Cancel", (10, display_frame.shape[0] - 20),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-            
-            # Show the frame
-            cv2.imshow("Liveness Detection", display_frame)
-            
-            # Check for key press
-            key = cv2.waitKey(1) & 0xFF
-            if key == 27:  # ESC key
-                cap.release()
-                cv2.destroyAllWindows()
-                return False, None
-            
-            # Continue running even after blink is detected (removed early exit)
-            # Save the face image when a blink is first detected
-            if blink_detected and best_face_image is None and max_face_size > 0:
-                best_face_image = frame.copy()
+                
+                # Display tracking status
+                tracking_status = "Tracking" if (tracker is not None and tracking_active) else "Detecting"
+                cv2.putText(display_frame, tracking_status, (display_frame.shape[1] - 120, 60),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
+                
+                # Display instructions
+                if blink_counter > 0:
+                    blink_detected = True
+                    status = f"Blink detected! ({blink_counter} blinks) - Continuing for testing"
+                    color = (0, 255, 0)
+                else:
+                    status = "Please blink naturally..."
+                    color = (0, 0, 255)
+                cv2.putText(display_frame, status, (10, 120),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+                
+                cv2.putText(display_frame, "ESC: Cancel", (10, display_frame.shape[0] - 20),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+                
+                # Show the frame
+                cv2.imshow("Liveness Detection", display_frame)
+                
+                # Check for key press
+                key = cv2.waitKey(1) & 0xFF
+                if key == 27:  # ESC key
+                    cap.release()
+                    cv2.destroyAllWindows()
+                    return False, None
+                
+                # Continue running even after blink is detected (removed early exit)
+                # Save the face image when a blink is first detected
+                if blink_detected and best_face_image is None and max_face_size > 0:
+                    best_face_image = frame.copy()
+                
+                # Check for multiple blinks (2+) to validate liveness
+                if blink_counter >= 2:
+                    #LOGGER.info("Multiple blinks detected - liveness check passed")
+                    cv2.putText(display_frame, f"LIVENESS PASSED - {blink_counter} BLINKS", 
+                                (20, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                    liveness_passed = True
+                    
+                    # Only log this once per session to avoid log spam
+                    if not self.has_logged_liveness_passed and liveness_passed:
+                        LOGGER.info("Liveness check passed - Multiple blinks detected")
+                        self.has_logged_liveness_passed = True
+                        
+                    # Show high motion warning if detected
+                    if high_motion_detected:
+                        cv2.putText(display_frame, "HIGH MOTION DETECTED", 
+                                    (20, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 0, 255), 2)
         
         # Clean up
         cap.release()
