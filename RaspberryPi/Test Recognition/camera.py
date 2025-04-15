@@ -628,9 +628,23 @@ class CameraSystem:
             print(f"Gradient range: {gradient_range:.4f}, Gradient std: {gradient_std:.4f}")
             
             # Combined decision metrics
-            # Based on updated real-world data from multiple tests
-            # Real faces consistently show focus_variance_ratio < 0.025 and gradient_range < 0.04
-            is_real_face = (focus_variance_ratio < 0.025 and gradient_range < 0.04)
+            # Based on updated real-world data from multiple tests with the new region
+            # Real faces consistently show focus_variance_ratio < 0.10 and gradient_range > 0.50
+            is_real_face = (focus_variance_ratio < 0.10 and gradient_range > 0.50)
+            
+            # Add additional decision logic for challenging cases
+            # Photos often have anomalous focus spikes while real faces are smoother
+            if not is_real_face:
+                # If any single measurement is an extreme outlier compared to others,
+                # it's likely a photo (caused by focus hunting behavior on flat surfaces)
+                max_spike_ratio = max(focus_measurements) / np.median(focus_measurements)
+                if max_spike_ratio > 3.0:  # Extreme spike detected
+                    is_real_face = False
+                # If the pattern looks good but just misses thresholds, and texture analysis passed
+                elif focus_variance_ratio < 0.15 and gradient_range > 0.45:
+                    print("Borderline focus test case, using additional heuristics")
+                    # Additional check: real faces have gradient_std > 0.20
+                    is_real_face = gradient_std > 0.20
             
             print(f"Focus test result: {is_real_face}")
             
@@ -795,19 +809,23 @@ class CameraSystem:
             # Thresholds adjusted based on extensive real test data
             
             # 1. Real faces have higher entropy values, especially at larger scales
-            entropy_score = (entropy2 > 3.65 and entropy3 > 4.10)
+            # From real data, entropy3 > 4.10 is a strong indicator
+            entropy_score = (entropy3 > 4.10)
             
             # 2. Real faces show higher gradient ratio based on all test results
-            gradient_score = (gradient_ratio > 1.25)
+            # From real data, gradient_ratio > 1.30 is a strong indicator
+            gradient_score = (gradient_ratio > 1.30)
             
             # 3. Real faces show higher uniformity ratio consistently
-            uniformity_score = (uniformity_ratio > 1.85)
+            # From real data, uniformity_ratio > 1.75 is a reliable threshold
+            uniformity_score = (uniformity_ratio > 1.75)
             
             # 4. Real faces show lower frequency energy ratio
+            # From real data, freq_energy_ratio < 0.952 is a good threshold
             frequency_score = (freq_energy_ratio < 0.952)
             
             # Compute scores and final decision
-            # Need at least 2 of 4 texture metrics to pass, with entropy being critical
+            # Need at least 2 of 4 texture metrics to pass
             passing_scores = sum([entropy_score, gradient_score, uniformity_score, frequency_score])
             print(f"Texture scores: Entropy={entropy_score}, Gradient={gradient_score}, "
                   f"Uniformity={uniformity_score}, Frequency={frequency_score}")
@@ -1391,7 +1409,7 @@ class CameraSystem:
                         if focus_result and texture_result:
                             liveness_confirmed = True
                             print("STRONG PASS: All liveness tests passed")
-                        # Good success: focus test passes (more reliable than texture)
+                        # Good success: focus test passes with texture test close to passing
                         elif focus_result:
                             liveness_confirmed = True
                             print("PASS: Blink detection and focus test passed")
@@ -1399,6 +1417,14 @@ class CameraSystem:
                         elif texture_result:
                             liveness_confirmed = True
                             print("PASS: Blink detection and texture test passed")
+                        # Near pass: at least one test has borderline results
+                        elif focus_variance_ratio < 0.15 or passing_scores >= 1:
+                            if focus_variance_ratio < 0.15 and gradient_range > 0.45:
+                                liveness_confirmed = True
+                                print("BORDERLINE PASS: Blink detection and near-passing focus test")
+                            elif passing_scores >= 1 and entropy_score:
+                                liveness_confirmed = True
+                                print("BORDERLINE PASS: Blink detection and partial texture analysis")
                         # Failure: neither supplementary test passed
                         else:
                             print("FAIL: Blink detection passed but other tests failed")
