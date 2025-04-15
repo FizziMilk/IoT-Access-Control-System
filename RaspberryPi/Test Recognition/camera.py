@@ -11,10 +11,10 @@ class CameraSystem:
     def __init__(self, camera_id=0, resolution=(640, 480)):
         self.camera_id = camera_id
         self.resolution = resolution
-        # EAR threshold for blink detection
-        self.EAR_THRESHOLD = 0.25  # Higher threshold to detect blinks more easily
+        # EAR threshold for blink detection - more sensitive
+        self.EAR_THRESHOLD = 0.23  # Lower threshold to catch more blinks
         # Number of consecutive frames the eye must be below threshold to count as a blink
-        self.EAR_CONSEC_FRAMES = 1  # Reduced to detect faster blinks
+        self.EAR_CONSEC_FRAMES = 1  # Fast blink detection
         # Use a much lower resolution for liveness detection
         self.liveness_resolution = (320, 240)
         # Frame process rate (1 = process every frame, 2 = every other frame, etc.)
@@ -465,7 +465,7 @@ class CameraSystem:
                 # Detect high motion if average motion exceeds threshold
                 if len(motion_history) > 2:
                     avg_motion = sum(motion_history) / len(motion_history)
-                    high_motion_detected = avg_motion > 0.08  # Increased threshold to allow more movement
+                    high_motion_detected = avg_motion > 0.035  # Stricter threshold to better detect head movement
             
             # Store current frame for next iteration
             previous_frame = frame.copy()
@@ -611,13 +611,12 @@ class CameraSystem:
                             eye_hull = cv2.convexHull(np.array(eye))
                             cv2.drawContours(display_frame, [eye_hull], -1, (0, 255, 0), 1)
                         
-                        # Skip blink detection only during extreme motion
-                        blink_valid = not high_motion_detected
+                        # Check if we're in a high motion state
+                        in_motion = high_motion_detected
                         
-                        # Check for blink pattern with more lenient criteria
+                        # Check for blink pattern
                         if len(ear_history) >= 5:
-                            # Basic blink pattern: EAR decreases then increases
-                            # Check if current EAR is below threshold
+                            # Check if current EAR is below threshold - indicates closed eyes
                             if ear < adaptive_threshold:
                                 ear_thresh_counter += 1
                                 # Draw RED eye contours when eyes are detected as closed
@@ -625,22 +624,25 @@ class CameraSystem:
                                     eye_hull = cv2.convexHull(np.array(eye))
                                     cv2.drawContours(display_frame, [eye_hull], -1, (0, 0, 255), 2)
                             else:
-                                # If eyes were closed for enough frames, check if it was a valid blink
+                                # Eyes are open now, if they were closed before, check if it was a blink
                                 if ear_thresh_counter >= self.EAR_CONSEC_FRAMES:
-                                    # Use different detection logic depending on motion
-                                    if blink_valid:
-                                        # For stable head position: simple threshold is enough
-                                        blink_counter += 1
-                                    else:
-                                        # During motion: require stronger pattern evidence
-                                        # Look at recent history to verify this was a real blink
+                                    # Check for more evidence during high motion to avoid false positives
+                                    if in_motion:
+                                        # Get recent EAR values
                                         recent_ear = ear_history[-5:]
                                         
-                                        # Reduced thresholds for pattern detection
-                                        if (max(recent_ear[:2]) - min(recent_ear[2:3]) > 0.02 and 
-                                            max(recent_ear[4:]) - min(recent_ear[2:3]) > 0.02):
+                                        # Calculate drop and rise in EAR (clear blink pattern)
+                                        ear_drop = max(recent_ear[:2]) - min(recent_ear[2:3])
+                                        ear_rise = max(recent_ear[4:]) - min(recent_ear[2:3])
+                                        
+                                        # During motion: only count clear blink patterns
+                                        if ear_drop > 0.05 and ear_rise > 0.05:
                                             blink_counter += 1
+                                    else:
+                                        # When head is stable: more sensitive detection
+                                        blink_counter += 1
                                 
+                                # Reset counter after eyes reopen
                                 ear_thresh_counter = 0
             
             # Check if we've detected a blink
