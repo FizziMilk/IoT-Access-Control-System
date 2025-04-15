@@ -465,7 +465,7 @@ class CameraSystem:
                 # Detect high motion if average motion exceeds threshold
                 if len(motion_history) > 2:
                     avg_motion = sum(motion_history) / len(motion_history)
-                    high_motion_detected = avg_motion > 0.05  # Threshold for high motion
+                    high_motion_detected = avg_motion > 0.08  # Increased threshold to allow more movement
             
             # Store current frame for next iteration
             previous_frame = frame.copy()
@@ -611,11 +611,11 @@ class CameraSystem:
                             eye_hull = cv2.convexHull(np.array(eye))
                             cv2.drawContours(display_frame, [eye_hull], -1, (0, 255, 0), 1)
                         
-                        # Skip blink detection during high motion
+                        # Skip blink detection only during extreme motion
                         blink_valid = not high_motion_detected
                         
-                        # Check for blink pattern (real blinks have a specific EAR pattern)
-                        if len(ear_history) >= 5 and blink_valid:
+                        # Check for blink pattern with more lenient criteria
+                        if len(ear_history) >= 5:
                             # Basic blink pattern: EAR decreases then increases
                             # Check if current EAR is below threshold
                             if ear < adaptive_threshold:
@@ -625,31 +625,35 @@ class CameraSystem:
                                     eye_hull = cv2.convexHull(np.array(eye))
                                     cv2.drawContours(display_frame, [eye_hull], -1, (0, 0, 255), 2)
                             else:
-                                # If eyes were closed for enough frames, check if it was a valid blink pattern
+                                # If eyes were closed for enough frames, check if it was a valid blink
                                 if ear_thresh_counter >= self.EAR_CONSEC_FRAMES:
-                                    # Look at recent history to verify this was a real blink
-                                    # Real blinks have a pattern: open -> closing -> closed -> opening -> open
-                                    recent_ear = ear_history[-5:]
-                                    
-                                    # Check if the EAR dropped significantly and then rose again
-                                    # This pattern is typical for real blinks but not for motion artifacts
-                                    if (max(recent_ear[:2]) - min(recent_ear[2:3]) > 0.04 and 
-                                        max(recent_ear[4:]) - min(recent_ear[2:3]) > 0.04):
+                                    # Use different detection logic depending on motion
+                                    if blink_valid:
+                                        # For stable head position: simple threshold is enough
                                         blink_counter += 1
+                                    else:
+                                        # During motion: require stronger pattern evidence
+                                        # Look at recent history to verify this was a real blink
+                                        recent_ear = ear_history[-5:]
+                                        
+                                        # Reduced thresholds for pattern detection
+                                        if (max(recent_ear[:2]) - min(recent_ear[2:3]) > 0.02 and 
+                                            max(recent_ear[4:]) - min(recent_ear[2:3]) > 0.02):
+                                            blink_counter += 1
                                 
                                 ear_thresh_counter = 0
-                        
-                        # Check if we've detected a blink
-                        if blink_counter > 0:
-                            blink_detected = True
-                            
-                        # Display EAR value and blink count
-                        cv2.putText(display_frame, f"EAR: {ear:.2f}", (10, 30),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-                        cv2.putText(display_frame, f"Thresh: {adaptive_threshold:.2f}", (display_frame.shape[1] - 190, 30),
-                                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
-                        cv2.putText(display_frame, f"Blinks: {blink_counter}", (10, 60),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+            
+            # Check if we've detected a blink
+            if blink_counter > 0:
+                blink_detected = True
+            
+            # Display EAR value and blink count
+            cv2.putText(display_frame, f"EAR: {ear:.2f}", (10, 30),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+            cv2.putText(display_frame, f"Thresh: {adaptive_threshold:.2f}", (display_frame.shape[1] - 190, 30),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
+            cv2.putText(display_frame, f"Blinks: {blink_counter}", (10, 60),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
             
             # Display time remaining
             time_left = int(actual_timeout - (time.time() - start_time))
