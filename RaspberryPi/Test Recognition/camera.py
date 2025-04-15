@@ -996,7 +996,7 @@ class CameraSystem:
         texture_tests = ["laplacian", "fft", "color", "gradient", "lbp", "moire", "reflection"]
         current_texture_test_idx = 0
         texture_test_results = {test: 0 for test in texture_tests}  # Track passes for each test (0 = not tested yet)
-        test_duration_frames = 30  # Increased from 15 - spend more time on each test
+        test_duration_frames = 2  # Reduced from 30 to 2 for faster testing
         current_test_frames = 0  # Track how many frames we've spent on current test
         
         # Create a texture tests results window
@@ -1005,6 +1005,13 @@ class CameraSystem:
         texture_results_window = np.zeros((texture_window_height, texture_window_width, 3), dtype=np.uint8)
         cv2.namedWindow("Texture Tests Results", cv2.WINDOW_NORMAL)
         cv2.resizeWindow("Texture Tests Results", texture_window_width, texture_window_height)
+        
+        # Create a separate debug visualization window
+        debug_window_width = 600
+        debug_window_height = 450
+        debug_vis_window = np.zeros((debug_window_height, debug_window_width, 3), dtype=np.uint8)
+        cv2.namedWindow("Texture Debug Visualization", cv2.WINDOW_NORMAL)
+        cv2.resizeWindow("Texture Debug Visualization", debug_window_width, debug_window_height)
         
         # Store the most recent debug image for each test
         texture_debug_images = {test: None for test in texture_tests}
@@ -1151,37 +1158,111 @@ class CameraSystem:
                 cv2.putText(texture_results_window, f"Value: {value_str} {comparison_symbol} {threshold_str}", 
                            (10, texture_window_height - 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, status_color, 1)
             
-            # Draw current test debug image if available
+            # Show the results window
+            cv2.imshow("Texture Tests Results", texture_results_window)
+            
+            # Update the debug visualization window with the current test's debug image
             current_test = texture_tests[current_texture_test_idx]
             if texture_debug_images[current_test] is not None:
                 debug_img = texture_debug_images[current_test]
-                # Get aspect ratio of the debug image
-                aspect_ratio = debug_img.shape[1] / debug_img.shape[0]
-                # Calculate dimensions for the preview
-                preview_height = 150
-                preview_width = int(preview_height * aspect_ratio)
-                if preview_width > texture_window_width - 20:
-                    preview_width = texture_window_width - 20
-                    preview_height = int(preview_width / aspect_ratio)
                 
-                # Resize and place in bottom of window
-                try:
-                    if debug_img.shape[0] > 0 and debug_img.shape[1] > 0:
-                        debug_preview = cv2.resize(debug_img, (preview_width, preview_height))
-                        x_offset = (texture_window_width - preview_width) // 2
-                        texture_results_window[texture_window_height-preview_height-10:texture_window_height-10, 
-                                             x_offset:x_offset+preview_width] = debug_preview
-                        
-                        # Label the preview
-                        cv2.putText(texture_results_window, f"Preview: {current_test}", 
-                                   (10, texture_window_height - preview_height - 20), 
-                                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
-                except Exception as e:
-                    print(f"Error displaying debug preview: {str(e)}")
+                # Resize debug image to fit the debug window while maintaining aspect ratio
+                h, w = debug_img.shape[:2]
+                aspect_ratio = w / h
+                if aspect_ratio > (debug_window_width / debug_window_height):
+                    # Image is wider than the window
+                    new_width = debug_window_width
+                    new_height = int(new_width / aspect_ratio)
+                else:
+                    # Image is taller than the window
+                    new_height = debug_window_height
+                    new_width = int(new_height * aspect_ratio)
+                
+                # Resize the debug image
+                debug_img_resized = cv2.resize(debug_img, (new_width, new_height))
+                
+                # Create a new canvas for the debug window
+                debug_vis_window = np.zeros((debug_window_height, debug_window_width, 3), dtype=np.uint8)
+                
+                # Center the debug image in the window
+                y_offset = (debug_window_height - new_height) // 2
+                x_offset = (debug_window_width - new_width) // 2
+                
+                # Place the debug image in the window
+                if y_offset >= 0 and x_offset >= 0:
+                    debug_vis_window[y_offset:y_offset+new_height, x_offset:x_offset+new_width] = debug_img_resized
+                
+                # Add test name and status
+                title = f"{current_test.upper()} TEST VISUALIZATION"
+                passes = texture_test_results[current_test]
+                status = "N/A" if passes == 0 else f"PASS ({passes})" if passes >= 2 else f"FAIL ({passes})"
+                status_color = (200, 200, 200) if passes == 0 else (0, 255, 0) if passes >= 2 else (0, 0, 255)
+                
+                cv2.putText(debug_vis_window, title, (10, 30), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+                cv2.putText(debug_vis_window, status, (debug_window_width - 150, 30), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, status_color, 2)
+                
+                # Show the debug visualization window
+                cv2.imshow("Texture Debug Visualization", debug_vis_window)
+                
+        # Additional function to display all test types in a grid
+        def show_texture_visualization_gallery():
+            # Create a larger window for displaying all test visualizations
+            gallery_height = debug_window_height
+            gallery_width = debug_window_width
+            gallery_window = np.zeros((gallery_height, gallery_width, 3), dtype=np.uint8)
             
-            # Show the results window
-            cv2.imshow("Texture Tests Results", texture_results_window)
-                
+            # Calculate grid layout - 3 columns, 3 rows
+            cols = 3
+            rows = 3
+            cell_width = gallery_width // cols
+            cell_height = gallery_height // rows
+            
+            # Add title
+            cv2.putText(gallery_window, "TEXTURE TESTS GALLERY", 
+                       (gallery_width//2 - 150, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+            
+            # Display each test's latest result in a grid
+            for i, test in enumerate(texture_tests):
+                if texture_debug_images[test] is not None:
+                    # Calculate cell position in grid
+                    row = i // cols
+                    col = i % cols
+                    
+                    # Calculate cell coordinates
+                    x = col * cell_width
+                    y = row * cell_height + 40  # Add offset for title
+                    
+                    # Get debug image
+                    debug_img = texture_debug_images[test]
+                    
+                    # Resize to fit cell
+                    cell_img = cv2.resize(debug_img, (cell_width - 10, cell_height - 40))
+                    
+                    # Place in gallery
+                    h, w = cell_img.shape[:2]
+                    if y + h <= gallery_height and x + w <= gallery_width:
+                        gallery_window[y:y+h, x:x+w] = cell_img
+                    
+                    # Add test name
+                    cv2.putText(gallery_window, test.upper(), 
+                               (x + 5, y - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+                    
+                    # Add test status
+                    passes = texture_test_results[test]
+                    status = "N/A" if passes == 0 else f"PASS ({passes})" if passes >= 2 else f"FAIL ({passes})"
+                    status_color = (200, 200, 200) if passes == 0 else (0, 255, 0) if passes >= 2 else (0, 0, 255)
+                    cv2.putText(gallery_window, status, (x + cell_width - 80, y - 5), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.4, status_color, 1)
+            
+            # Show gallery window
+            cv2.imshow("Texture Tests Gallery", gallery_window)
+            
+        # Create a separate window for the gallery view
+        cv2.namedWindow("Texture Tests Gallery", cv2.WINDOW_NORMAL)
+        cv2.resizeWindow("Texture Tests Gallery", 900, 600)
+        
         while True:
             # Check for overall timeout
             elapsed_time = time.time() - start_time
@@ -1268,6 +1349,10 @@ class CameraSystem:
                                 
                                 # Update texture results window
                                 update_texture_results_window()
+                                
+                                # Also update the gallery view every few frames
+                                if texture_frames % 10 == 0:
+                                    show_texture_visualization_gallery()
                                 
                                 # Rotate to next test after enough frames with the same test
                                 current_test_frames += 1
@@ -1484,6 +1569,8 @@ class CameraSystem:
         cap.release()
         cv2.destroyWindow("Liveness Detection")
         cv2.destroyWindow("Texture Tests Results")
+        cv2.destroyWindow("Texture Debug Visualization")
+        cv2.destroyWindow("Texture Tests Gallery")
         cv2.waitKey(1)  # Required to properly close windows
         
         # Return the results
