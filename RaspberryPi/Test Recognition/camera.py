@@ -482,7 +482,8 @@ class CameraSystem:
             new_right = new_left + roi_size
             new_bottom = new_top + roi_size
             
-            # Update face location with centered ROI
+            # Update face location with centered ROI in the correct order (top, right, bottom, left)
+            # The order is critical for extracting the correct region
             face_location = (new_top, new_right, new_bottom, new_left)
             top, right, bottom, left = face_location
             
@@ -525,8 +526,31 @@ class CameraSystem:
                     if not ret:
                         raise Exception("Failed to capture frame during focus test")
                     
-                    # Get face region
-                    face_frame = frame[top:bottom, left:right]
+                    # Draw rectangle on frame to show the region being analyzed (for debugging)
+                    debug_frame = frame.copy()
+                    cv2.rectangle(debug_frame, (left, top), (right, bottom), (0, 255, 0), 2)
+                    cv2.imshow("Focus Region", debug_frame)
+                    cv2.waitKey(1)  # Show briefly without blocking
+                    
+                    # Get face region - ensure it's within frame bounds
+                    h, w = frame.shape[:2]
+                    safe_top = max(0, min(top, h-1))
+                    safe_bottom = max(0, min(bottom, h))
+                    safe_left = max(0, min(left, w-1))
+                    safe_right = max(0, min(right, w))
+                    
+                    # Make sure we have a valid region
+                    if safe_right <= safe_left or safe_bottom <= safe_top:
+                        print("WARNING: Invalid region bounds, using default center region")
+                        center_y, center_x = h // 2, w // 2
+                        region_size = min(h, w) // 4
+                        safe_top = center_y - region_size
+                        safe_bottom = center_y + region_size
+                        safe_left = center_x - region_size
+                        safe_right = center_x + region_size
+                    
+                    # Extract the region - use safe coordinates
+                    face_frame = frame[safe_top:safe_bottom, safe_left:safe_right]
                     
                     if _ == 0:  # Save first frame for visualization
                         focus_images.append(face_frame.copy())
@@ -1248,6 +1272,38 @@ class CameraSystem:
                     color = (0, 0, 255)
                 cv2.putText(display_frame, status, (10, 120),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+                
+                # Mark the area that will be used for focus testing
+                # This helps the user see what region will be analyzed
+                face_center_x = left + (right - left) // 2
+                face_center_y = top + (bottom - top) // 2
+                focus_test_size = min(right - left, bottom - top) * 4 // 5
+                focus_left = max(0, face_center_x - focus_test_size // 2)
+                focus_top = max(0, face_center_y - focus_test_size // 2)
+                focus_right = focus_left + focus_test_size
+                focus_bottom = focus_top + focus_test_size
+                
+                # Draw rectangle around focus test region with dashed lines
+                dash_length = 5
+                for i in range(0, focus_test_size, dash_length * 2):
+                    # Top line
+                    cv2.line(display_frame, (focus_left + i, focus_top), 
+                            (min(focus_left + i + dash_length, focus_right), focus_top), (0, 255, 255), 1)
+                    # Bottom line
+                    cv2.line(display_frame, (focus_left + i, focus_bottom), 
+                            (min(focus_left + i + dash_length, focus_right), focus_bottom), (0, 255, 255), 1)
+                    
+                    if i < focus_test_size:  # For vertical lines
+                        # Left line
+                        cv2.line(display_frame, (focus_left, focus_top + i), 
+                                (focus_left, min(focus_top + i + dash_length, focus_bottom)), (0, 255, 255), 1)
+                        # Right line
+                        cv2.line(display_frame, (focus_right, focus_top + i), 
+                                (focus_right, min(focus_top + i + dash_length, focus_bottom)), (0, 255, 255), 1)
+                
+                # Add label for focus region
+                cv2.putText(display_frame, "Focus Test Region", (focus_left, focus_top - 5),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
                 
                 # Display stillness status
                 stillness_status = f"Stillness: {stillness_counter}/{stillness_frames_required}"
