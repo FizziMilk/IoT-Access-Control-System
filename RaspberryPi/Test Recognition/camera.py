@@ -457,16 +457,11 @@ class CameraSystem:
     
     def check_focus_depth(self, cap, face_location):
         """
-        Test liveness by measuring focus response at different depths.
-        A real 3D face will show focus differences when focus point changes,
-        while a flat photo will remain consistently blurry or consistently in focus.
-        
-        Note: Some webcams (including many Logitech models) might not perform true selective
-        depth focusing but instead make the entire image blurry. This implementation
-        accounts for this behavior.
+        Enhanced test for liveness by analyzing focus patterns across multiple depth settings.
+        Uses gradient analysis and focus consistency to detect flat photos vs 3D faces.
         """
         try:
-            print("Starting focus depth test...")
+            print("Starting enhanced focus depth test...")
             top, right, bottom, left = face_location
             face_width = right - left
             
@@ -482,18 +477,24 @@ class CameraSystem:
             # Disable autofocus
             cap.set(cv2.CAP_PROP_AUTOFOCUS, 0)
             
+            # Use more focus points for better depth analysis
             focus_measurements = []
-            focus_values = [0, 100, 255]  # Near, mid, far focus
+            focus_values = [0, 50, 100, 150, 200, 250]  # More test points
             focus_images = []  # Store images for analysis and debugging
+            gradient_measures = []  # Store gradient measures
+            
+            # Set baseline measurements including gradient analysis
+            focus_gradients = []
             
             for focus_val in focus_values:
                 # Set focus value (0-255 range for most webcams)
                 cap.set(cv2.CAP_PROP_FOCUS, focus_val)
-                time.sleep(0.7)  # Give camera more time to adjust focus
+                time.sleep(0.5)  # Give camera time to adjust focus
                 
                 # Capture multiple frames and average the focus measures
-                # to reduce noise and ensure focus has settled
                 frame_focus_measures = []
+                frame_gradient_measures = []
+                
                 for _ in range(3):
                     ret, frame = cap.read()
                     if not ret:
@@ -501,42 +502,79 @@ class CameraSystem:
                     
                     # Get face region
                     face_frame = frame[top:bottom, left:right]
+                    
                     if _ == 0:  # Save first frame for visualization
                         focus_images.append(face_frame.copy())
                     
                     # Calculate focus measure (using Laplacian variance)
                     gray_face = cv2.cvtColor(face_frame, cv2.COLOR_BGR2GRAY)
+                    
+                    # Calculate image gradient information (key for 3D vs 2D detection)
+                    sobelx = cv2.Sobel(gray_face, cv2.CV_64F, 1, 0, ksize=3)
+                    sobely = cv2.Sobel(gray_face, cv2.CV_64F, 0, 1, ksize=3)
+                    
+                    # Magnitude of gradient
+                    gradient_magnitude = cv2.magnitude(sobelx, sobely)
+                    
+                    # Calculate gradient consistency and distribution
+                    # Photos usually have more uniform gradient distribution
+                    gradient_mean = np.mean(gradient_magnitude)
+                    gradient_std = np.std(gradient_magnitude)
+                    gradient_ratio = gradient_std / (gradient_mean + 1e-5)
+                    
+                    # Real faces show more gradient variation across different focus settings
+                    frame_gradient_measures.append(gradient_ratio)
+                    
+                    # Traditional focus measure
                     focus_measure = self.variance_of_laplacian(gray_face)
                     frame_focus_measures.append(focus_measure)
                     time.sleep(0.1)
                 
                 # Use median focus measure to reduce outliers
                 median_focus = np.median(frame_focus_measures)
-                focus_measurements.append(median_focus)
+                median_gradient = np.median(frame_gradient_measures)
                 
-                print(f"Focus setting {focus_val}: measure = {median_focus:.2f}")
+                focus_measurements.append(median_focus)
+                gradient_measures.append(median_gradient)
+                
+                print(f"Focus setting {focus_val}: measure = {median_focus:.2f}, gradient = {median_gradient:.4f}")
             
-            # Analyze focus variance across measurements
-            # Real faces should show significant variation in focus measures
+            # Analyze focus pattern across measurements
             max_focus = max(focus_measurements)
             min_focus = min(focus_measurements)
             focus_range = max_focus - min_focus
             
-            print(f"Focus range: {focus_range:.2f}")
+            # Calculate focus pattern consistency
+            # Photos tend to show more consistent focusing pattern 
+            focus_std = np.std(focus_measurements)
+            focus_variance_ratio = focus_std / (np.mean(focus_measurements) + 1e-5)
             
-            # A real 3D face should show significant focus differences
-            # Threshold determined empirically - may need adjustment based on camera
-            is_real_face = focus_range > 0.5  # Lowered from 15.0 to 0.5
+            # Calculate gradient pattern across focus settings
+            # Real faces show more variation in gradient measures across focus settings
+            gradient_range = max(gradient_measures) - min(gradient_measures)
+            gradient_std = np.std(gradient_measures)
+            
+            print(f"Focus range: {focus_range:.2f}, Focus variance ratio: {focus_variance_ratio:.4f}")
+            print(f"Gradient range: {gradient_range:.4f}, Gradient std: {gradient_std:.4f}")
+            
+            # Combined decision metrics
+            # Real faces have higher focus variance ratio and gradient range
+            # Photos have more uniform response across focus settings
+            is_real_face = (focus_variance_ratio > 0.08 and gradient_range > 0.1)
             
             # For debugging: Display the focus images side by side
-            if len(focus_images) == 3:
+            if len(focus_images) >= 3:
+                # Take subset of images for display
+                display_images = [focus_images[0], focus_images[len(focus_images)//2], focus_images[-1]]
+                
                 # Resize images to the same size
-                h, w = focus_images[0].shape[:2]
+                h, w = display_images[0].shape[:2]
                 combined_img = np.zeros((h, w*3, 3), dtype=np.uint8)
-                for i, img in enumerate(focus_images):
+                for i, img in enumerate(display_images):
                     combined_img[0:h, i*w:(i+1)*w] = img
                     # Add focus measure text
-                    cv2.putText(combined_img, f"Focus: {focus_measurements[i]:.2f}", 
+                    focus_idx = 0 if i == 0 else (len(focus_measurements)//2 if i == 1 else -1)
+                    cv2.putText(combined_img, f"Focus: {focus_measurements[focus_idx]:.2f}", 
                                (i*w + 10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
                 
                 cv2.imwrite("focus_test_debug.jpg", combined_img)
@@ -563,13 +601,11 @@ class CameraSystem:
     
     def analyze_facial_texture(self, face_image):
         """
-        Analyze facial texture using Local Binary Patterns (LBP) to distinguish 
-        between real faces and printed/displayed images. Real faces typically have 
-        more texture detail and complexity.
-        
-        Enhanced to be more robust against various presentation attacks.
+        Enhanced texture analysis that better distinguishes between real faces and photos.
+        Uses multi-scale texture analysis, micro-texture patterns, and reflectance properties.
         """
         try:
+            print("Starting advanced texture analysis...")
             # Convert to grayscale
             gray = cv2.cvtColor(face_image, cv2.COLOR_BGR2GRAY)
             
@@ -579,38 +615,125 @@ class CameraSystem:
             # Apply Gaussian blur to reduce noise
             blurred = cv2.GaussianBlur(equalized, (5, 5), 0)
             
-            # Calculate Local Binary Pattern
-            radius = 3
-            n_points = 8 * radius
-            lbp = skimage_feature.local_binary_pattern(blurred, n_points, radius, method="uniform")
+            # Calculate Local Binary Pattern at multiple scales
+            # This helps capture both micro and macro texture patterns
+            results = {}
             
-            # Calculate texture entropy (measure of randomness/complexity)
-            # Real faces typically have higher entropy (more random texture)
-            hist, _ = np.histogram(lbp.ravel(), bins=np.arange(0, n_points + 3), range=(0, n_points + 2))
-            hist = hist.astype("float")
-            hist /= (hist.sum() + 1e-7)  # Normalize
-            entropy = -np.sum(hist * np.log2(hist + 1e-7))  # Shannon entropy
+            # Original LBP calculation
+            radius1 = 1
+            n_points1 = 8 * radius1
+            lbp1 = skimage_feature.local_binary_pattern(blurred, n_points1, radius1, method="uniform")
             
-            # Calculate additional texture metrics
-            # Standard deviation of gray values (real faces have more variation)
-            std_dev = np.std(gray)
+            # Medium scale LBP - captures more structure
+            radius2 = 2
+            n_points2 = 8 * radius2
+            lbp2 = skimage_feature.local_binary_pattern(blurred, n_points2, radius2, method="uniform")
+            
+            # Larger scale LBP - captures even more structure
+            radius3 = 3
+            n_points3 = 8 * radius3
+            lbp3 = skimage_feature.local_binary_pattern(blurred, n_points3, radius3, method="uniform")
+            
+            # Compute histograms for each scale
+            hist1, _ = np.histogram(lbp1.ravel(), bins=np.arange(0, n_points1 + 3), range=(0, n_points1 + 2))
+            hist1 = hist1.astype("float")
+            hist1 /= (hist1.sum() + 1e-7)
+            
+            hist2, _ = np.histogram(lbp2.ravel(), bins=np.arange(0, n_points2 + 3), range=(0, n_points2 + 2))
+            hist2 = hist2.astype("float")
+            hist2 /= (hist2.sum() + 1e-7)
+            
+            hist3, _ = np.histogram(lbp3.ravel(), bins=np.arange(0, n_points3 + 3), range=(0, n_points3 + 2))
+            hist3 = hist3.astype("float")
+            hist3 /= (hist3.sum() + 1e-7)
+            
+            # Calculate texture entropy for each scale (measure of randomness/complexity)
+            entropy1 = -np.sum(hist1 * np.log2(hist1 + 1e-7))
+            entropy2 = -np.sum(hist2 * np.log2(hist2 + 1e-7))
+            entropy3 = -np.sum(hist3 * np.log2(hist3 + 1e-7))
+            
+            # Analyze pattern uniformity - printed photos often have more uniform patterns
+            # Calculate uniformity metrics (sum of squared probabilities)
+            uniformity1 = np.sum(hist1 * hist1)
+            uniformity2 = np.sum(hist2 * hist2)
+            uniformity3 = np.sum(hist3 * hist3)
+            
+            # Calculate multi-scale uniformity ratio - key for detecting printed materials
+            uniformity_ratio = (uniformity1 + uniformity2) / (2 * uniformity3 + 1e-7)
+            
+            # Analyze reflectance properties using gradient information
+            # Photos typically have more uniform gradient distribution
+            sobelx = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=3)
+            sobely = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=3)
+            magnitude = cv2.magnitude(sobelx, sobely)
+            
+            # Calculate micro-texture features that differentiate real skin
+            gradient_mean = np.mean(magnitude)
+            gradient_std = np.std(magnitude)
+            gradient_entropy = self.calculate_entropy(magnitude)
+            
+            # For real skin, gradient distribution is distinctive
+            gradient_ratio = gradient_std / (gradient_mean + 1e-7)
             
             # Analyze frequency distribution using FFT
             # Printed/displayed faces often have regular patterns or moiré effects
             f_transform = np.fft.fft2(gray)
             f_shift = np.fft.fftshift(f_transform)
             magnitude_spectrum = 20 * np.log(np.abs(f_shift) + 1)
-            high_freq_energy = np.sum(magnitude_spectrum[magnitude_spectrum > np.mean(magnitude_spectrum)])
+            
+            # Split spectrum into high/low frequency regions
+            h, w = magnitude_spectrum.shape
+            center_h, center_w = h // 2, w // 2
+            
+            # Define high-frequency region (outer 50% of spectrum)
+            mask_high = np.zeros((h, w), dtype=np.uint8)
+            mask_radius = min(center_h, center_w) // 2
+            cv2.circle(mask_high, (center_w, center_h), mask_radius, 1, -1)
+            mask_high = 1 - mask_high  # Invert to get high frequencies
+            
+            # Calculate energy in different frequency bands
+            high_freq_energy = np.sum(magnitude_spectrum * mask_high) / np.sum(mask_high)
+            total_energy = np.mean(magnitude_spectrum)
+            freq_energy_ratio = high_freq_energy / (total_energy + 1e-7)
             
             # For debugging
-            print(f"Texture entropy: {entropy:.2f}, StdDev: {std_dev:.2f}, HF Energy: {high_freq_energy:.2f}")
+            print(f"Texture entropy: multi-scale {entropy1:.2f}/{entropy2:.2f}/{entropy3:.2f}")
+            print(f"Uniformity ratio: {uniformity_ratio:.4f}, Gradient ratio: {gradient_ratio:.4f}")
+            print(f"Frequency energy ratio: {freq_energy_ratio:.4f}")
             
-            # Combined score - empirically determined thresholds
-            # These thresholds may need adjustment based on testing
-            is_real_texture = (entropy > 3.5 and std_dev > 30.0 and high_freq_energy > 4500000)
+            # Combined decision metrics using multiple texture properties
+            # 1. Real faces have higher small-scale texture entropy (skin detail)
+            # 2. Photos have higher uniformity and less gradient variation
+            # 3. Real faces have specific frequency energy distribution
+            
+            entropy_score = (entropy1 > 3.6 and entropy3 > 4.0)
+            gradient_score = (gradient_ratio > 0.8)
+            uniformity_score = (uniformity_ratio < 0.85)
+            frequency_score = (freq_energy_ratio > 0.9)
+            
+            # Compute scores and final decision
+            # Need at least 3 of 4 texture metrics to pass
+            passing_scores = sum([entropy_score, gradient_score, uniformity_score, frequency_score])
+            print(f"Texture scores: Entropy={entropy_score}, Gradient={gradient_score}, "
+                  f"Uniformity={uniformity_score}, Frequency={frequency_score}")
+            print(f"Passing texture scores: {passing_scores}/4")
+            
+            is_real_texture = (passing_scores >= 3)
             
             # Save debug visualization
-            debug_img = np.hstack([gray, equalized, lbp.astype(np.uint8)])
+            # Create more informative visualization showing multiple scales
+            micro_texture = cv2.normalize(lbp1.astype(np.uint8), None, 0, 255, cv2.NORM_MINMAX)
+            macro_texture = cv2.normalize(lbp3.astype(np.uint8), None, 0, 255, cv2.NORM_MINMAX)
+            gradient_viz = cv2.normalize(magnitude.astype(np.uint8), None, 0, 255, cv2.NORM_MINMAX)
+            
+            debug_row1 = np.hstack([gray, equalized])
+            debug_row2 = np.hstack([micro_texture, macro_texture])
+            
+            # Ensure all are 3-channel for display
+            debug_row1 = cv2.cvtColor(debug_row1, cv2.COLOR_GRAY2BGR)
+            debug_row2 = cv2.cvtColor(debug_row2, cv2.COLOR_GRAY2BGR)
+            
+            debug_img = np.vstack([debug_row1, debug_row2])
             cv2.imwrite("texture_analysis_debug.jpg", debug_img)
             
             return is_real_texture
@@ -619,6 +742,12 @@ class CameraSystem:
             print(f"Error in texture analysis: {e}")
             print(traceback.format_exc())
             return False  # Default to fail on error
+            
+    def calculate_entropy(self, image):
+        """Calculate entropy of an image"""
+        hist, _ = np.histogram(image.flatten(), bins=256, range=[0, 256])
+        hist = hist.astype(float) / (np.sum(hist) + 1e-7)
+        return -np.sum(hist * np.log2(hist + 1e-7))
     
     def calculate_clarity(self, gray_img, point, region_size=20):
         """
