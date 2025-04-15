@@ -1417,15 +1417,8 @@ class CameraSystem:
                         elif texture_result:
                             liveness_confirmed = True
                             print("PASS: Blink detection and texture test passed")
-                        # Near pass: at least one test has borderline results
-                        elif focus_variance_ratio < 0.15 or passing_scores >= 1:
-                            if focus_variance_ratio < 0.15 and gradient_range > 0.45:
-                                liveness_confirmed = True
-                                print("BORDERLINE PASS: Blink detection and near-passing focus test")
-                            elif passing_scores >= 1 and entropy_score:
-                                liveness_confirmed = True
-                                print("BORDERLINE PASS: Blink detection and partial texture analysis")
-                        # Failure: neither supplementary test passed
+                        # Since the borderline tests rely on variables not in this scope,
+                        # we'll remove them and use a simpler approach
                         else:
                             print("FAIL: Blink detection passed but other tests failed")
                     else:
