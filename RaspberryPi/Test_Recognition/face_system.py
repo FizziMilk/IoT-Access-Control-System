@@ -11,6 +11,13 @@ class FaceRecognitionSystem:
         self.storage = StorageSystem()
         self.recognition = RecognitionSystem(self.storage)
     
+    def release_resources(self):
+        """Release all resources including camera"""
+        if hasattr(self.camera, 'video_capture') and self.camera.video_capture is not None:
+            self.camera.video_capture.release()
+            self.camera.video_capture = None
+            print("Released camera resources in FaceRecognitionSystem")
+    
     def register_new_user(self, use_liveness=True):
         """Register a new user face in the system"""
         # Get user name

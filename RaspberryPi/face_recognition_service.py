@@ -17,15 +17,32 @@ class FaceRecognitionService:
         Returns:
             dict or None: User match information with name and confidence if found
         """
-        # If we have backend connection, try to load known faces first
-        if self.backend_session and self.backend_url:
-            self.load_faces_from_backend()
-            
-        results = self.face_system.recognize_face(use_liveness=True)
-        if results and len(results) > 0:
-            # Return the highest confidence match
-            return results[0]
-        return None
+        try:
+            # If we have backend connection, try to load known faces first
+            if self.backend_session and self.backend_url:
+                self.load_faces_from_backend()
+                
+            results = self.face_system.recognize_face(use_liveness=True)
+            if results and len(results) > 0:
+                # Return the highest confidence match
+                return results[0]
+            return None
+        finally:
+            # Ensure camera is released
+            self.release_camera()
+        
+    def release_camera(self):
+        """
+        Explicitly release camera resources to prevent resource locks
+        """
+        try:
+            if hasattr(self.face_system, 'camera') and hasattr(self.face_system.camera, 'video_capture'):
+                if self.face_system.camera.video_capture is not None:
+                    self.face_system.camera.video_capture.release()
+                    self.face_system.camera.video_capture = None
+                    print("Camera resources released successfully")
+        except Exception as e:
+            print(f"Error releasing camera: {e}")
         
     def load_faces_from_backend(self):
         """
@@ -68,7 +85,10 @@ class FaceRecognitionService:
         Returns:
             image or None: Face image if capture and liveness check successful
         """
-        return self.face_system.camera.capture_face_with_liveness()
+        try:
+            return self.face_system.camera.capture_face_with_liveness()
+        finally:
+            self.release_camera()
         
     def register_face(self, face_image):
         """

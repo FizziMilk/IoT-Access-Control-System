@@ -191,6 +191,11 @@ def setup_routes(app, door_controller, mqtt_handler, session, backend_url):
     @app.route('/face-recognition', methods=['GET'])
     def face_recognition():
         """Display the face recognition page"""
+        # Ensure any existing camera resources are released before starting new recognition
+        try:
+            face_service.release_camera()
+        except Exception as e:
+            print(f"Error releasing camera resources: {e}")
         return render_template("face_recognition.html")
     
     @app.route('/process-face', methods=['POST'])
@@ -230,12 +235,9 @@ def setup_routes(app, door_controller, mqtt_handler, session, backend_url):
                     # Register the face and save encoding temporarily
                     face_encoding = face_service.register_face(face_image)
                     if face_encoding:
-                        # Store the encoding in session for later use
-                        flask_session = request.environ.get('werkzeug.session')
-                        if flask_session is not None:
-                            flask_session['face_encoding'] = face_encoding
-                        else:
-                            session['face_encoding'] = face_encoding
+                        # Store the encoding in the Flask session
+                        from flask import session as flask_session
+                        flask_session['face_encoding'] = face_encoding
                             
                         flash("Face captured successfully. Please enter your phone number to register.", "info")
                         return render_template("register_face.html")
@@ -253,12 +255,9 @@ def setup_routes(app, door_controller, mqtt_handler, session, backend_url):
         """Register a captured face with a phone number"""
         phone_number = request.form.get('phone_number')
         
-        # Get the face encoding from session
-        flask_session = request.environ.get('werkzeug.session')
-        if flask_session is not None:
-            face_encoding = flask_session.get('face_encoding')
-        else:
-            face_encoding = session.get('face_encoding')
+        # Get the face encoding from Flask session
+        from flask import session as flask_session
+        face_encoding = flask_session.get('face_encoding')
         
         if not phone_number or not face_encoding:
             flash("Phone number and face image required.", "danger")
@@ -274,11 +273,8 @@ def setup_routes(app, door_controller, mqtt_handler, session, backend_url):
             
             if data.get("status") == "success":
                 # Clear the session data
-                if flask_session is not None:
-                    if 'face_encoding' in flask_session:
-                        del flask_session['face_encoding']
-                elif 'face_encoding' in session:
-                    session.pop('face_encoding')
+                if 'face_encoding' in flask_session:
+                    flask_session.pop('face_encoding')
                 
                 flash("Face registered successfully. Please wait for OTP or admin approval.", "success")
                 # Try to send OTP to the newly registered user
