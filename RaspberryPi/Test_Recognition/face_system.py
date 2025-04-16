@@ -1,6 +1,6 @@
-from camera import CameraSystem
-from storage import StorageSystem
-from recognition import RecognitionSystem
+from .camera import CameraSystem
+from .storage import StorageSystem
+from .recognition import RecognitionSystem
 import cv2
 import os
 
