@@ -2,7 +2,14 @@ from flask import render_template, request, redirect, url_for, flash, session
 from datetime import datetime
 import time
 from utils import verify_otp_rest
-from face_recognition_service import FaceRecognitionService
+from Web_Recognition.web_face_service import WebFaceService
+import cv2
+import logging
+import os
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger("WebRoutes")
 
 def check_schedule(door_controller, mqtt_handler, session=None, backend_url=None):
     """Check if door should be unlocked based on current schedule"""
@@ -65,7 +72,24 @@ def check_schedule(door_controller, mqtt_handler, session=None, backend_url=None
 
 def setup_routes(app, door_controller, mqtt_handler, session, backend_url):
     # Initialize facial recognition service
-    face_service = FaceRecognitionService(backend_session=session, backend_url=backend_url)
+    # Replace old service with new optimized service
+    from Web_Recognition.web_face_service import WebFaceService
+    
+    # Determine if we're running in a headless environment
+    # Use interactive mode if the DISPLAY environment variable is set
+    headless_mode = os.environ.get('DISPLAY') is None
+    
+    logger.info(f"Initializing face recognition service (headless={headless_mode})")
+    
+    global face_service
+    face_service = WebFaceService(
+        backend_session=session, 
+        backend_url=backend_url,
+        headless=headless_mode
+    )
+    
+    # Initialize the service (load face data)
+    face_service.initialize()
     
     @app.route('/')
     def index():
@@ -202,64 +226,22 @@ def setup_routes(app, door_controller, mqtt_handler, session, backend_url):
     @app.route('/face-recognition', methods=['GET'])
     def face_recognition():
         """Display the face recognition page"""
-        # Force cleanup of any existing resources
-        print("[DEBUG] face_recognition route called - ensuring a fresh start")
+        # Simpler cleanup with the new service - no need for manual camera management
+        logger.info("Face recognition page requested")
         
         try:
-            # Kill all OpenCV processes that might be running
-            import cv2
-            import os
-            import signal
-            import subprocess
-            import platform
-            
-            # First close any OpenCV windows
+            # Close any potential OpenCV windows
             cv2.destroyAllWindows()
             
-            # Set environment variable to use available Qt plugin 
+            # Set Qt environment
             setup_qt_environment()
             
-            # Force release of camera 0 only
-            try:
-                cap = cv2.VideoCapture(0)
-                if cap.isOpened():
-                    cap.release()
-                    print(f"[DEBUG] Released camera 0 during cleanup")
-                    # Add delay after release
-                    time.sleep(0.5)
-            except Exception as e:
-                print(f"[DEBUG] Error releasing camera: {e}")
-            
-            # Extra thorough cleanup - attempt to kill any hung OpenCV processes
-            if platform.system() != 'Windows':
-                try:
-                    # For Linux/Mac - find and kill any stuck cv2 processes
-                    ps_process = subprocess.Popen(['ps', 'aux'], stdout=subprocess.PIPE)
-                    output, _ = ps_process.communicate()
-                    
-                    for line in output.splitlines():
-                        if b'python' in line and b'cv2' in line:
-                            # Extract PID
-                            pid = int(line.split()[1])
-                            # Don't kill our own process
-                            if pid != os.getpid():
-                                try:
-                                    os.kill(pid, signal.SIGTERM)
-                                    print(f"[DEBUG] Killed hung OpenCV process with PID {pid}")
-                                except:
-                                    pass
-                except Exception as e:
-                    print(f"[DEBUG] Error cleaning up processes: {e}")
-            
-            # After process cleanup, reinitialize the face recognition service
-            face_service.reset_system()
-            
-            # One more release attempt
-            face_service.release_camera()
+            # Force service to reinitialize on next use
+            face_service.initialized = False
         except Exception as e:
-            print(f"[DEBUG] Error during cleanup: {e}")
+            logger.error(f"Error setting up for face recognition: {e}")
         
-        # Return the template with manual activation
+        # Return the template
         return render_template("face_recognition.html")
     
     @app.route('/process-face', methods=['POST'])

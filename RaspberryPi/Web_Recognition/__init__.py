@@ -1,0 +1,1 @@
+"""Web-optimized face recognition system for IoT access control.""" 
