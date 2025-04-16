@@ -89,6 +89,56 @@ class CameraSystem:
         # Wait a moment to ensure resources are fully released
         time.sleep(0.5)
     
+    def initialize_camera(self, resolution=None):
+        """
+        Initialize camera with robust error handling and multiple fallbacks
+        
+        Args:
+            resolution: Optional resolution tuple (width, height)
+            
+        Returns:
+            cv2.VideoCapture: Camera object or None if failed
+        """
+        # Try to initialize camera with multiple indices
+        cap = None
+        for camera_idx in [0, 1, 2]:  # Try indices 0, 1, and 2
+            try:
+                print(f"Trying to open camera with index {camera_idx}...")
+                cap = cv2.VideoCapture(camera_idx)
+                if cap is not None and cap.isOpened():
+                    self.camera_id = camera_idx  # Update camera_id if successful
+                    print(f"Successfully opened camera with index {camera_idx}")
+                    break
+            except Exception as e:
+                print(f"Failed to open camera with index {camera_idx}: {e}")
+                
+        # If still not opened, try with GSTREAMER
+        if cap is None or not cap.isOpened():
+            try:
+                print("Trying to open camera with GSTREAMER pipeline...")
+                gst_str = "v4l2src device=/dev/video0 ! video/x-raw,width=640,height=480 ! videoconvert ! appsink"
+                cap = cv2.VideoCapture(gst_str, cv2.CAP_GSTREAMER)
+            except Exception as e:
+                print(f"Failed to open camera with GSTREAMER: {e}")
+        
+        # Final check if camera is opened
+        if cap is None or not cap.isOpened():
+            print("Error: Could not open camera")
+            return None
+            
+        # Set resolution if provided
+        if resolution is not None:
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, resolution[0])
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, resolution[1])
+        
+        # Store the video capture object
+        self.video_capture = cap
+        
+        # Wait for camera to initialize
+        time.sleep(0.5)
+        
+        return cap
+    
     def release_camera(self):
         """
         Release camera resources
@@ -120,13 +170,10 @@ class CameraSystem:
     
     def capture_face(self):
         """Capture an image from the camera with face detection"""
-        # Initialize camera
-        cap = cv2.VideoCapture(self.camera_id)
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.resolution[0])
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.resolution[1])
-        
-        # Wait for camera to initialize
-        time.sleep(0.5)
+        # Initialize camera with our helper method
+        cap = self.initialize_camera(resolution=self.resolution)
+        if cap is None:
+            return None
         
         # Show camera feed until space is pressed
         print("Position face in frame and press SPACE to capture or ESC to cancel")
@@ -795,20 +842,13 @@ class CameraSystem:
         Returns:
             tuple: (success, face_image)
         """
-        # Initialize camera
-        cap = cv2.VideoCapture(self.camera_id)
-        # Use lower resolution for blink detection to maintain high framerate
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.liveness_resolution[0])
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.liveness_resolution[1])
+        # Initialize camera with our helper method
+        cap = self.initialize_camera(resolution=self.liveness_resolution)
+        if cap is None:
+            return False, None
+            
         # Disable autofocus to reduce processing overhead
         cap.set(cv2.CAP_PROP_AUTOFOCUS, 0)
-        
-        if not cap.isOpened():
-            print("Error: Could not open camera")
-            return False, None
-        
-        # Wait for camera to initialize
-        time.sleep(0.5)
         
         print("Blink detection started. Please look at the camera and blink normally.")
         

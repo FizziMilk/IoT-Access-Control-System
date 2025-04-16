@@ -59,6 +59,16 @@ class StorageSystem:
         """Check if any faces are registered"""
         return len(self.known_face_names) > 0
     
+    def add_encoding(self, name, encoding):
+        """Add a face encoding without an associated image"""
+        self.known_face_encodings.append(encoding)
+        self.known_face_names.append(name)
+        
+        # Save updated encodings database
+        self.save_encodings()
+        print(f"Added encoding for user: {name}")
+        return True
+    
     def list_users(self):
         """List all registered users"""
         print("\nRegistered Users:")
