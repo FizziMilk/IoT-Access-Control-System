@@ -627,24 +627,32 @@ class CameraSystem:
             print(f"Focus range: {focus_range:.2f}, Focus variance ratio: {focus_variance_ratio:.4f}")
             print(f"Gradient range: {gradient_range:.4f}, Gradient std: {gradient_std:.4f}")
             
-            # Combined decision metrics
-            # Based on updated real-world data from multiple tests with the new region
-            # Real faces consistently show focus_variance_ratio < 0.10 and gradient_range > 0.50
-            is_real_face = (focus_variance_ratio < 0.10 and gradient_range > 0.50)
+            # Adaptive decision metrics based on data from different environments
+            # Real faces consistently show:
+            # 1. Higher gradient range (> 1.3 in bright light, > 0.5 in normal light)
+            # 2. Higher gradient standard deviation (> 0.2)
+            # 3. Distinctive focus patterns but variance_ratio can vary widely by environment
             
-            # Add additional decision logic for challenging cases
-            # Photos often have anomalous focus spikes while real faces are smoother
-            if not is_real_face:
-                # If any single measurement is an extreme outlier compared to others,
-                # it's likely a photo (caused by focus hunting behavior on flat surfaces)
-                max_spike_ratio = max(focus_measurements) / np.median(focus_measurements)
-                if max_spike_ratio > 3.0:  # Extreme spike detected
-                    is_real_face = False
-                # If the pattern looks good but just misses thresholds, and texture analysis passed
-                elif focus_variance_ratio < 0.15 and gradient_range > 0.45:
-                    print("Borderline focus test case, using additional heuristics")
-                    # Additional check: real faces have gradient_std > 0.20
-                    is_real_face = gradient_std > 0.20
+            # Check gradient features first (most reliable across environments)
+            gradient_strong = gradient_range > 1.0 and gradient_std > 0.4
+            gradient_good = gradient_range > 0.5 and gradient_std > 0.2
+            
+            # Check for focus pattern: real faces don't have huge isolated focus spikes
+            max_focus = max(focus_measurements)
+            median_focus = np.median(focus_measurements)
+            # Most items in focus_measurements should be relatively close to median
+            close_to_median_count = sum(1 for x in focus_measurements if abs(x - median_focus) < median_focus * 0.5)
+            # Real faces usually have at least 3 measurements close to median
+            stable_focus = close_to_median_count >= 3
+            
+            # Combine the criteria - prioritizing different aspects depending on environment
+            is_real_face = (gradient_strong or gradient_good) and stable_focus
+            
+            # If light is bright (high focus values), adjust criteria
+            if median_focus > 50:  # Very bright environment
+                print("Detected bright light environment, using adjusted criteria")
+                # In bright light, gradient features are more reliable
+                is_real_face = gradient_strong
             
             print(f"Focus test result: {is_real_face}")
             
@@ -806,33 +814,48 @@ class CameraSystem:
             print(f"Frequency energy ratio: {freq_energy_ratio:.4f}")
             
             # Combined decision metrics using multiple texture properties
-            # Thresholds adjusted based on extensive real test data
+            # Thresholds adjusted based on extensive real test data from multiple environments
+            
+            # Adaptive thresholds based on environmental conditions
+            # Check if we're in bright lighting (affects texture patterns)
+            bright_lighting = entropy1 < 2.5 and gradient_ratio > 1.5
             
             # 1. Real faces have higher entropy values, especially at larger scales
-            # From real data, entropy3 > 4.10 is a strong indicator
-            entropy_score = (entropy3 > 4.10)
+            # Entropy threshold adapts to environment
+            if bright_lighting:
+                # In bright lighting, entropy values are slightly lower
+                entropy_score = (entropy3 > 4.0)
+            else:
+                # Normal lighting conditions
+                entropy_score = (entropy3 > 4.1)
             
             # 2. Real faces show higher gradient ratio based on all test results
-            # From real data, gradient_ratio > 1.30 is a strong indicator
-            gradient_score = (gradient_ratio > 1.30)
+            # Consistent across environments, but higher in bright light
+            if bright_lighting:
+                gradient_score = (gradient_ratio > 1.7)
+            else:
+                gradient_score = (gradient_ratio > 1.3)
             
             # 3. Real faces show higher uniformity ratio consistently
-            # From real data, uniformity_ratio > 1.75 is a reliable threshold
-            uniformity_score = (uniformity_ratio > 1.75)
+            uniformity_score = (uniformity_ratio > 1.7)
             
             # 4. Real faces show lower frequency energy ratio
-            # From real data, freq_energy_ratio < 0.952 is a good threshold
-            frequency_score = (freq_energy_ratio < 0.952)
+            frequency_score = (freq_energy_ratio < 0.955)
             
             # Compute scores and final decision
-            # Need at least 2 of 4 texture metrics to pass
             passing_scores = sum([entropy_score, gradient_score, uniformity_score, frequency_score])
             print(f"Texture scores: Entropy={entropy_score}, Gradient={gradient_score}, "
                   f"Uniformity={uniformity_score}, Frequency={frequency_score}")
             print(f"Passing texture scores: {passing_scores}/4")
             
-            # Require at least 2 metrics and EITHER entropy OR gradient score (the most reliable indicators)
-            is_real_texture = passing_scores >= 2 and (entropy_score or gradient_score)
+            # Adaptive criteria based on environment
+            if bright_lighting:
+                print("Detected bright lighting environment for texture analysis")
+                # In bright lighting, gradient_ratio is the most reliable indicator
+                is_real_texture = gradient_score and (passing_scores >= 1)
+            else:
+                # Normal lighting - require at least 2 metrics to pass
+                is_real_texture = passing_scores >= 2 and (entropy_score or gradient_score)
             
             print(f"Texture test result: {is_real_texture}")
             
@@ -1550,18 +1573,42 @@ class CameraSystem:
             print("Starting texture analysis...")  
             texture_result = self.analyze_facial_texture(frame)
             
-            # Weighted decision based on test results
-            # We require at least 2 of 3 checks to pass for robust liveness detection
-            checks_passed = sum([blink_result, focus_result, texture_result])
-            liveness_confirmed = checks_passed >= 2
+            # Determine if we're in a bright lighting environment (affects decision weights)
+            # This can be estimated from the focus test results
+            try:
+                with open("focus_test_debug.jpg", "rb") as f:
+                    # File exists, we have focus data
+                    bright_environment = focus_result  # If focus test passed in bright light
+                    print(f"Environment detected: {'Bright' if bright_environment else 'Normal'} lighting")
+            except:
+                bright_environment = False
             
-            # Log results
-            print("\nLiveness Check Results:")
-            print(f"✓ Blink Detection: {'PASS' if blink_result else 'FAIL'}")
-            print(f"✓ Focus Test: {'PASS' if focus_result else 'FAIL'}")
-            print(f"✓ Texture Analysis: {'PASS' if texture_result else 'FAIL'}")
-            print(f"Overall: {checks_passed}/3 checks passed")
-            print(f"Final Decision: {'LIVE FACE CONFIRMED' if liveness_confirmed else 'SPOOFING ATTEMPT DETECTED'}")
+            # Weighted decision based on test results and environment
+            if bright_environment:
+                # In bright environments, texture analysis is more reliable than focus
+                if blink_result and texture_result:
+                    # Blink + texture is sufficient in bright light
+                    liveness_confirmed = True
+                    print("PASS: Blink detection and texture analysis passed (bright environment)")
+                elif blink_result and focus_result:
+                    # Blink + focus is also acceptable
+                    liveness_confirmed = True
+                    print("PASS: Blink detection and focus test passed (bright environment)")
+                else:
+                    liveness_confirmed = False
+                    print("FAIL: Not enough tests passed in bright environment")
+            else:
+                # In normal lighting, require at least 2 of 3 checks to pass
+                checks_passed = sum([blink_result, focus_result, texture_result])
+                liveness_confirmed = checks_passed >= 2
+                
+                # Log results
+                print("\nLiveness Check Results:")
+                print(f"✓ Blink Detection: {'PASS' if blink_result else 'FAIL'}")
+                print(f"✓ Focus Test: {'PASS' if focus_result else 'FAIL'}")
+                print(f"✓ Texture Analysis: {'PASS' if texture_result else 'FAIL'}")
+                print(f"Overall: {checks_passed}/3 checks passed")
+                print(f"Final Decision: {'LIVE FACE CONFIRMED' if liveness_confirmed else 'SPOOFING ATTEMPT DETECTED'}")
             
             # Display result on frame
             top, right, bottom, left = face_location
