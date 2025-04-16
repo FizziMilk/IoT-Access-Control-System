@@ -22,17 +22,32 @@
         }
         .spinner-container {
             margin: 30px auto;
+            display: none; /* Hide initially */
         }
         .spinner-border {
             width: 3rem;
             height: 3rem;
+        }
+        .debug-info {
+            font-size: 0.8rem;
+            color: #666;
+            margin-top: 20px;
+            text-align: left;
+            border-top: 1px solid #eee;
+            padding-top: 10px;
+        }
+        #startButton {
+            padding: 15px 30px;
+            font-size: 1.2rem;
+        }
+        #instructions {
+            margin-bottom: 25px;
         }
     </style>
 </head>
 <body>
     <div class="container">
         <h1>Face Recognition</h1>
-        <p class="lead">Looking at camera. Please stay still...</p>
         
         {% with messages = get_flashed_messages(with_categories=true) %}
             {% if messages %}
@@ -42,30 +57,56 @@
             {% endif %}
         {% endwith %}
         
-        <div class="spinner-container">
+        <div id="instructions">
+            <p class="lead">Click the button below to start facial recognition.</p>
+            <p>Look directly at the camera and blink naturally when prompted.</p>
+        </div>
+        
+        <button id="startButton" class="btn btn-primary btn-lg">
+            <i class="fas fa-camera"></i> Start Face Recognition
+        </button>
+        
+        <div class="spinner-container" id="loadingSpinner">
             <div class="spinner-border text-primary" role="status">
                 <span class="visually-hidden">Loading...</span>
             </div>
-            <p class="mt-2">Processing...</p>
+            <p class="mt-2">Processing... Please look at the camera and blink naturally</p>
         </div>
         
         <form action="{{ url_for('process_face') }}" method="POST" id="faceForm" style="display:none;">
-            <!-- CSRF token removed -->
+            <!-- No additional fields needed -->
         </form>
         
         <div class="mt-4">
-            <a href="{{ url_for('door_entry') }}" class="btn btn-secondary">
+            <a href="{{ url_for('door_entry') }}" class="btn btn-secondary" id="backButton">
                 <i class="fas fa-arrow-left"></i> Back
             </a>
+        </div>
+        
+        <div class="debug-info">
+            <p>Camera initialization may take a moment. Please be patient.</p>
+            <p>If you have issues with facial recognition, try the following:</p>
+            <ul>
+                <li>Ensure good lighting on your face</li>
+                <li>Look directly at the camera</li>
+                <li>Blink normally when prompted</li>
+                <li>Hold still during the process</li>
+            </ul>
         </div>
     </div>
     
     <script>
-        // Auto-submit the form when page loads
-        document.addEventListener('DOMContentLoaded', function() {
-            setTimeout(function() {
-                document.getElementById('faceForm').submit();
-            }, 1500);
+        document.getElementById('startButton').addEventListener('click', function() {
+            // Hide the instructions and button
+            document.getElementById('instructions').style.display = 'none';
+            document.getElementById('startButton').style.display = 'none';
+            document.getElementById('backButton').style.display = 'none';
+            
+            // Show the loading spinner
+            document.getElementById('loadingSpinner').style.display = 'block';
+            
+            // Submit the form
+            document.getElementById('faceForm').submit();
         });
     </script>
 </body>

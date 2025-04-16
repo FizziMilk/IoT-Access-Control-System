@@ -1330,18 +1330,21 @@ class CameraSystem:
             print(f"Error cleaning up diagnostic images: {e}")
             # Continue even if cleanup fails
     
-    def capture_face_with_liveness(self):
+    def capture_face_with_liveness(self, timeout=7):
         """
         Capture a face with liveness detection (blink detection)
         
+        Args:
+            timeout: Maximum seconds to wait for liveness check
+            
         Returns:
             image or None: Face image if liveness check passed, None otherwise
         """
         # Reset the camera system to ensure a clean state
         self.reset_camera()
         
-        print("Starting liveness detection (blink check)...")
-        success, face_image = self.detect_blink()
+        print(f"Starting liveness detection (blink check) with timeout={timeout}s...")
+        success, face_image = self.detect_blink(timeout=timeout)
         
         if not success:
             print("Liveness check failed or was cancelled")

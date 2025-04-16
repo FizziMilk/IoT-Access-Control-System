@@ -48,9 +48,18 @@ class FaceRecognitionSystem:
         print(f"Successfully registered {name}")
         return True
     
-    def recognize_face(self, use_liveness=True):
-        """Recognize a face from camera"""
-        print("[DEBUG] recognize_face: Starting face recognition process")
+    def recognize_face(self, use_liveness=True, timeout=15):
+        """
+        Recognize a face from camera
+        
+        Args:
+            use_liveness: Whether to perform liveness detection
+            timeout: Maximum seconds to wait for recognition process
+            
+        Returns:
+            list: Recognition results if successful, None otherwise
+        """
+        print(f"[DEBUG] recognize_face: Starting face recognition process (timeout={timeout}s)")
         if not self.storage.has_faces():
             print("[DEBUG] No face encodings in database. Please register users first.")
             return None
@@ -65,8 +74,8 @@ class FaceRecognitionSystem:
         # Capture image with liveness check if requested
         print("[DEBUG] Capturing image for recognition...")
         if use_liveness:
-            print("[DEBUG] With liveness detection to prevent spoofing...")
-            image = self.camera.capture_face_with_liveness()
+            print(f"[DEBUG] With liveness detection to prevent spoofing (timeout={timeout}s)...")
+            image = self.camera.capture_face_with_liveness(timeout=timeout)
         else:
             image = self.camera.capture_face()
         

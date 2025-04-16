@@ -12,14 +12,18 @@ class FaceRecognitionService:
         self.backend_session = backend_session
         self.backend_url = backend_url
         
-    def identify_user(self):
+    def identify_user(self, timeout=30):
         """
         Use facial recognition with liveness detection to identify a user
         
+        Args:
+            timeout: Number of seconds to allow for recognition process
+            
         Returns:
             dict or None: User match information with name and confidence if found
         """
-        print("[DEBUG] identify_user: Starting facial recognition with liveness")
+        print(f"[DEBUG] identify_user: Starting facial recognition with liveness (timeout={timeout}s)")
+        start_time = time.time()
         try:
             # If we have backend connection, try to load known faces first
             if self.backend_session and self.backend_url:
@@ -32,8 +36,14 @@ class FaceRecognitionService:
             if not has_faces:
                 print("[DEBUG] No faces found in storage - facial recognition will fail")
                 
-            results = self.face_system.recognize_face(use_liveness=True)
-            print(f"[DEBUG] Recognition results: {results}")
+            # Set timeout for the recognition operation
+            custom_timeout = max(5, min(timeout, 60))  # Between 5 and 60 seconds
+            print(f"[DEBUG] Setting recognition timeout to {custom_timeout} seconds")
+            
+            # Pass timeout to the face system
+            results = self.face_system.recognize_face(use_liveness=True, timeout=custom_timeout)
+            elapsed = time.time() - start_time
+            print(f"[DEBUG] Recognition completed in {elapsed:.1f} seconds with results: {results}")
             
             if results and len(results) > 0:
                 # Return the highest confidence match
@@ -42,7 +52,8 @@ class FaceRecognitionService:
             return None
         finally:
             # Ensure camera is released
-            print("[DEBUG] identify_user: Cleaning up after facial recognition")
+            elapsed = time.time() - start_time
+            print(f"[DEBUG] identify_user: Cleaning up after facial recognition, elapsed time: {elapsed:.1f}s")
             self.release_camera()
         
     def release_camera(self):

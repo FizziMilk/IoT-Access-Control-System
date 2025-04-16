@@ -195,8 +195,10 @@ def setup_routes(app, door_controller, mqtt_handler, session, backend_url):
         try:
             face_service.release_camera()
         except Exception as e:
-            print(f"Error releasing camera resources: {e}")
-        return render_template("face_recognition.html")
+            print(f"[DEBUG] Error releasing camera resources: {e}")
+        
+        # Add a longer timeout before auto-submitting
+        return render_template("face_recognition.html", timeout=5000)  # 5 seconds
     
     @app.route('/process-face', methods=['POST'])
     def process_face():
