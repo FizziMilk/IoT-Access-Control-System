@@ -4,6 +4,8 @@ import pickle
 import base64
 import requests
 import time
+import os
+import cv2
 
 class FaceRecognitionService:
     def __init__(self, backend_session=None, backend_url=None):
@@ -11,6 +13,7 @@ class FaceRecognitionService:
         self.face_system = FaceRecognitionSystem(web_mode=True)
         self.backend_session = backend_session
         self.backend_url = backend_url
+        self.camera_open = False
         
     def identify_user(self, timeout=30):
         """
@@ -23,37 +26,22 @@ class FaceRecognitionService:
             dict or None: User match information with name and confidence if found
         """
         print(f"[DEBUG] identify_user: Starting facial recognition with liveness (timeout={timeout}s)")
-        start_time = time.time()
         try:
-            # If we have backend connection, try to load known faces first
-            if self.backend_session and self.backend_url:
-                print("[DEBUG] Loading faces from backend...")
-                self.load_faces_from_backend()
+            # First ensure we start with a clean state
+            self.reset_system()
             
-            # Check if we have any faces loaded
-            has_faces = self.face_system.storage.has_faces()
-            print(f"[DEBUG] Storage system has faces: {has_faces}")
-            if not has_faces:
-                print("[DEBUG] No faces found in storage - facial recognition will fail")
-                
-            # Set timeout for the recognition operation
-            custom_timeout = max(5, min(timeout, 60))  # Between 5 and 60 seconds
-            print(f"[DEBUG] Setting recognition timeout to {custom_timeout} seconds")
-            
-            # Pass timeout to the face system
-            results = self.face_system.recognize_face(use_liveness=True, timeout=custom_timeout)
+            start_time = time.time()
+            # Call the recognize_face method with timeout
+            result = self.face_system.recognize_face(timeout=timeout)
             elapsed = time.time() - start_time
-            print(f"[DEBUG] Recognition completed in {elapsed:.1f} seconds with results: {results}")
+            print(f"[DEBUG] Face recognition completed in {elapsed:.2f} seconds")
             
-            if results and len(results) > 0:
-                # Return the highest confidence match
-                print(f"[DEBUG] Returning match: {results[0]}")
-                return results[0]
+            return result
+        except Exception as e:
+            print(f"[DEBUG] Error during user identification: {e}")
             return None
         finally:
-            # Ensure camera is released
-            elapsed = time.time() - start_time
-            print(f"[DEBUG] identify_user: Cleaning up after facial recognition, elapsed time: {elapsed:.1f}s")
+            # Always release resources when done
             self.release_camera()
         
     def release_camera(self):
@@ -62,44 +50,52 @@ class FaceRecognitionService:
         """
         print("[DEBUG] release_camera: Attempting to release camera resources")
         try:
-            if hasattr(self.face_system, 'camera'):
-                # Use the more thorough reset method
-                print("[DEBUG] Calling camera reset method")
-                self.face_system.camera.reset_camera()
-                print("[DEBUG] Camera resources reset successfully")
+            # First try the face system's release method
+            try:
+                if hasattr(self.face_system, 'video') and self.face_system.video is not None:
+                    self.face_system.video.release()
+                    print("[DEBUG] Released face system video")
+            except Exception as e:
+                print(f"[DEBUG] Error releasing face system video: {e}")
                 
-                # For extra cleanup, delay a bit and try to open and close the camera one more time
-                time.sleep(1.0)
+            # Then try the face system's release_resources method
+            try:
+                self.face_system.release_resources()
+                print("[DEBUG] Released face system resources")
+            except Exception as e:
+                print(f"[DEBUG] Error releasing face system resources: {e}")
+                
+            # Close all OpenCV windows
+            cv2.destroyAllWindows()
+            print("[DEBUG] Destroyed all OpenCV windows")
+            
+            # Try to release any potential cameras directly
+            for i in range(5):  # Try multiple indices to be safe
                 try:
-                    import cv2
-                    print("[DEBUG] Attempting to open and immediately close camera")
-                    cap = cv2.VideoCapture(0)
+                    cap = cv2.VideoCapture(i)
                     if cap.isOpened():
-                        print("[DEBUG] Successfully opened camera for cleanup")
-                    cap.release()
-                    print("[DEBUG] Released camera after cleanup attempt")
-                    cv2.destroyAllWindows()
+                        cap.release()
+                        print(f"[DEBUG] Released camera {i} directly")
                 except Exception as e:
-                    print(f"[DEBUG] Error during cleanup attempt: {e}")
+                    print(f"[DEBUG] Error releasing camera {i}: {e}")
                     
-            # Reset the entire system to ensure a fresh start for next time
-            self.reset_system()
+            self.camera_open = False
+            print("[DEBUG] Camera resources released")
         except Exception as e:
-            print(f"[DEBUG] Error releasing camera: {e}")
-            import traceback
-            print(traceback.format_exc())
+            print(f"[DEBUG] Error during camera release: {e}")
         
     def reset_system(self):
         """Completely reset the face recognition system"""
-        print("[DEBUG] Performing full system reset")
+        print("[DEBUG] Resetting face system")
         try:
-            # Release any resources
-            if hasattr(self.face_system, 'release_resources'):
-                self.face_system.release_resources()
-                
-            # Re-initialize the entire system with web mode
+            # First ensure any existing resources are released
+            self.release_camera()
+            # Close any lingering OpenCV windows
+            cv2.destroyAllWindows()
+            # Recreate the face system
             self.face_system = FaceRecognitionSystem(web_mode=True)
-            print("[DEBUG] Face recognition system has been fully reinitialized")
+            self.camera_open = False
+            print("[DEBUG] Face system reset completed")
         except Exception as e:
             print(f"[DEBUG] Error during system reset: {e}")
         
@@ -165,9 +161,24 @@ class FaceRecognitionService:
         Returns:
             image or None: Face image if capture and liveness check successful
         """
+        print("[DEBUG] Starting face capture with liveness detection")
         try:
-            return self.face_system.camera.capture_face_with_liveness()
+            # First ensure we start with a clean state
+            self.reset_system()
+            
+            # Attempt to capture a live face
+            face_image = self.face_system.get_encoding_for_backend()
+            if face_image is not None:
+                print("[DEBUG] Face captured successfully")
+                return face_image
+            else:
+                print("[DEBUG] Failed to capture face image")
+                return None
+        except Exception as e:
+            print(f"[DEBUG] Error during face capture: {e}")
+            return None
         finally:
+            # Always release resources when done
             self.release_camera()
         
     def register_face(self, face_image):
@@ -180,14 +191,22 @@ class FaceRecognitionService:
         Returns:
             str or None: Base64 encoded face data if successful
         """
-        encoding = self.face_system.recognition.generate_encoding(face_image)
-        if encoding is not None:
-            # Convert numpy array to bytes using pickle
-            pickled_encoding = pickle.dumps(encoding)
-            # Convert bytes to base64 string for JSON compatibility
-            base64_encoding = base64.b64encode(pickled_encoding).decode('utf-8')
-            return base64_encoding
-        return None
+        print("[DEBUG] Registering new face")
+        try:
+            # The face system will handle encoding; we just need to save the result
+            encoding = self.face_system.process_face_encoding(face_image)
+            if encoding is not None:
+                print("[DEBUG] Face encoding generated successfully")
+                return encoding.tolist()  # Convert numpy array to list for JSON serialization
+            else:
+                print("[DEBUG] Failed to generate face encoding")
+                return None
+        except Exception as e:
+            print(f"[DEBUG] Error during face registration: {e}")
+            return None
+        finally:
+            # Always release resources when done
+            self.release_camera()
         
     def decode_face_data(self, base64_face_data):
         """

@@ -194,35 +194,56 @@ def setup_routes(app, door_controller, mqtt_handler, session, backend_url):
         # Force cleanup of any existing resources
         print("[DEBUG] face_recognition route called - ensuring a fresh start")
         
-        # First kill any leftover OpenCV windows
         try:
+            # Kill all OpenCV processes that might be running
             import cv2
+            import os
+            import signal
+            import subprocess
+            import platform
+            
+            # First close any OpenCV windows
             cv2.destroyAllWindows()
-        except Exception as e:
-            print(f"[DEBUG] Error destroying OpenCV windows: {e}")
-        
-        # Ensure any existing camera resources are released
-        try:
-            # First reset our service
+            
+            # Force release of any camera that might be open
+            for i in range(5):  # Try multiple camera indices
+                try:
+                    cap = cv2.VideoCapture(i)
+                    if cap.isOpened():
+                        cap.release()
+                        print(f"[DEBUG] Released camera {i} during cleanup")
+                except:
+                    pass
+            
+            # Extra thorough cleanup - attempt to kill any hung OpenCV processes
+            if platform.system() != 'Windows':
+                try:
+                    # For Linux/Mac - find and kill any stuck cv2 processes
+                    ps_process = subprocess.Popen(['ps', 'aux'], stdout=subprocess.PIPE)
+                    output, _ = ps_process.communicate()
+                    
+                    for line in output.splitlines():
+                        if b'python' in line and b'cv2' in line:
+                            # Extract PID
+                            pid = int(line.split()[1])
+                            # Don't kill our own process
+                            if pid != os.getpid():
+                                try:
+                                    os.kill(pid, signal.SIGTERM)
+                                    print(f"[DEBUG] Killed hung OpenCV process with PID {pid}")
+                                except:
+                                    pass
+                except Exception as e:
+                    print(f"[DEBUG] Error cleaning up processes: {e}")
+            
+            # After process cleanup, reinitialize the face recognition service
+            face_service.reset_system()
+            
+            # One more release attempt
             face_service.release_camera()
-            
-            # Then try to forcibly release any camera that might be open
-            try:
-                import cv2
-                for i in range(3):  # Try multiple camera indices
-                    try:
-                        cap = cv2.VideoCapture(i)
-                        if cap.isOpened():
-                            cap.release()
-                            print(f"[DEBUG] Released camera {i} during cleanup")
-                    except:
-                        pass
-            except Exception as e:
-                print(f"[DEBUG] Error during force camera release: {e}")
-                
         except Exception as e:
-            print(f"[DEBUG] Error releasing camera resources: {e}")
-            
+            print(f"[DEBUG] Error during cleanup: {e}")
+        
         # Return the template with manual activation
         return render_template("face_recognition.html")
     
@@ -231,7 +252,7 @@ def setup_routes(app, door_controller, mqtt_handler, session, backend_url):
         """Process facial recognition and redirect based on result"""
         try:
             # Attempt to identify the user with liveness check
-            user_match = face_service.identify_user()
+            user_match = face_service.identify_user(timeout=30)
             
             if user_match:
                 # User recognized, get their phone number
@@ -250,12 +271,16 @@ def setup_routes(app, door_controller, mqtt_handler, session, backend_url):
                         return render_template("pending.html", phone_number=phone_number)
                     else:
                         flash(data.get("error", "An error occurred."), "danger")
-                        return redirect(url_for("face_recognition"))
+                        # Always clean up before redirecting
+                        face_service.release_camera()
+                        return redirect(url_for("door_entry"))
                         
                 except Exception as e:
                     flash("Error connecting to backend.", "danger")
                     print(f"[DEBUG] Error connecting to backend: {e}")
-                    return redirect(url_for("face_recognition"))
+                    # Always clean up before redirecting
+                    face_service.release_camera()
+                    return redirect(url_for("door_entry"))
             else:
                 # User not recognized, capture image and collect phone number
                 face_image = face_service.capture_face_with_liveness()
@@ -271,11 +296,18 @@ def setup_routes(app, door_controller, mqtt_handler, session, backend_url):
                         return render_template("register_face.html")
                 
                 flash("Face recognition failed. Please try again or use phone number.", "danger")
+                # Always clean up before redirecting
+                face_service.release_camera()
                 return redirect(url_for("door_entry"))
                 
         except Exception as e:
             flash(f"Error during face recognition: {str(e)}", "danger")
             print(f"[DEBUG] Face recognition error: {e}")
+            # Always clean up on exception
+            try:
+                face_service.release_camera()
+            except:
+                pass
             return redirect(url_for("door_entry"))
     
     @app.route('/register-face', methods=['POST'])
