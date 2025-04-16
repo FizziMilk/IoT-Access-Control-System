@@ -256,7 +256,7 @@ def setup_routes(app, door_controller, mqtt_handler, session, backend_url):
             
             if user_match:
                 # User recognized, get their phone number
-                phone_number = user_match['name']  # Assuming name is the phone number
+                phone_number = user_match[0]['name']  # Access the first element of the list
                 
                 try:
                     # Send OTP directly since user is recognized
