@@ -171,10 +171,10 @@ class CameraSystem:
             top, right, bottom, left = face_locations[0]
             
             # Scale back to full size
-            top *= 2
-            right *= 2
-            bottom *= 2
-            left *= 2
+            top *= 5  # Updated from 4 to 5 (1/0.2 = 5)
+            right *= 5
+            bottom *= 5
+            left *= 5
             
             face_bbox = (left, top, right-left, bottom-top)
             
@@ -187,7 +187,7 @@ class CameraSystem:
             # Convert face_recognition landmarks to properly scaled landmarks
             scaled_landmarks = {}
             for feature, points in landmarks_list[0].items():
-                scaled_landmarks[feature] = [(p[0] * 2, p[1] * 2) for p in points]
+                scaled_landmarks[feature] = [(p[0] * 4, p[1] * 4) for p in points]
             
             return True, face_bbox, scaled_landmarks
         except Exception as e:
@@ -909,7 +909,7 @@ class CameraSystem:
             # Run face detection when needed
             if process_this_frame or not tracking_active:
                 # Detect face locations with efficient downsampling
-                small_frame = cv2.resize(frame, (0, 0), fx=0.25, fy=0.25)
+                small_frame = cv2.resize(frame, (0, 0), fx=0.25, fy=0.25)  # Increased downsampling from 0.5 to 0.25
                 rgb_small_frame = cv2.cvtColor(small_frame, cv2.COLOR_BGR2RGB)
                 # Using HOG model for faster face detection and better framerate
                 face_locations = face_recognition.face_locations(rgb_small_frame, model="hog")
@@ -917,10 +917,10 @@ class CameraSystem:
                 if face_locations:
                     # Scale back up face locations
                     top, right, bottom, left = face_locations[0]
-                    top *= 4
-                    right *= 4
-                    bottom *= 4
-                    left *= 4
+                    top *= 5  # Updated from 4 to 5 (1/0.25 = 4)
+                    right *= 5
+                    bottom *= 5
+                    left *= 5
                     
                     current_face_box = (top, right, bottom, left)
                     face_location = current_face_box  # Store this for later liveness checks
@@ -942,7 +942,7 @@ class CameraSystem:
                     landmarks_list = face_recognition.face_landmarks(rgb_small_frame, [face_locations[0]])
                     
                     if landmarks_list:
-                        # Convert landmarks to full scale
+                        # Scale landmarks back to original size
                         scaled_landmarks = {}
                         for feature, points in landmarks_list[0].items():
                             scaled_landmarks[feature] = [(p[0] * 4, p[1] * 4) for p in points]
@@ -1340,14 +1340,14 @@ class CameraSystem:
                     break
                     
                 # Get face landmarks
-                small_frame = cv2.resize(frame, (0, 0), fx=0.5, fy=0.5)
+                small_frame = cv2.resize(frame, (0, 0), fx=0.25, fy=0.25)  # Increased downsampling from 0.5 to 0.25
                 rgb_small_frame = cv2.cvtColor(small_frame, cv2.COLOR_BGR2RGB)
                 
                 # Scale face location for the smaller frame
-                small_top = top // 2
-                small_right = right // 2
-                small_bottom = bottom // 2
-                small_left = left // 2
+                small_top = top // 4  # Updated from 2 to 4 (1/0.25 = 4)
+                small_right = right // 4
+                small_bottom = bottom // 4
+                small_left = left // 4
                 
                 small_face_location = (small_top, small_right, small_bottom, small_left)
                 
@@ -1358,7 +1358,7 @@ class CameraSystem:
                     # Scale landmarks back to original size
                     scaled_landmarks = {}
                     for feature, points in landmarks_list[0].items():
-                        scaled_landmarks[feature] = [(p[0] * 2, p[1] * 2) for p in points]
+                        scaled_landmarks[feature] = [(p[0] * 4, p[1] * 4) for p in points]
                     
                     # Get eye landmarks
                     left_eye, right_eye = self.get_eye_landmarks(scaled_landmarks)
