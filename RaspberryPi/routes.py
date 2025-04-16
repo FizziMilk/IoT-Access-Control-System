@@ -1,7 +1,8 @@
-from flask import render_template, request, redirect, url_for, flash
+from flask import render_template, request, redirect, url_for, flash, session
 from datetime import datetime
 import time
 from utils import verify_otp_rest
+from face_recognition_service import FaceRecognitionService
 
 def check_schedule(door_controller, mqtt_handler, session=None, backend_url=None):
     """Check if door should be unlocked based on current schedule"""
@@ -63,9 +64,12 @@ def check_schedule(door_controller, mqtt_handler, session=None, backend_url=None
     return False
 
 def setup_routes(app, door_controller, mqtt_handler, session, backend_url):
+    # Initialize facial recognition service
+    face_service = FaceRecognitionService(backend_session=session, backend_url=backend_url)
+    
     @app.route('/')
     def index():
-        return render_template('index.html')
+        return render_template('entry_options.html')
 
     @app.route('/verify', methods=['POST'])
     def verify():
@@ -110,6 +114,10 @@ def setup_routes(app, door_controller, mqtt_handler, session, backend_url):
         if check_schedule(door_controller, mqtt_handler, session, backend_url):
             return render_template("door_unlocked.html")
 
+        # For GET requests, show the entry options page
+        if request.method == "GET":
+            return render_template("entry_options.html")
+
         # If we get here, schedule check didn't unlock the door
         if request.method == "POST":
             # Handle POST request for OTP verification
@@ -141,6 +149,156 @@ def setup_routes(app, door_controller, mqtt_handler, session, backend_url):
 
         return render_template("door_entry.html")
 
+    @app.route('/phone-entry', methods=['GET', 'POST'])
+    def phone_entry():
+        """Handle the phone number entry flow"""
+        # Check schedule first
+        if check_schedule(door_controller, mqtt_handler, session, backend_url):
+            return render_template("door_unlocked.html")
+
+        # If we get here, schedule check didn't unlock the door
+        if request.method == "POST":
+            # Handle POST request for OTP verification
+            phone_number = request.form.get('phone_number')
+            if not phone_number:
+                flash("Phone number is required for verification.", "danger")
+                return redirect(url_for("phone_entry"))
+
+            try:
+                # Send request to door-entry endpoint
+                resp = session.post(f"{backend_url}/door-entry", json={"phone_number": phone_number})
+                print(f"[DEBUG] Backend response: {resp.status_code} - {resp.text}")
+                data = resp.json()
+
+                if data.get("status") == "OTP sent":
+                    flash("OTP sent to your phone. Please enter the OTP.", "success")
+                    return render_template("otp.html", phone_number=phone_number)
+                elif data.get("status") == "pending":
+                    flash(data.get("message", "Access pending."), "warning")
+                    return render_template("pending.html", phone_number=phone_number)
+                else:
+                    flash(data.get("error", "An error occurred."), "danger")
+                    return redirect(url_for("phone_entry"))
+
+            except Exception as e:
+                flash("Error connecting to backend.", "danger")
+                print(f"[DEBUG] Error connecting to backend: {e}")
+                return redirect(url_for("phone_entry"))
+
+        # Show the phone entry form
+        return render_template("door_entry.html")
+    
+    @app.route('/face-recognition', methods=['GET'])
+    def face_recognition():
+        """Display the face recognition page"""
+        return render_template("face_recognition.html")
+    
+    @app.route('/process-face', methods=['POST'])
+    def process_face():
+        """Process facial recognition and redirect based on result"""
+        try:
+            # Attempt to identify the user with liveness check
+            user_match = face_service.identify_user()
+            
+            if user_match:
+                # User recognized, get their phone number
+                phone_number = user_match['name']  # Assuming name is the phone number
+                
+                try:
+                    # Send OTP directly since user is recognized
+                    resp = session.post(f"{backend_url}/door-entry", json={"phone_number": phone_number})
+                    data = resp.json()
+                    
+                    if data.get("status") == "OTP sent":
+                        flash("Face recognized! OTP sent to your phone.", "success")
+                        return render_template("otp.html", phone_number=phone_number)
+                    elif data.get("status") == "pending":
+                        flash(data.get("message", "Access pending."), "warning")
+                        return render_template("pending.html", phone_number=phone_number)
+                    else:
+                        flash(data.get("error", "An error occurred."), "danger")
+                        return redirect(url_for("face_recognition"))
+                        
+                except Exception as e:
+                    flash("Error connecting to backend.", "danger")
+                    print(f"[DEBUG] Error connecting to backend: {e}")
+                    return redirect(url_for("face_recognition"))
+            else:
+                # User not recognized, capture image and collect phone number
+                face_image = face_service.capture_face_with_liveness()
+                if face_image is not None:
+                    # Register the face and save encoding temporarily
+                    face_encoding = face_service.register_face(face_image)
+                    if face_encoding:
+                        # Store the encoding in session for later use
+                        flask_session = request.environ.get('werkzeug.session')
+                        if flask_session is not None:
+                            flask_session['face_encoding'] = face_encoding
+                        else:
+                            session['face_encoding'] = face_encoding
+                            
+                        flash("Face captured successfully. Please enter your phone number to register.", "info")
+                        return render_template("register_face.html")
+                
+                flash("Face recognition failed. Please try again or use phone number.", "danger")
+                return redirect(url_for("door_entry"))
+                
+        except Exception as e:
+            flash(f"Error during face recognition: {str(e)}", "danger")
+            print(f"[DEBUG] Face recognition error: {e}")
+            return redirect(url_for("door_entry"))
+    
+    @app.route('/register-face', methods=['POST'])
+    def register_face():
+        """Register a captured face with a phone number"""
+        phone_number = request.form.get('phone_number')
+        
+        # Get the face encoding from session
+        flask_session = request.environ.get('werkzeug.session')
+        if flask_session is not None:
+            face_encoding = flask_session.get('face_encoding')
+        else:
+            face_encoding = session.get('face_encoding')
+        
+        if not phone_number or not face_encoding:
+            flash("Phone number and face image required.", "danger")
+            return redirect(url_for("door_entry"))
+            
+        try:
+            # Send the face encoding and phone number to the backend
+            resp = session.post(f"{backend_url}/register-face", json={
+                "phone_number": phone_number,
+                "face_encoding": face_encoding
+            })
+            data = resp.json()
+            
+            if data.get("status") == "success":
+                # Clear the session data
+                if flask_session is not None:
+                    if 'face_encoding' in flask_session:
+                        del flask_session['face_encoding']
+                elif 'face_encoding' in session:
+                    session.pop('face_encoding')
+                
+                flash("Face registered successfully. Please wait for OTP or admin approval.", "success")
+                # Try to send OTP to the newly registered user
+                resp = session.post(f"{backend_url}/door-entry", json={"phone_number": phone_number})
+                data = resp.json()
+                
+                if data.get("status") == "OTP sent":
+                    return render_template("otp.html", phone_number=phone_number)
+                elif data.get("status") == "pending":
+                    return render_template("pending.html", phone_number=phone_number)
+                else:
+                    return redirect(url_for("door_entry"))
+            else:
+                flash(data.get("error", "Error registering face"), "danger")
+        except Exception as e:
+            flash("Error connecting to backend.", "danger")
+            print(f"[DEBUG] Error: {e}")
+            
+        return redirect(url_for("door_entry"))
+    
     @app.route('/update-name', methods=['POST'])
     def update_name():
         phone_number = request.form.get('phone_number')
