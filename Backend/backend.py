@@ -12,7 +12,6 @@ import os
 import json
 from twilio.base.exceptions import TwilioRestException
 import logging
-import base64
 
 logging.basicConfig(level=logging.DEBUG, format="%(asctime)s [%(levelname)s] %(message)s")
 
@@ -83,9 +82,8 @@ class User(db.Model):
     id = db.Column(db.Integer, primary_key = True)
     name = db.Column(db.String(50), nullable = True)
     phone_number = db.Column(db.String(20), unique=True, nullable=False)
-    is_allowed = db.Column(db.Boolean, default=False)
-    face_data = db.Column(db.LargeBinary, nullable=True) # Face data stored as binary
-    face_registered = db.Column(db.Boolean, default=False) # Whether face has been registered
+    is_allowed = db.Column(db.Boolean,default=False)
+    face_data = db.Column(db.LargeBinary, nullable=True) # Assuming face data is stored as binary
 
 ## Door schedule database model
 
@@ -319,54 +317,27 @@ class DoorEntryAPI(Resource):
     def post(self):
         data = request.get_json()
         phone_number = data.get("phone_number")
-
-        user = User.query.filter_by(phone_number=phone_number).first()
+        if not phone_number:
+            return {"error": "phone_number is required"}, 400
         
-        if not user:
-            # Create a pending user
+        user = User.query.filter_by(phone_number=phone_number).first()
+        if user:
+            if user.is_allowed:
+                # Allowed on file - send OTP now and return status.
+                otp_result, status = send_otp(phone_number) 
+                if status == 200:
+                    return {"status" : "OTP sent", "phone_number": phone_number}, 200
+                else:
+                    return otp_result, status
+            else:
+                #User exists but not allowed yet.
+                return {"status": "pending", "message": "Your number is pending review."}, 200
+        else:
+            #Not found - add to user database pending review.
             new_user = User(phone_number=phone_number, is_allowed=False)
             db.session.add(new_user)
             db.session.commit()
-            
-            return {
-                "status": "pending",
-                "message": "No access rights. Please contact administrator."
-            }, 200
-
-        if not user.is_allowed:
-            return {
-                "status": "pending", 
-                "message": "Waiting for admin approval"
-            }, 200
-            
-        # User exists and is allowed access, send OTP
-        try:
-            verification = twilio_client.verify.v2.services(TWILIO_VERIFY_SID) \
-                .verifications \
-                .create(to=phone_number, channel="sms")
-            
-            # Log the OTP request
-            new_log = AccessLog(
-                user=phone_number,
-                user_name=user.name,
-                method="OTP Request",
-                status="Sent"
-            )
-            db.session.add(new_log)
-            db.session.commit()
-            
-            return {
-                "status": "OTP sent",
-                "message": "OTP has been sent to your phone",
-                "verification_status": verification.status,
-                "has_face": user.face_registered # Add info about face registration
-            }, 200
-        except Exception as e:
-            print(f"Error sending OTP: {e}")
-            return {
-                "error": "Failed to send OTP",
-                "details": str(e)
-            }, 500
+            return {"status": "pending", "message": "Number added. Your access is now pending review."}, 200                
 
 # Resource to retrieve all logs
 class GetAccessLogs(Resource):
@@ -843,89 +814,6 @@ class LogDoorAccess(Resource):
             print(f"[ERROR] Failed to log door access: {str(e)}")
             return {"status": "error", "message": str(e)}, 500
 
-class RegisterFaceAPI(Resource):
-    def post(self):
-        data = request.get_json()
-        phone_number = data.get("phone_number")
-        face_encoding_base64 = data.get("face_encoding")
-        
-        if not phone_number or not face_encoding_base64:
-            return {"error": "Phone number and face encoding required"}, 400
-            
-        try:
-            # Convert base64 string to binary
-            face_data = base64.b64decode(face_encoding_base64)
-            
-            # Find or create user
-            user = User.query.filter_by(phone_number=phone_number).first()
-            
-            if user:
-                # Update existing user
-                user.face_data = face_data
-                user.face_registered = True
-                db.session.commit()
-                
-                # Log the update
-                log = AccessLog(
-                    user=phone_number,
-                    user_name=user.name,
-                    method="Face Registration",
-                    status="Updated"
-                )
-                db.session.add(log)
-                db.session.commit()
-                
-                return {"status": "success", "message": "Face updated for existing user"}, 200
-            else:
-                # Create new user
-                new_user = User(
-                    phone_number=phone_number,
-                    is_allowed=False,  # Require admin approval
-                    face_data=face_data,
-                    face_registered=True
-                )
-                db.session.add(new_user)
-                db.session.commit()
-                
-                # Log the registration
-                log = AccessLog(
-                    user=phone_number,
-                    method="Face Registration",
-                    status="Pending Approval"
-                )
-                db.session.add(log)
-                db.session.commit()
-                
-                return {"status": "success", "message": "New user registered with face"}, 201
-        except Exception as e:
-            print(f"Error registering face: {e}")
-            return {"error": str(e)}, 500
-
-class GetFaceDataAPI(Resource):
-    def get(self):
-        """Retrieve face data for all authorized users"""
-        try:
-            # Query users with registered faces who are allowed access
-            users = User.query.filter(User.face_registered == True, User.is_allowed == True).all()
-            
-            face_data = []
-            for user in users:
-                # Convert binary face data to base64 string
-                if user.face_data:
-                    face_encoding_b64 = base64.b64encode(user.face_data).decode('utf-8')
-                    face_data.append({
-                        "phone_number": user.phone_number,
-                        "face_encoding": face_encoding_b64
-                    })
-            
-            return {
-                "status": "success",
-                "face_data": face_data
-            }, 200
-        except Exception as e:
-            print(f"Error retrieving face data: {e}")
-            return {"error": str(e)}, 500
-
 ## Exposing RESTful API endpoints
 api.add_resource(LoginResource, "/login")
 api.add_resource(CheckVerification, "/verify-otp")
@@ -940,8 +828,6 @@ api.add_resource(UpdateUserNameAPI, "/update-user-name")
 api.add_resource(UserScheduleAPI, '/user-schedule')
 api.add_resource(LockDoor, '/lock')
 api.add_resource(LogDoorAccess, '/log-door-access')
-api.add_resource(RegisterFaceAPI, '/register-face')
-api.add_resource(GetFaceDataAPI, '/get-face-data')
 
 if __name__ == '__main__':
     try:
