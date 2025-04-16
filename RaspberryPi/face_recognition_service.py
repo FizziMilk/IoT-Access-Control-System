@@ -8,7 +8,7 @@ import time
 class FaceRecognitionService:
     def __init__(self, backend_session=None, backend_url=None):
         print("[DEBUG] Initializing FaceRecognitionService")
-        self.face_system = FaceRecognitionSystem()
+        self.face_system = FaceRecognitionSystem(web_mode=True)
         self.backend_session = backend_session
         self.backend_url = backend_url
         
@@ -97,8 +97,8 @@ class FaceRecognitionService:
             if hasattr(self.face_system, 'release_resources'):
                 self.face_system.release_resources()
                 
-            # Re-initialize the entire system
-            self.face_system = FaceRecognitionSystem()
+            # Re-initialize the entire system with web mode
+            self.face_system = FaceRecognitionSystem(web_mode=True)
             print("[DEBUG] Face recognition system has been fully reinitialized")
         except Exception as e:
             print(f"[DEBUG] Error during system reset: {e}")

@@ -5,11 +5,13 @@ import cv2
 import os
 
 class FaceRecognitionSystem:
-    def __init__(self):
+    def __init__(self, web_mode=True):
         # Initialize subsystems
         self.camera = CameraSystem()
         self.storage = StorageSystem()
         self.recognition = RecognitionSystem(self.storage)
+        # When in web mode, disable interactive prompts and use non-blocking behavior
+        self.web_mode = web_mode
     
     def release_resources(self):
         """Release all resources including camera"""
@@ -17,14 +19,21 @@ class FaceRecognitionSystem:
             self.camera.video_capture.release()
             self.camera.video_capture = None
             print("Released camera resources in FaceRecognitionSystem")
+            
+        # Make sure all OpenCV windows are closed
+        cv2.destroyAllWindows()
     
     def register_new_user(self, use_liveness=True):
         """Register a new user face in the system"""
-        # Get user name
-        name = input("Enter name for the new user: ")
-        if not name.strip():
-            print("Name cannot be empty")
-            return False
+        if self.web_mode:
+            print("[DEBUG] register_new_user called in web_mode - using default name")
+            name = "new_user"  # Default name when in web mode
+        else:
+            # Get user name
+            name = input("Enter name for the new user: ")
+            if not name.strip():
+                print("Name cannot be empty")
+                return False
         
         # Capture face image with liveness check if requested
         print("Capturing face image...")

@@ -795,6 +795,18 @@ class CameraSystem:
             cv2.imshow("Texture Analysis", texture_visualization)
             cv2.waitKey(1)  # Show image but don't block
             
+            # Show summary of results
+            cv2.putText(summary_frame, f"Texture Results - {passing_scores}/{total_scores} checks passed",
+                        (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, title_color, 2)
+            
+            # Add instruction about processing
+            cv2.putText(summary_frame, "Processing analysis results...",
+                        (10, summary_frame.shape[0] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+            
+            # Show the texture analysis results 
+            cv2.imshow("Texture Analysis", summary_frame)
+            cv2.waitKey(300)  # Wait for 300ms instead of indefinitely
+            
             return is_real_texture
             
         except Exception as e:
@@ -1290,13 +1302,17 @@ class CameraSystem:
                             cv2.putText(debug_display, "Texture Analysis Debug Images", 
                                        (10, result_h+20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
                     
-                    cv2.putText(debug_display, "Press any key to continue...", 
-                                (20, debug_display.shape[0] - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
+                    # Replace any waitKey(0) calls with short timeouts
+                    cv2.putText(debug_display, "Processing results...",
+                                (10, debug_display.shape[0] - 30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+                    cv2.imshow("Focus Analysis", debug_display)
+                    cv2.waitKey(300)  # Wait for 300ms instead of indefinitely
                     
-                    # Show the composite display instead of just the result frame
-                    cv2.imshow("Liveness Detection Results", debug_display)
-                    cv2.waitKey(0)
-                    cv2.destroyAllWindows()
+                    # Replace infinite waits in result display
+                    cv2.putText(result_frame, "Processing results...",
+                                (10, result_frame.shape[0] - 30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+                    cv2.imshow("Focus Test Result", result_frame)
+                    cv2.waitKey(300)  # Wait for 300ms instead of indefinitely
                 
                 # Release the texture camera
                 texture_cap.release()
@@ -1401,6 +1417,12 @@ class CameraSystem:
             label = "LIVE FACE" if liveness_confirmed else "FAKE DETECTED"
             color = (0, 255, 0) if liveness_confirmed else (0, 0, 255)
             cv2.putText(frame, label, (left, top - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, color, 2)
+            
+            # Display the final result for a short time
+            cv2.putText(frame, "Processing liveness results...", 
+                        (10, frame.shape[0] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+            cv2.imshow("Liveness Check", frame)
+            cv2.waitKey(300)  # Wait for 300ms instead of indefinitely
             
             return liveness_confirmed
             
