@@ -54,5 +54,19 @@
             </a>
         </div>
     </div>
+
+    <script>
+        // Force a fresh page load when selecting face recognition to prevent session issues
+        document.addEventListener('DOMContentLoaded', function() {
+            const faceRecLink = document.querySelector('a[href="/face-recognition"]');
+            if (faceRecLink) {
+                faceRecLink.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    // Add a cache-busting parameter to ensure a fresh page load
+                    window.location.href = '/face-recognition?nocache=' + new Date().getTime();
+                });
+            }
+        });
+    </script>
 </body>
 </html> 

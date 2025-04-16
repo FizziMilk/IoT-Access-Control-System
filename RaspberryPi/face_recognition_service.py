@@ -81,10 +81,27 @@ class FaceRecognitionService:
                     cv2.destroyAllWindows()
                 except Exception as e:
                     print(f"[DEBUG] Error during cleanup attempt: {e}")
+                    
+            # Reset the entire system to ensure a fresh start for next time
+            self.reset_system()
         except Exception as e:
             print(f"[DEBUG] Error releasing camera: {e}")
             import traceback
             print(traceback.format_exc())
+        
+    def reset_system(self):
+        """Completely reset the face recognition system"""
+        print("[DEBUG] Performing full system reset")
+        try:
+            # Release any resources
+            if hasattr(self.face_system, 'release_resources'):
+                self.face_system.release_resources()
+                
+            # Re-initialize the entire system
+            self.face_system = FaceRecognitionSystem()
+            print("[DEBUG] Face recognition system has been fully reinitialized")
+        except Exception as e:
+            print(f"[DEBUG] Error during system reset: {e}")
         
     def load_faces_from_backend(self):
         """

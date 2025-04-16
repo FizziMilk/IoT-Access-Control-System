@@ -191,14 +191,40 @@ def setup_routes(app, door_controller, mqtt_handler, session, backend_url):
     @app.route('/face-recognition', methods=['GET'])
     def face_recognition():
         """Display the face recognition page"""
-        # Ensure any existing camera resources are released before starting new recognition
+        # Force cleanup of any existing resources
+        print("[DEBUG] face_recognition route called - ensuring a fresh start")
+        
+        # First kill any leftover OpenCV windows
         try:
+            import cv2
+            cv2.destroyAllWindows()
+        except Exception as e:
+            print(f"[DEBUG] Error destroying OpenCV windows: {e}")
+        
+        # Ensure any existing camera resources are released
+        try:
+            # First reset our service
             face_service.release_camera()
+            
+            # Then try to forcibly release any camera that might be open
+            try:
+                import cv2
+                for i in range(3):  # Try multiple camera indices
+                    try:
+                        cap = cv2.VideoCapture(i)
+                        if cap.isOpened():
+                            cap.release()
+                            print(f"[DEBUG] Released camera {i} during cleanup")
+                    except:
+                        pass
+            except Exception as e:
+                print(f"[DEBUG] Error during force camera release: {e}")
+                
         except Exception as e:
             print(f"[DEBUG] Error releasing camera resources: {e}")
-        
-        # Add a longer timeout before auto-submitting
-        return render_template("face_recognition.html", timeout=5000)  # 5 seconds
+            
+        # Return the template with manual activation
+        return render_template("face_recognition.html")
     
     @app.route('/process-face', methods=['POST'])
     def process_face():
