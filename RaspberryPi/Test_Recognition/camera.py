@@ -33,7 +33,9 @@ class CameraSystem:
         self.video_capture = None
         # Other initializations
         self.face_detector = dlib.get_frontal_face_detector()
-        self.shape_predictor = dlib.shape_predictor('shape_predictor_68_face_landmarks.dat')
+        # Load the facial landmark predictor
+        predictor_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'shape_predictor_68_face_landmarks.dat')
+        self.shape_predictor = dlib.shape_predictor(predictor_path)
         self.load_model()  # Load the face recognition model
         # EAR threshold for blink detection - less sensitive (harder to register)
         self.EAR_THRESHOLD = 0.20  # Higher threshold makes it harder to detect blinks
@@ -62,7 +64,8 @@ class CameraSystem:
         # Face recognition model is loaded implicitly via face_recognition library
         # This method ensures we have all necessary resources
         # Check if shape predictor exists
-        if not os.path.exists('shape_predictor_68_face_landmarks.dat'):
+        predictor_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'shape_predictor_68_face_landmarks.dat')
+        if not os.path.exists(predictor_path):
             print("WARNING: shape_predictor_68_face_landmarks.dat not found!")
             print("Download it from: https://github.com/davisking/dlib-models")
         else:
