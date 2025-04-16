@@ -1380,6 +1380,19 @@ class CameraSystem:
             print(traceback.format_exc())
             return False
 
+    def load_model(self):
+        """
+        Load face recognition model. This is a placeholder method
+        since the face_recognition library automatically loads its models.
+        """
+        try:
+            # The face_recognition library loads models automatically,
+            # but we can initialize any additional models here if needed
+            print("Face recognition system initialized")
+        except Exception as e:
+            print(f"Error loading face recognition model: {e}")
+            print(traceback.format_exc())
+
 # For demonstration
 if __name__ == "__main__":
     camera = CameraSystem()
