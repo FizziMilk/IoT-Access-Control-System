@@ -205,15 +205,19 @@ def setup_routes(app, door_controller, mqtt_handler, session, backend_url):
             # First close any OpenCV windows
             cv2.destroyAllWindows()
             
-            # Force release of any camera that might be open
-            for i in range(5):  # Try multiple camera indices
-                try:
-                    cap = cv2.VideoCapture(i)
-                    if cap.isOpened():
-                        cap.release()
-                        print(f"[DEBUG] Released camera {i} during cleanup")
-                except:
-                    pass
+            # Set environment variable to suppress Qt warnings
+            os.environ["QT_QPA_PLATFORM"] = "offscreen"
+            
+            # Force release of camera 0 only
+            try:
+                cap = cv2.VideoCapture(0)
+                if cap.isOpened():
+                    cap.release()
+                    print(f"[DEBUG] Released camera 0 during cleanup")
+                    # Add delay after release
+                    time.sleep(0.5)
+            except Exception as e:
+                print(f"[DEBUG] Error releasing camera: {e}")
             
             # Extra thorough cleanup - attempt to kill any hung OpenCV processes
             if platform.system() != 'Windows':

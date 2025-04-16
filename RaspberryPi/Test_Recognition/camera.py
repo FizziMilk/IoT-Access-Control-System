@@ -111,18 +111,19 @@ class CameraSystem:
             print(f"[DEBUG] initialize_camera: Existing camera found, releasing first")
             self.release_camera()
         
-        # Try to initialize camera with multiple indices
-        cap = None
-        for camera_idx in [0, 1, 2]:  # Try indices 0, 1, and 2
-            try:
-                print(f"[DEBUG] Trying to open camera with index {camera_idx}...")
-                cap = cv2.VideoCapture(camera_idx)
-                if cap is not None and cap.isOpened():
-                    self.camera_id = camera_idx  # Update camera_id if successful
-                    print(f"[DEBUG] Successfully opened camera with index {camera_idx}")
-                    break
-            except Exception as e:
-                print(f"[DEBUG] Failed to open camera with index {camera_idx}: {e}")
+        # Only try index 0 since other indices don't work
+        try:
+            print(f"[DEBUG] Trying to open camera with index 0...")
+            cap = cv2.VideoCapture(0)
+            if cap is not None and cap.isOpened():
+                self.camera_id = 0  # Set camera_id to 0
+                print(f"[DEBUG] Successfully opened camera with index 0")
+            else:
+                print(f"[DEBUG] Failed to open camera with index 0")
+                cap = None
+        except Exception as e:
+            print(f"[DEBUG] Error opening camera: {e}")
+            cap = None
                 
         # If still not opened, try with GSTREAMER
         if cap is None or not cap.isOpened():
@@ -167,12 +168,14 @@ class CameraSystem:
                 print("[DEBUG] Camera released successfully")
                 # Force OpenCV to forget about the camera
                 cv2.destroyAllWindows()
+                # Set environment variable to suppress Qt warnings
+                os.environ["QT_QPA_PLATFORM"] = "offscreen"
             except Exception as e:
                 print(f"[DEBUG] Error releasing camera: {e}")
             finally:
                 self.video_capture = None
-                # Wait a moment after releasing
-                time.sleep(0.2)
+                # Wait a moment after releasing to prevent resource conflict
+                time.sleep(0.5)
                 print("[DEBUG] Camera reference set to None")
         else:
             print("[DEBUG] No camera to release (video_capture is None)")

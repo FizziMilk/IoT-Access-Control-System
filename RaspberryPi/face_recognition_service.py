@@ -69,20 +69,25 @@ class FaceRecognitionService:
             cv2.destroyAllWindows()
             print("[DEBUG] Destroyed all OpenCV windows")
             
-            # Try to release any potential cameras directly
-            for i in range(5):  # Try multiple indices to be safe
-                try:
-                    cap = cv2.VideoCapture(i)
-                    if cap.isOpened():
-                        cap.release()
-                        print(f"[DEBUG] Released camera {i} directly")
-                except Exception as e:
-                    print(f"[DEBUG] Error releasing camera {i}: {e}")
+            # Try to release camera directly - only try index 0
+            try:
+                cap = cv2.VideoCapture(0)
+                if cap.isOpened():
+                    cap.release()
+                    print(f"[DEBUG] Released camera 0 directly")
+            except Exception as e:
+                print(f"[DEBUG] Error releasing camera 0: {e}")
                     
             self.camera_open = False
             print("[DEBUG] Camera resources released")
+            
+            # Force a small delay to let resources be properly released
+            time.sleep(0.5)
         except Exception as e:
             print(f"[DEBUG] Error during camera release: {e}")
+        
+        # Set environment variable to suppress Qt warnings
+        os.environ["QT_QPA_PLATFORM"] = "offscreen"
         
     def reset_system(self):
         """Completely reset the face recognition system"""
