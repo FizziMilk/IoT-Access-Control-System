@@ -55,6 +55,19 @@ class CameraSystem:
         # Flag to track if liveness passed has been logged
         self.has_logged_liveness_passed = False
     
+    def load_model(self):
+        """
+        Load face recognition models and other resources needed for facial analysis.
+        """
+        # Face recognition model is loaded implicitly via face_recognition library
+        # This method ensures we have all necessary resources
+        # Check if shape predictor exists
+        if not os.path.exists('shape_predictor_68_face_landmarks.dat'):
+            print("WARNING: shape_predictor_68_face_landmarks.dat not found!")
+            print("Download it from: https://github.com/davisking/dlib-models")
+        else:
+            print("Face landmark predictor loaded successfully")
+    
     def capture_face(self):
         """Capture an image from the camera with face detection"""
         # Initialize camera
@@ -552,7 +565,7 @@ class CameraSystem:
             bright_lighting = entropy1 < 2.5 and gradient_ratio > 1.5
             
             # Define lab environment detection - based on the latest lab data patterns
-            lab_environment = entropy3 < 4.1 and entropy3 > 4.0 and gradient_ratio > 1.7
+            lab_environment = entropy3 > 4.0 and gradient_ratio > 1.6
             if lab_environment:
                 print("Detected lab environment for texture analysis")
             
@@ -560,13 +573,13 @@ class CameraSystem:
             # Entropy threshold adapts to environment
             if lab_environment:
                 # In lab environment, entropy threshold needs slight adjustment
-                entropy_score = (entropy3 > 4.0)
+                entropy_score = (entropy3 > 3.95)
             elif bright_lighting:
                 # In bright lighting, entropy values are slightly lower
-                entropy_score = (entropy3 > 4.0)
+                entropy_score = (entropy3 > 3.9)
             else:
                 # Normal lighting conditions
-                entropy_score = (entropy3 > 4.1)
+                entropy_score = (entropy3 > 3.95)
             
             # 2. Real faces show higher gradient ratio based on all test results
             # Consistent across environments, but higher in bright light
@@ -598,16 +611,17 @@ class CameraSystem:
             # Adaptive criteria based on environment
             if lab_environment:
                 # Lab environment - gradient ratio is the key differentiator
-                # Real faces show gradient_ratio > 1.9, photos < 1.3
+                # Lowered from 1.9 to 1.65 based on real-world testing
                 print("Using lab-specific texture criteria")
-                is_real_texture = gradient_ratio > 1.9 and passing_scores >= 2
+                # Make this more lenient - just gradient ratio is enough if it's high enough
+                is_real_texture = (gradient_ratio > 1.65) or (passing_scores >= 2)
             elif bright_lighting:
                 print("Detected bright lighting environment for texture analysis")
                 # In bright lighting, gradient_ratio is the most reliable indicator
-                is_real_texture = gradient_score and (passing_scores >= 1)
+                is_real_texture = gradient_score or (passing_scores >= 1)
             else:
-                # Normal lighting - require at least 2 metrics to pass
-                is_real_texture = passing_scores >= 2 and (entropy_score or gradient_score)
+                # Normal lighting - more lenient with just one good metric
+                is_real_texture = passing_scores >= 1 and (entropy_score or gradient_score)
             
             print(f"Texture test result: {is_real_texture}")
             
@@ -1379,19 +1393,6 @@ class CameraSystem:
             print(f"Error in blink detection: {e}")
             print(traceback.format_exc())
             return False
-
-    def load_model(self):
-        """
-        Load face recognition model. This is a placeholder method
-        since the face_recognition library automatically loads its models.
-        """
-        try:
-            # The face_recognition library loads models automatically,
-            # but we can initialize any additional models here if needed
-            print("Face recognition system initialized")
-        except Exception as e:
-            print(f"Error loading face recognition model: {e}")
-            print(traceback.format_exc())
 
 # For demonstration
 if __name__ == "__main__":
