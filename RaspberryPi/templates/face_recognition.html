@@ -50,7 +50,7 @@
         </div>
         
         <form action="{{ url_for('process_face') }}" method="POST" id="faceForm" style="display:none;">
-            <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+            <!-- CSRF token removed -->
         </form>
         
         <div class="mt-4">
