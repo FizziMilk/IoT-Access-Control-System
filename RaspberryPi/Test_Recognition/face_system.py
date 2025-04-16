@@ -54,6 +54,9 @@ class FaceRecognitionSystem:
             print("No face encodings in database. Please register users first.")
             return None
         
+        # Reset camera system to ensure it's in a clean state
+        self.camera.reset_camera()
+        
         # Capture image with liveness check if requested
         print("Capturing image for recognition...")
         if use_liveness:

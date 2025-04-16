@@ -36,11 +36,10 @@ class FaceRecognitionService:
         Explicitly release camera resources to prevent resource locks
         """
         try:
-            if hasattr(self.face_system, 'camera') and hasattr(self.face_system.camera, 'video_capture'):
-                if self.face_system.camera.video_capture is not None:
-                    self.face_system.camera.video_capture.release()
-                    self.face_system.camera.video_capture = None
-                    print("Camera resources released successfully")
+            if hasattr(self.face_system, 'camera'):
+                # Use the more thorough reset method
+                self.face_system.camera.reset_camera()
+                print("Camera resources reset successfully")
         except Exception as e:
             print(f"Error releasing camera: {e}")
         

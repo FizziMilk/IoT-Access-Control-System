@@ -57,6 +57,53 @@ class CameraSystem:
         # Flag to track if liveness passed has been logged
         self.has_logged_liveness_passed = False
     
+    def reset_camera(self):
+        """
+        Fully reset and reinitialize the camera system
+        """
+        # First, ensure any existing camera is properly released
+        self.release_camera()
+        
+        # Reset all state variables
+        self.COUNTER = 0
+        self.TOTAL = 0
+        self.blink_detected = False
+        self.blink_start_time = None
+        self.highmotion_warned = False
+        self.stop_detection_thread = True
+        self.has_logged_liveness_passed = False
+        
+        # Cleanup any lingering threads
+        if self.face_detection_thread is not None:
+            if self.face_detection_thread.is_alive():
+                self.face_detection_thread.join(timeout=1.0)
+            self.face_detection_thread = None
+                
+        # Clean up any temporary files
+        self.cleanup_diagnostic_images()
+        
+        # Force garbage collection to release any lingering resources
+        import gc
+        gc.collect()
+        
+        # Wait a moment to ensure resources are fully released
+        time.sleep(0.5)
+    
+    def release_camera(self):
+        """
+        Release camera resources
+        """
+        if self.video_capture is not None:
+            try:
+                self.video_capture.release()
+                print("Camera released successfully")
+            except Exception as e:
+                print(f"Error releasing camera: {e}")
+            finally:
+                self.video_capture = None
+                # Wait a moment after releasing
+                time.sleep(0.2)
+    
     def load_model(self):
         """
         Load face recognition models and other resources needed for facial analysis.
@@ -1220,7 +1267,6 @@ class CameraSystem:
             print(f"Error cleaning up diagnostic images: {e}")
             # Continue even if cleanup fails
     
-    # Replace the simplified placeholder with our real implementation
     def capture_face_with_liveness(self):
         """
         Capture a face with liveness detection (blink detection)
@@ -1228,6 +1274,9 @@ class CameraSystem:
         Returns:
             image or None: Face image if liveness check passed, None otherwise
         """
+        # Reset the camera system to ensure a clean state
+        self.reset_camera()
+        
         print("Starting liveness detection (blink check)...")
         success, face_image = self.detect_blink()
         
