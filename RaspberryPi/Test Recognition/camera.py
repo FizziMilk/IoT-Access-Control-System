@@ -531,31 +531,9 @@ class CameraSystem:
             # For real skin, gradient distribution is distinctive
             gradient_ratio = gradient_std / (gradient_mean + 1e-7)
             
-            # Analyze frequency distribution using FFT
-            # Printed/displayed faces often have regular patterns or moiré effects
-            f_transform = np.fft.fft2(gray)
-            f_shift = np.fft.fftshift(f_transform)
-            magnitude_spectrum = 20 * np.log(np.abs(f_shift) + 1)
-            
-            # Split spectrum into high/low frequency regions
-            h, w = magnitude_spectrum.shape
-            center_h, center_w = h // 2, w // 2
-            
-            # Define high-frequency region (outer 50% of spectrum)
-            mask_high = np.zeros((h, w), dtype=np.uint8)
-            mask_radius = min(center_h, center_w) // 2
-            cv2.circle(mask_high, (center_w, center_h), mask_radius, 1, -1)
-            mask_high = 1 - mask_high  # Invert to get high frequencies
-            
-            # Calculate energy in different frequency bands
-            high_freq_energy = np.sum(magnitude_spectrum * mask_high) / np.sum(mask_high)
-            total_energy = np.mean(magnitude_spectrum)
-            freq_energy_ratio = high_freq_energy / (total_energy + 1e-7)
-            
             # For debugging
             print(f"Texture entropy: multi-scale {entropy1:.2f}/{entropy2:.2f}/{entropy3:.2f}")
             print(f"Uniformity ratio: {uniformity_ratio:.4f}, Gradient ratio: {gradient_ratio:.4f}")
-            print(f"Frequency energy ratio: {freq_energy_ratio:.4f}")
             
             # Combined decision metrics using multiple texture properties
             # Thresholds adjusted based on extensive real test data from multiple environments
@@ -599,14 +577,11 @@ class CameraSystem:
             else:
                 uniformity_score = (uniformity_ratio > 1.7)
             
-            # 4. Real faces show lower frequency energy ratio
-            frequency_score = (freq_energy_ratio < 0.955)
-            
             # Compute scores and final decision
-            passing_scores = sum([entropy_score, gradient_score, uniformity_score, frequency_score])
+            passing_scores = sum([entropy_score, gradient_score, uniformity_score])
             print(f"Texture scores: Entropy={entropy_score}, Gradient={gradient_score}, "
-                  f"Uniformity={uniformity_score}, Frequency={frequency_score}")
-            print(f"Passing texture scores: {passing_scores}/4")
+                  f"Uniformity={uniformity_score}")
+            print(f"Passing texture scores: {passing_scores}/3")
             
             # Adaptive criteria based on environment
             if lab_environment:
@@ -631,10 +606,6 @@ class CameraSystem:
             macro_texture = cv2.normalize(lbp3.astype(np.uint8), None, 0, 255, cv2.NORM_MINMAX)
             gradient_viz = cv2.normalize(magnitude.astype(np.uint8), None, 0, 255, cv2.NORM_MINMAX)
             
-            # Create visualization for FFT
-            freq_viz = np.log(np.abs(f_shift) + 1)
-            freq_viz = cv2.normalize(freq_viz, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
-            
             # Create a nicer visualization with title and organized layout
             h, w = frame.shape[:2]
             viz_size = (w, h)
@@ -643,7 +614,7 @@ class CameraSystem:
             labels = [
                 "Original Image", "Grayscale", "Histogram Equalized",
                 "LBP (r=1)", "LBP (r=2)", "LBP (r=3)",
-                "Gradient Magnitude", "Frequency Spectrum"
+                "Gradient Magnitude"
             ]
             
             # Resize each image to the same size
@@ -657,7 +628,6 @@ class CameraSystem:
             lbp3_viz = cv2.resize(cv2.cvtColor(macro_texture, cv2.COLOR_GRAY2BGR), viz_size)
             
             gradient_viz = cv2.resize(cv2.cvtColor(gradient_viz, cv2.COLOR_GRAY2BGR), viz_size)
-            freq_viz = cv2.resize(cv2.cvtColor(freq_viz, cv2.COLOR_GRAY2BGR), viz_size)
             
             # Make sure gray images are 3-channel for display
             gray_resized = cv2.cvtColor(gray_resized, cv2.COLOR_GRAY2BGR)
@@ -666,7 +636,11 @@ class CameraSystem:
             # Create the visualization layout
             row1 = np.hstack([frame_resized, gray_resized, equalized_resized])
             row2 = np.hstack([lbp1_viz, lbp2_viz, lbp3_viz])
-            row3 = np.hstack([gradient_viz, freq_viz, np.zeros_like(freq_viz)])
+            
+            # Create a placeholder with same shape as other images for empty space
+            empty_viz = np.zeros_like(gradient_viz)
+            # Add third row with gradient and placeholders
+            row3 = np.hstack([gradient_viz, empty_viz, empty_viz])
             
             # Create header with title
             header = np.zeros((60, row1.shape[1], 3), dtype=np.uint8)
