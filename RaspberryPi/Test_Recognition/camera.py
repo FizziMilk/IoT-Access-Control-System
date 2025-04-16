@@ -168,8 +168,8 @@ class CameraSystem:
                 print("[DEBUG] Camera released successfully")
                 # Force OpenCV to forget about the camera
                 cv2.destroyAllWindows()
-                # Set environment variable to suppress Qt warnings
-                os.environ["QT_QPA_PLATFORM"] = "offscreen"
+                # Set up Qt environment
+                self.setup_qt_environment()
             except Exception as e:
                 print(f"[DEBUG] Error releasing camera: {e}")
             finally:
@@ -1354,6 +1354,80 @@ class CameraSystem:
             print(f"Error in blink detection: {e}")
             print(traceback.format_exc())
             return False
+
+    def setup_qt_environment(self):
+        """
+        Set up the appropriate Qt environment variables based on available plugins
+        """
+        import os
+        import subprocess
+        import re
+        
+        try:
+            # Try to detect available Qt plugins
+            qt_available_plugins = []
+            
+            # Common plugin locations
+            qt_plugin_paths = [
+                "/usr/lib/x86_64-linux-gnu/qt5/plugins",
+                "/usr/lib/qt5/plugins",
+                "/usr/lib/qt/plugins",
+                "/home/benas/IoT/lib/python3.11/site-packages/cv2/qt/plugins"
+            ]
+            
+            # Check for existing environment variable
+            if "QT_PLUGIN_PATH" in os.environ:
+                qt_plugin_paths.append(os.environ["QT_PLUGIN_PATH"])
+            
+            # Try to detect available platforms from the error message
+            try:
+                # Temporarily unset QT_QPA_PLATFORM to force error that shows available plugins
+                old_qt_platform = os.environ.pop("QT_QPA_PLATFORM", None)
+                
+                # Run a simple cv2 command that would use Qt
+                output = ""
+                try:
+                    # This will likely fail, but output error message with available plugins
+                    temp_img = np.zeros((10, 10, 3), dtype=np.uint8)
+                    cv2.imshow("test", temp_img)
+                    cv2.waitKey(1)
+                except Exception as e:
+                    output = str(e)
+                    
+                # Parse available platforms from error message
+                if "Available platform plugins are:" in output:
+                    plugins_line = output.split("Available platform plugins are:")[1].strip()
+                    if plugins_line:
+                        qt_available_plugins = [p.strip() for p in plugins_line.split(",")]
+                
+                # Restore the old value if it existed
+                if old_qt_platform:
+                    os.environ["QT_QPA_PLATFORM"] = old_qt_platform
+            except:
+                pass
+                
+            # Default plugin priority order
+            plugin_preferences = ["xcb", "wayland", "offscreen", "minimal", "vnc"]
+            
+            # If we found plugins in the error message
+            if qt_available_plugins:
+                print(f"[DEBUG] Detected Qt plugins: {qt_available_plugins}")
+                # Find first available plugin from our preferences
+                for plugin in plugin_preferences:
+                    if plugin in qt_available_plugins:
+                        os.environ["QT_QPA_PLATFORM"] = plugin
+                        print(f"[DEBUG] Using Qt platform plugin: {plugin}")
+                        return
+            
+            # If we're here, we either found no plugins from error message or none of our preferences
+            # Default to xcb as it's most common on Linux
+            os.environ["QT_QPA_PLATFORM"] = "xcb"
+            print("[DEBUG] Defaulting to Qt platform plugin: xcb")
+            
+        except Exception as e:
+            print(f"[DEBUG] Error setting up Qt environment: {e}")
+            # Default fallback
+            os.environ["QT_QPA_PLATFORM"] = "xcb"
 
 # For demonstration
 if __name__ == "__main__":

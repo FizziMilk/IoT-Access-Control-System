@@ -86,8 +86,21 @@ class FaceRecognitionService:
         except Exception as e:
             print(f"[DEBUG] Error during camera release: {e}")
         
-        # Set environment variable to suppress Qt warnings
-        os.environ["QT_QPA_PLATFORM"] = "offscreen"
+        # Set environment variable to use available Qt plugin
+        self.setup_qt_environment()
+        
+    def setup_qt_environment(self):
+        """
+        Set up the appropriate Qt environment variables based on available plugins
+        """
+        import os
+        
+        try:
+            # From the error message, we know "xcb" is available
+            os.environ["QT_QPA_PLATFORM"] = "xcb"
+            print("[DEBUG] Using Qt platform plugin: xcb")
+        except Exception as e:
+            print(f"[DEBUG] Error setting up Qt environment: {e}")
         
     def reset_system(self):
         """Completely reset the face recognition system"""

@@ -188,6 +188,17 @@ def setup_routes(app, door_controller, mqtt_handler, session, backend_url):
         # Show the phone entry form
         return render_template("door_entry.html")
     
+    def setup_qt_environment():
+        """Set up appropriate Qt environment variables based on available plugins"""
+        import os
+        
+        try:
+            # From the error message, we know "xcb" is available
+            os.environ["QT_QPA_PLATFORM"] = "xcb"
+            print("[DEBUG] Using Qt platform plugin: xcb")
+        except Exception as e:
+            print(f"[DEBUG] Error setting up Qt environment: {e}")
+
     @app.route('/face-recognition', methods=['GET'])
     def face_recognition():
         """Display the face recognition page"""
@@ -205,8 +216,8 @@ def setup_routes(app, door_controller, mqtt_handler, session, backend_url):
             # First close any OpenCV windows
             cv2.destroyAllWindows()
             
-            # Set environment variable to suppress Qt warnings
-            os.environ["QT_QPA_PLATFORM"] = "offscreen"
+            # Set environment variable to use available Qt plugin 
+            setup_qt_environment()
             
             # Force release of camera 0 only
             try:
