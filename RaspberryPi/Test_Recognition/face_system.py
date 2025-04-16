@@ -50,32 +50,41 @@ class FaceRecognitionSystem:
     
     def recognize_face(self, use_liveness=True):
         """Recognize a face from camera"""
+        print("[DEBUG] recognize_face: Starting face recognition process")
         if not self.storage.has_faces():
-            print("No face encodings in database. Please register users first.")
+            print("[DEBUG] No face encodings in database. Please register users first.")
             return None
         
+        print(f"[DEBUG] Found {len(self.storage.known_face_names)} face(s) in storage")
+        print(f"[DEBUG] Face names: {self.storage.known_face_names}")
+        
         # Reset camera system to ensure it's in a clean state
+        print("[DEBUG] Resetting camera system before recognition")
         self.camera.reset_camera()
         
         # Capture image with liveness check if requested
-        print("Capturing image for recognition...")
+        print("[DEBUG] Capturing image for recognition...")
         if use_liveness:
-            print("With liveness detection to prevent spoofing...")
+            print("[DEBUG] With liveness detection to prevent spoofing...")
             image = self.camera.capture_face_with_liveness()
         else:
             image = self.camera.capture_face()
         
         if image is None:
-            print("Image capture cancelled or failed")
+            print("[DEBUG] Image capture cancelled or failed")
             return None
         
+        print("[DEBUG] Face image captured successfully")
+        
         # Recognize faces in image
+        print("[DEBUG] Identifying faces in the captured image")
         results = self.recognition.identify_faces(image)
         
         if not results:
-            print("No faces detected in the image")
+            print("[DEBUG] No faces detected in the image")
             return None
             
+        print(f"[DEBUG] Recognition successful. Results: {results}")
         return results
     
     def list_users(self):

@@ -61,6 +61,7 @@ class CameraSystem:
         """
         Fully reset and reinitialize the camera system
         """
+        print("[DEBUG] reset_camera: Starting full camera system reset")
         # First, ensure any existing camera is properly released
         self.release_camera()
         
@@ -75,6 +76,7 @@ class CameraSystem:
         
         # Cleanup any lingering threads
         if self.face_detection_thread is not None:
+            print("[DEBUG] Cleaning up face detection thread")
             if self.face_detection_thread.is_alive():
                 self.face_detection_thread.join(timeout=1.0)
             self.face_detection_thread = None
@@ -84,10 +86,13 @@ class CameraSystem:
         
         # Force garbage collection to release any lingering resources
         import gc
+        print("[DEBUG] Running garbage collection")
         gc.collect()
         
         # Wait a moment to ensure resources are fully released
+        print("[DEBUG] Waiting after reset to ensure resources are released")
         time.sleep(0.5)
+        print("[DEBUG] Camera system reset complete")
     
     def initialize_camera(self, resolution=None):
         """
@@ -99,35 +104,45 @@ class CameraSystem:
         Returns:
             cv2.VideoCapture: Camera object or None if failed
         """
+        print(f"[DEBUG] initialize_camera: Starting camera initialization with ID={self.camera_id}")
+        
+        # Check if there's an existing camera that needs to be released first
+        if self.video_capture is not None:
+            print(f"[DEBUG] initialize_camera: Existing camera found, releasing first")
+            self.release_camera()
+        
         # Try to initialize camera with multiple indices
         cap = None
         for camera_idx in [0, 1, 2]:  # Try indices 0, 1, and 2
             try:
-                print(f"Trying to open camera with index {camera_idx}...")
+                print(f"[DEBUG] Trying to open camera with index {camera_idx}...")
                 cap = cv2.VideoCapture(camera_idx)
                 if cap is not None and cap.isOpened():
                     self.camera_id = camera_idx  # Update camera_id if successful
-                    print(f"Successfully opened camera with index {camera_idx}")
+                    print(f"[DEBUG] Successfully opened camera with index {camera_idx}")
                     break
             except Exception as e:
-                print(f"Failed to open camera with index {camera_idx}: {e}")
+                print(f"[DEBUG] Failed to open camera with index {camera_idx}: {e}")
                 
         # If still not opened, try with GSTREAMER
         if cap is None or not cap.isOpened():
             try:
-                print("Trying to open camera with GSTREAMER pipeline...")
+                print("[DEBUG] Trying to open camera with GSTREAMER pipeline...")
                 gst_str = "v4l2src device=/dev/video0 ! video/x-raw,width=640,height=480 ! videoconvert ! appsink"
                 cap = cv2.VideoCapture(gst_str, cv2.CAP_GSTREAMER)
+                if cap is not None and cap.isOpened():
+                    print("[DEBUG] Successfully opened camera with GSTREAMER")
             except Exception as e:
-                print(f"Failed to open camera with GSTREAMER: {e}")
+                print(f"[DEBUG] Failed to open camera with GSTREAMER: {e}")
         
         # Final check if camera is opened
         if cap is None or not cap.isOpened():
-            print("Error: Could not open camera")
+            print("[DEBUG] Error: Could not open camera with any method")
             return None
             
         # Set resolution if provided
         if resolution is not None:
+            print(f"[DEBUG] Setting camera resolution to {resolution}")
             cap.set(cv2.CAP_PROP_FRAME_WIDTH, resolution[0])
             cap.set(cv2.CAP_PROP_FRAME_HEIGHT, resolution[1])
         
@@ -135,7 +150,9 @@ class CameraSystem:
         self.video_capture = cap
         
         # Wait for camera to initialize
+        print("[DEBUG] Waiting for camera to initialize...")
         time.sleep(0.5)
+        print("[DEBUG] Camera initialization complete")
         
         return cap
     
@@ -143,16 +160,22 @@ class CameraSystem:
         """
         Release camera resources
         """
+        print("[DEBUG] release_camera: Attempting to release camera")
         if self.video_capture is not None:
             try:
                 self.video_capture.release()
-                print("Camera released successfully")
+                print("[DEBUG] Camera released successfully")
+                # Force OpenCV to forget about the camera
+                cv2.destroyAllWindows()
             except Exception as e:
-                print(f"Error releasing camera: {e}")
+                print(f"[DEBUG] Error releasing camera: {e}")
             finally:
                 self.video_capture = None
                 # Wait a moment after releasing
                 time.sleep(0.2)
+                print("[DEBUG] Camera reference set to None")
+        else:
+            print("[DEBUG] No camera to release (video_capture is None)")
     
     def load_model(self):
         """

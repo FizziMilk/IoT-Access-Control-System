@@ -3,9 +3,11 @@ import numpy as np
 import pickle
 import base64
 import requests
+import time
 
 class FaceRecognitionService:
     def __init__(self, backend_session=None, backend_url=None):
+        print("[DEBUG] Initializing FaceRecognitionService")
         self.face_system = FaceRecognitionSystem()
         self.backend_session = backend_session
         self.backend_url = backend_url
@@ -17,31 +19,61 @@ class FaceRecognitionService:
         Returns:
             dict or None: User match information with name and confidence if found
         """
+        print("[DEBUG] identify_user: Starting facial recognition with liveness")
         try:
             # If we have backend connection, try to load known faces first
             if self.backend_session and self.backend_url:
+                print("[DEBUG] Loading faces from backend...")
                 self.load_faces_from_backend()
+            
+            # Check if we have any faces loaded
+            has_faces = self.face_system.storage.has_faces()
+            print(f"[DEBUG] Storage system has faces: {has_faces}")
+            if not has_faces:
+                print("[DEBUG] No faces found in storage - facial recognition will fail")
                 
             results = self.face_system.recognize_face(use_liveness=True)
+            print(f"[DEBUG] Recognition results: {results}")
+            
             if results and len(results) > 0:
                 # Return the highest confidence match
+                print(f"[DEBUG] Returning match: {results[0]}")
                 return results[0]
             return None
         finally:
             # Ensure camera is released
+            print("[DEBUG] identify_user: Cleaning up after facial recognition")
             self.release_camera()
         
     def release_camera(self):
         """
         Explicitly release camera resources to prevent resource locks
         """
+        print("[DEBUG] release_camera: Attempting to release camera resources")
         try:
             if hasattr(self.face_system, 'camera'):
                 # Use the more thorough reset method
+                print("[DEBUG] Calling camera reset method")
                 self.face_system.camera.reset_camera()
-                print("Camera resources reset successfully")
+                print("[DEBUG] Camera resources reset successfully")
+                
+                # For extra cleanup, delay a bit and try to open and close the camera one more time
+                time.sleep(1.0)
+                try:
+                    import cv2
+                    print("[DEBUG] Attempting to open and immediately close camera")
+                    cap = cv2.VideoCapture(0)
+                    if cap.isOpened():
+                        print("[DEBUG] Successfully opened camera for cleanup")
+                    cap.release()
+                    print("[DEBUG] Released camera after cleanup attempt")
+                    cv2.destroyAllWindows()
+                except Exception as e:
+                    print(f"[DEBUG] Error during cleanup attempt: {e}")
         except Exception as e:
-            print(f"Error releasing camera: {e}")
+            print(f"[DEBUG] Error releasing camera: {e}")
+            import traceback
+            print(traceback.format_exc())
         
     def load_faces_from_backend(self):
         """
@@ -51,13 +83,14 @@ class FaceRecognitionService:
             bool: True if faces were loaded successfully
         """
         try:
+            print("[DEBUG] load_faces_from_backend: Requesting face data from backend")
             # Get all users with registered faces
             response = self.backend_session.get(f"{self.backend_url}/get-face-data")
             if response.status_code == 200:
                 data = response.json()
                 if data.get("status") == "success":
                     face_data = data.get("face_data", [])
-                    print(f"Retrieved {len(face_data)} faces from backend")
+                    print(f"[DEBUG] Retrieved {len(face_data)} faces from backend")
                     
                     # Process each face entry
                     for entry in face_data:
@@ -65,16 +98,36 @@ class FaceRecognitionService:
                         face_encoding_b64 = entry.get("face_encoding")
                         
                         if phone_number and face_encoding_b64:
+                            print(f"[DEBUG] Processing face data for {phone_number}")
                             # Decode the face data
                             encoding = self.decode_face_data(face_encoding_b64)
                             if encoding is not None:
+                                print(f"[DEBUG] Successfully decoded face encoding for {phone_number}")
                                 # Add to storage system
-                                self.face_system.storage.add_encoding(phone_number, encoding)
+                                try:
+                                    print(f"[DEBUG] Adding face encoding to storage for {phone_number}")
+                                    result = self.face_system.storage.add_encoding(phone_number, encoding)
+                                    print(f"[DEBUG] Add encoding result: {result}")
+                                except Exception as e:
+                                    print(f"[DEBUG] Error adding encoding: {e}")
+                                    import traceback
+                                    print(traceback.format_exc())
+                    
+                    # Verify faces were loaded
+                    has_faces = self.face_system.storage.has_faces()
+                    face_count = len(self.face_system.storage.known_face_names)
+                    print(f"[DEBUG] After loading - has_faces: {has_faces}, face_count: {face_count}")
                     
                     return True
+                else:
+                    print(f"[DEBUG] Backend returned error status: {data.get('status')}")
+            else:
+                print(f"[DEBUG] Backend request failed with status code: {response.status_code}")
             return False
         except Exception as e:
-            print(f"Error loading faces from backend: {e}")
+            print(f"[DEBUG] Error loading faces from backend: {e}")
+            import traceback
+            print(traceback.format_exc())
             return False
         
     def capture_face_with_liveness(self):
