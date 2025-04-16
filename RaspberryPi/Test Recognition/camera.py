@@ -543,7 +543,7 @@ class CameraSystem:
             bright_lighting = entropy1 < 2.5 and gradient_ratio > 1.5
             
             # Define lab environment detection - based on the latest lab data patterns
-            lab_environment = entropy3 > 4.0 and gradient_ratio > 1.6
+            lab_environment = entropy3 > 3.9 and gradient_ratio > 1.6
             if lab_environment:
                 print("Detected lab environment for texture analysis")
             
@@ -554,28 +554,28 @@ class CameraSystem:
                 entropy_score = (entropy3 > 3.95)
             elif bright_lighting:
                 # In bright lighting, entropy values are slightly lower
-                entropy_score = (entropy3 > 3.9)
+                entropy_score = (entropy3 > 3.85)
             else:
                 # Normal lighting conditions
-                entropy_score = (entropy3 > 3.95)
+                entropy_score = (entropy3 > 3.90)
             
             # 2. Real faces show higher gradient ratio based on all test results
             # Consistent across environments, but higher in bright light
             if lab_environment:
                 # Lab environment shows very high gradient ratios for real faces
-                gradient_score = (gradient_ratio > 1.7)
+                gradient_score = (gradient_ratio > 1.64)
             elif bright_lighting:
-                gradient_score = (gradient_ratio > 1.7)
+                gradient_score = (gradient_ratio > 1.65)
             else:
-                gradient_score = (gradient_ratio > 1.3)
+                gradient_score = (gradient_ratio > 1.5)
             
             # 3. Real faces show higher uniformity ratio consistently
             # This parameter is less reliable in lab conditions
             if lab_environment:
                 # Photos in lab also show high uniformity, so be more strict
-                uniformity_score = (uniformity_ratio > 1.8)
+                uniformity_score = (uniformity_ratio > 1.5 and uniformity_ratio < 1.65)
             else:
-                uniformity_score = (uniformity_ratio > 1.7)
+                uniformity_score = (uniformity_ratio > 1.4 and uniformity_ratio < 1.65)
             
             # Compute scores and final decision
             passing_scores = sum([entropy_score, gradient_score, uniformity_score])
@@ -585,18 +585,16 @@ class CameraSystem:
             
             # Adaptive criteria based on environment
             if lab_environment:
-                # Lab environment - gradient ratio is the key differentiator
-                # Lowered from 1.9 to 1.65 based on real-world testing
+                # Lab environment - require both entropy and gradient to be good
                 print("Using lab-specific texture criteria")
-                # Make this more lenient - just gradient ratio is enough if it's high enough
-                is_real_texture = (gradient_ratio > 1.65) or (passing_scores >= 2)
+                is_real_texture = (gradient_ratio > 1.64 and entropy3 > 3.9) or (passing_scores >= 2 and entropy_score)
             elif bright_lighting:
                 print("Detected bright lighting environment for texture analysis")
-                # In bright lighting, gradient_ratio is the most reliable indicator
-                is_real_texture = gradient_score or (passing_scores >= 1)
+                # In bright lighting, require stricter conditions
+                is_real_texture = (gradient_score and entropy_score) or passing_scores >= 2
             else:
-                # Normal lighting - more lenient with just one good metric
-                is_real_texture = passing_scores >= 1 and (entropy_score or gradient_score)
+                # Normal lighting - more lenient but still require entropy or gradient
+                is_real_texture = passing_scores >= 2 and (entropy_score or gradient_score)
             
             print(f"Texture test result: {is_real_texture}")
             
@@ -1307,21 +1305,22 @@ class CameraSystem:
             if face_location is None or len(face_location) != 4:
                 print("Invalid face location for blink detection")
                 return False
-            
+                
             # Convert face location format if needed
             if isinstance(face_location, tuple) and len(face_location) == 4:
                 top, right, bottom, left = face_location
             
             # Process a few frames to detect blinks
             blink_counter = 0
-            frames_to_check = 30  # Check 30 frames for blinks
+            frames_to_check = 40  # Check more frames for blinks
+            ear_history = []  # Track EAR values to detect artificial blinks
             
             for _ in range(frames_to_check):
                 ret, frame = cap.read()
                 if not ret:
                     print("Failed to capture frame for blink detection")
                     break
-                
+                    
                 # Get face landmarks
                 small_frame = cv2.resize(frame, (0, 0), fx=0.5, fy=0.5)
                 rgb_small_frame = cv2.cvtColor(small_frame, cv2.COLOR_BGR2RGB)
@@ -1353,13 +1352,29 @@ class CameraSystem:
                         
                         # Average the EAR of both eyes
                         ear = (left_ear + right_ear) / 2.0
+                        ear_history.append(ear)
                         
                         # Check if EAR indicates a blink
                         if ear < self.EAR_THRESHOLD:
                             blink_counter += 1
                             if blink_counter >= 2:  # Consider 2+ blinks as successful
+                                # Verify blink patterns - photos often have consistent, unnatural blinks
+                                if len(ear_history) > 5:
+                                    # Calculate variance in eye openings - real eyes vary more
+                                    ear_variance = np.var(ear_history)
+                                    # If variance is too low, might be a printed photo
+                                    if ear_variance < 0.001:
+                                        print("Warning: Suspicious blink pattern detected - possibly a photo")
+                                        return False
                                 return True
             
+            # Additional check for natural eye movement variation
+            if len(ear_history) > 10:
+                ear_variance = np.var(ear_history)
+                if ear_variance < 0.0005:  # Very consistent EAR values suggest photo
+                    print("Warning: Eye measurements too consistent - possibly a photo")
+                    return False
+                
             # Return True if we detected enough blinks
             return blink_counter >= 2
         
