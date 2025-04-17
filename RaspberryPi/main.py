@@ -33,4 +33,4 @@ setup_routes(app, door_controller, mqtt_handler, session, backend_url)
 atexit.register(door_controller.cleanup)
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=True) 
+    app.run(host='0.0.0.0', port=5000, debug=False) 

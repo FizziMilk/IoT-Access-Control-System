@@ -563,7 +563,7 @@ class WebCamera:
             logger.info(f"Texture analysis results: Entropy={entropy_score}, Gradient={gradient_score}")
             logger.info(f"Texture test overall result: {'PASS' if is_real_texture else 'FAIL'}")
             
-            # Create visualization if not in headless mode
+            # Create visualization only if not in headless mode
             if not self.headless:
                 try:
                     self._create_texture_visualization(
@@ -571,19 +571,12 @@ class WebCamera:
                     )
                 except Exception as e:
                     logger.error(f"Error creating texture visualization: {e}")
-                finally:
-                    # Make sure windows are closed even if an exception occurs
-                    cv2.destroyWindow("Texture Analysis")
-                    cv2.waitKey(1)  # Process window destruction
             
             return is_real_texture
             
         except Exception as e:
             logger.error(f"Error in texture analysis: {e}")
             logger.error(traceback.format_exc())
-            # Clean up any lingering windows
-            if not self.headless:
-                cv2.destroyAllWindows()
             # Be lenient in case of errors
             return True
     
@@ -614,11 +607,8 @@ class WebCamera:
             lbp3: LBP at radius 3
             magnitude: Gradient magnitude
         """
+        window_created = False
         try:
-            # First destroy any existing window with this name to prevent conflicts
-            cv2.destroyWindow("Texture Analysis")
-            cv2.waitKey(1)  # Process window destruction
-            
             # Normalize LBP images for visualization
             micro_texture = cv2.normalize(lbp1.astype(np.uint8), None, 0, 255, cv2.NORM_MINMAX)
             medium_texture = cv2.normalize(lbp2.astype(np.uint8), None, 0, 255, cv2.NORM_MINMAX)
@@ -654,22 +644,25 @@ class WebCamera:
             
             # Create the window first
             cv2.namedWindow("Texture Analysis", cv2.WINDOW_NORMAL)
+            window_created = True
             
             # Display the visualization
             cv2.imshow("Texture Analysis", visualization)
             cv2.waitKey(100)  # Brief display
             
             # Explicitly destroy window after display
-            cv2.destroyWindow("Texture Analysis")
-            cv2.waitKey(1)  # Process window destruction
+            if window_created:
+                cv2.destroyWindow("Texture Analysis")
+                cv2.waitKey(1)  # Process window destruction
         except Exception as e:
             logger.error(f"Error creating texture visualization: {e}")
-            # Ensure window is closed even on error
-            try:
-                cv2.destroyWindow("Texture Analysis")
-                cv2.waitKey(1)
-            except:
-                pass 
+            # Ensure window is closed only if it was created
+            if window_created:
+                try:
+                    cv2.destroyWindow("Texture Analysis")
+                    cv2.waitKey(1)
+                except:
+                    pass
 
     def start(self):
         """

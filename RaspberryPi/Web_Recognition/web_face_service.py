@@ -288,27 +288,38 @@ class WebFaceService:
             logger.info("Performing comprehensive camera cleanup")
             
             # Explicitly destroy any OpenCV windows first
-            import cv2
-            cv2.destroyAllWindows()
-            cv2.waitKey(1)  # Process window destruction
+            try:
+                import cv2
+                cv2.destroyAllWindows()
+                cv2.waitKey(1)  # Process window destruction
+            except Exception as e:
+                logger.error(f"Error destroying OpenCV windows: {e}")
             
             # First close camera if it exists
             if hasattr(self, 'camera') and self.camera:
-                self.camera._release_camera()
-            
-            # Kill any stray OpenCV processes
-            try:
-                import subprocess
-                subprocess.run("pkill -f cv2", shell=True, timeout=1)
-            except:
-                pass
+                # Make sure the camera's cap is released
+                if hasattr(self.camera, 'cap') and self.camera.cap is not None:
+                    try:
+                        self.camera.cap.release()
+                        self.camera.cap = None
+                    except Exception as e:
+                        logger.error(f"Error releasing camera cap: {e}")
+                
+                # Use the camera's own release method
+                try:
+                    self.camera._release_camera()
+                except Exception as e:
+                    logger.error(f"Error in _release_camera: {e}")
             
             # Reset service state
             self.initialized = False
             
             # Recreate the camera instance with fresh state
-            import os
-            headless = getattr(self.camera, 'headless', True) if hasattr(self, 'camera') else True
+            if hasattr(self, 'camera'):
+                headless = getattr(self.camera, 'headless', True)
+            else:
+                headless = True
+                
             self.camera = WebCamera(config={'headless': headless})
             
             # Allow time for resources to be fully released
