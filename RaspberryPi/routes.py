@@ -1,4 +1,4 @@
-from flask import render_template, request, redirect, url_for, flash, session, jsonify
+from flask import render_template, request, redirect, url_for, flash, session as flask_session, jsonify
 from datetime import datetime
 import time
 from utils import verify_otp_rest
@@ -25,7 +25,7 @@ def setup_qt_environment():
     except Exception as e:
         logger.error(f"Error setting up Qt environment: {e}")
 
-def check_schedule(door_controller, mqtt_handler, session=None, backend_url=None):
+def check_schedule(door_controller, mqtt_handler, backend_session=None, backend_url=None):
     """Check if door should be unlocked based on current schedule"""
     now = datetime.now()
     weekday = now.strftime("%A")
@@ -43,9 +43,9 @@ def check_schedule(door_controller, mqtt_handler, session=None, backend_url=None
             flash("Door unlocked based on schedule.", "success")
             
             # Log door unlock via schedule if session is available
-            if session and backend_url:
+            if backend_session and backend_url:
                 try:
-                    session.post(f"{backend_url}/log-door-access", json={
+                    backend_session.post(f"{backend_url}/log-door-access", json={
                         "method": "Schedule",
                         "status": "Unlocked",
                         "details": "Force unlocked"
@@ -71,9 +71,9 @@ def check_schedule(door_controller, mqtt_handler, session=None, backend_url=None
                 flash("Door unlocked based on schedule.", "success")
                 
                 # Log door unlock via schedule if session is available
-                if session and backend_url:
+                if backend_session and backend_url:
                     try:
-                        session.post(f"{backend_url}/log-door-access", json={
+                        backend_session.post(f"{backend_url}/log-door-access", json={
                             "method": "Schedule",
                             "status": "Unlocked",
                             "details": f"{weekday} {open_time_str}-{close_time_str}"
@@ -84,7 +84,7 @@ def check_schedule(door_controller, mqtt_handler, session=None, backend_url=None
                 return True
     return False
 
-def setup_routes(app, door_controller, mqtt_handler, session, backend_url):
+def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_url):
     # Import the WebFaceService for use in routes
     from Web_Recognition.web_face_service import WebFaceService
     
@@ -114,14 +114,14 @@ def setup_routes(app, door_controller, mqtt_handler, session, backend_url):
     def verify():
         phone_number = request.form['phone_number']
         otp_code = request.form['otp_code']
-        response = verify_otp_rest(session, backend_url, phone_number, otp_code)
+        response = verify_otp_rest(backend_session, backend_url, phone_number, otp_code)
         if response.get("status") == "approved":
             door_controller.unlock_door()
             flash("OTP verified, door unlocked", "success")
             
             # Log door unlock via OTP verification
             try:
-                session.post(f"{backend_url}/log-door-access", json={
+                backend_session.post(f"{backend_url}/log-door-access", json={
                     "user": phone_number,
                     "method": "OTP Verification",
                     "status": "Unlocked",
@@ -150,7 +150,7 @@ def setup_routes(app, door_controller, mqtt_handler, session, backend_url):
     @app.route('/door-entry', methods=['GET', 'POST'])
     def door_entry():
         # Check schedule first
-        if check_schedule(door_controller, mqtt_handler, session, backend_url):
+        if check_schedule(door_controller, mqtt_handler, backend_session, backend_url):
             return render_template("door_unlocked.html")
 
         # For GET requests, show the entry options page
@@ -167,7 +167,7 @@ def setup_routes(app, door_controller, mqtt_handler, session, backend_url):
 
             try:
                 # Send request to door-entry endpoint
-                resp = session.post(f"{backend_url}/door-entry", json={"phone_number": phone_number})
+                resp = backend_session.post(f"{backend_url}/door-entry", json={"phone_number": phone_number})
                 print(f"[DEBUG] Backend response: {resp.status_code} - {resp.text}")
                 data = resp.json()
 
@@ -192,7 +192,7 @@ def setup_routes(app, door_controller, mqtt_handler, session, backend_url):
     def phone_entry():
         """Handle the phone number entry flow"""
         # Check schedule first
-        if check_schedule(door_controller, mqtt_handler, session, backend_url):
+        if check_schedule(door_controller, mqtt_handler, backend_session, backend_url):
             return render_template("door_unlocked.html")
 
         # If we get here, schedule check didn't unlock the door
@@ -205,7 +205,7 @@ def setup_routes(app, door_controller, mqtt_handler, session, backend_url):
 
             try:
                 # Send request to door-entry endpoint
-                resp = session.post(f"{backend_url}/door-entry", json={"phone_number": phone_number})
+                resp = backend_session.post(f"{backend_url}/door-entry", json={"phone_number": phone_number})
                 print(f"[DEBUG] Backend response: {resp.status_code} - {resp.text}")
                 data = resp.json()
 
@@ -285,7 +285,7 @@ def setup_routes(app, door_controller, mqtt_handler, session, backend_url):
             # Create a fresh service instance for this request only
             logger.info("Creating fresh WebFaceService instance for recognition")
             local_face_service = WebFaceService(
-                backend_session=session, 
+                backend_session=backend_session, 
                 backend_url=backend_url,
                 headless=headless_mode
             )
@@ -337,7 +337,7 @@ def setup_routes(app, door_controller, mqtt_handler, session, backend_url):
                 
                 try:
                     # Check if this user is allowed direct access
-                    resp = session.get(f"{backend_url}/check-face-access/{phone_number}")
+                    resp = backend_session.get(f"{backend_url}/check-face-access/{phone_number}")
                     data = resp.json()
                     
                     if data.get("status") == "approved":
@@ -346,7 +346,7 @@ def setup_routes(app, door_controller, mqtt_handler, session, backend_url):
                         
                         # Log door unlock via facial recognition
                         try:
-                            session.post(f"{backend_url}/log-door-access", json={
+                            backend_session.post(f"{backend_url}/log-door-access", json={
                                 "user": phone_number,
                                 "method": "Facial Recognition",
                                 "status": "Unlocked",
@@ -379,16 +379,16 @@ def setup_routes(app, door_controller, mqtt_handler, session, backend_url):
                     # Check if it's a numpy array or already a list
                     try:
                         if isinstance(encoding, np.ndarray):
-                            session['face_encoding'] = encoding.tolist()
+                            flask_session['face_encoding'] = encoding.tolist()
                         else:
                             # Already a list, store directly
-                            session['face_encoding'] = encoding
+                            flask_session['face_encoding'] = encoding
                     except Exception as e:
                         logger.error(f"Error storing face encoding: {e}")
                         # Try direct assignment as fallback
-                        session['face_encoding'] = encoding
+                        flask_session['face_encoding'] = encoding
                     
-                    session['has_temp_face'] = True
+                    flask_session['has_temp_face'] = True
                     flash("Face not recognized. Please verify identity or register.", "warning")
                     return render_template("verify_options.html", user_recognized=False,
                                          face_recognized=False, has_face=True)
@@ -449,7 +449,6 @@ def setup_routes(app, door_controller, mqtt_handler, session, backend_url):
         phone_number = request.form.get('phone_number')
         
         # Get the face encoding from Flask session
-        from flask import session as flask_session
         face_encoding = flask_session.get('face_encoding')
         
         if not phone_number or not face_encoding:
@@ -476,7 +475,7 @@ def setup_routes(app, door_controller, mqtt_handler, session, backend_url):
             encoding_base64 = base64.b64encode(encoding_json.encode('utf-8')).decode('utf-8')
             
             # Send the face encoding and phone number to the backend
-            resp = session.post(f"{backend_url}/register-face", json={
+            resp = backend_session.post(f"{backend_url}/register-face", json={
                 "phone_number": phone_number,
                 "face_encoding": encoding_base64
             })
@@ -489,7 +488,7 @@ def setup_routes(app, door_controller, mqtt_handler, session, backend_url):
                 
                 flash("Face registered successfully. Please wait for OTP or admin approval.", "success")
                 # Try to send OTP to the newly registered user
-                resp = session.post(f"{backend_url}/door-entry", json={"phone_number": phone_number})
+                resp = backend_session.post(f"{backend_url}/door-entry", json={"phone_number": phone_number})
                 data = resp.json()
                 
                 if data.get("status") == "OTP sent":
@@ -514,7 +513,7 @@ def setup_routes(app, door_controller, mqtt_handler, session, backend_url):
             flash("Name and phone number are required.", "danger")
             return redirect(url_for("door_entry"))
         try:
-            resp = session.post(f"{backend_url}/update-user-name", json={"phone_number": phone_number, "name": name})
+            resp = backend_session.post(f"{backend_url}/update-user-name", json={"phone_number": phone_number, "name": name})
             data = resp.json()
             if data.get("status") == "success":
                 flash("Name updated succesffuly. Please wait for admin approval.", "info")
