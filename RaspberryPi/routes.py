@@ -108,9 +108,17 @@ def setup_routes(app, door_controller, mqtt_handler, session, backend_url):
         
         if 'face-recognition' in referrer or 'process-face' in referrer:
             try:
-                with face_service_lock:
-                    # Only clean up if coming from face recognition
-                    face_service.release_camera()
+                # Try to acquire the lock with a timeout (3 seconds)
+                lock_acquired = face_service_lock.acquire(timeout=3)
+                
+                try:
+                    if lock_acquired:
+                        # Only clean up if coming from face recognition
+                        face_service.release_camera()
+                finally:
+                    # Always release the lock if we acquired it
+                    if lock_acquired:
+                        face_service_lock.release()
             except Exception as e:
                 logger.error(f"Error cleaning up resources: {e}")
         
@@ -249,8 +257,18 @@ def setup_routes(app, door_controller, mqtt_handler, session, backend_url):
         """Display the face recognition page"""
         logger.info("Face recognition page requested")
         
-        # Use the lock for thread safety
-        with face_service_lock:
+        # Use the lock with a timeout to prevent deadlocks
+        lock_acquired = False
+        try:
+            # Try to acquire the lock with a timeout (5 seconds)
+            lock_acquired = face_service_lock.acquire(timeout=5)
+            
+            if not lock_acquired:
+                logger.error("Could not acquire lock for face recognition - timeout exceeded")
+                flash("System busy, please try again shortly.", "warning")
+                return render_template("entry_options.html")
+            
+            # If we get here, we have the lock
             try:
                 # More aggressive cleanup - fully recreate service
                 global face_service
@@ -258,9 +276,28 @@ def setup_routes(app, door_controller, mqtt_handler, session, backend_url):
                 # First release existing resources
                 if face_service:
                     try:
+                        # Force camera release
+                        if hasattr(face_service, 'camera') and face_service.camera:
+                            if hasattr(face_service.camera, 'cap') and face_service.camera.cap is not None:
+                                face_service.camera.cap.release()
+                                face_service.camera.cap = None
+                            
+                        # Now call the full release method
                         face_service.release_camera()
                     except Exception as e:
                         logger.error(f"Error releasing camera resources: {e}")
+                
+                # Explicitly release OpenCV windows to be sure
+                try:
+                    import cv2
+                    cv2.destroyAllWindows()
+                    cv2.waitKey(1)
+                except Exception as e:
+                    logger.error(f"Error destroying windows: {e}")
+                
+                # Forcibly wait a bit to ensure resources are released
+                import time
+                time.sleep(0.5)
                 
                 # Determine headless mode
                 headless_mode = os.environ.get('DISPLAY') is None
@@ -283,6 +320,12 @@ def setup_routes(app, door_controller, mqtt_handler, session, backend_url):
             except Exception as e:
                 logger.error(f"Error recreating face recognition service: {e}")
                 logger.error(traceback.format_exc())
+                flash("Error initializing face recognition. Please try again.", "danger")
+                return render_template("entry_options.html")
+        finally:
+            # Always release the lock if we acquired it
+            if lock_acquired:
+                face_service_lock.release()
         
         # Return the template
         return render_template("face_recognition.html")
@@ -294,8 +337,18 @@ def setup_routes(app, door_controller, mqtt_handler, session, backend_url):
         match = None
         
         try:
-            # Use the lock for thread safety
-            with face_service_lock:
+            # Use the lock with a timeout to prevent deadlocks
+            lock_acquired = False
+            try:
+                # Try to acquire the lock with a timeout (5 seconds)
+                lock_acquired = face_service_lock.acquire(timeout=5)
+                
+                if not lock_acquired:
+                    logger.error("Could not acquire lock for face processing - timeout exceeded")
+                    flash("System busy, please try again shortly.", "warning")
+                    return redirect(url_for("door_entry"))
+                
+                # If we get here, we have the lock
                 try:
                     # First capture a face with liveness detection
                     face_image = face_service.capture_face_with_liveness(timeout=30)
@@ -312,6 +365,10 @@ def setup_routes(app, door_controller, mqtt_handler, session, backend_url):
                         face_service.release_camera()
                     except Exception as e:
                         logger.error(f"Error releasing camera in process-face: {e}")
+            finally:
+                # Always release the lock if we acquired it
+                if lock_acquired:
+                    face_service_lock.release()
             
             # User recognized
             if match:
