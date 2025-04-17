@@ -141,7 +141,7 @@ class WebCamera:
         Returns:
             Tuple of (frame, face_location) or (None, None) if no face is found
         """
-        with self.camera_session(resolution or (self.width, self.height)):
+        with self.camera_session(resolution or (self._width, self._height)):
             # Give the camera some time to adjust
             time.sleep(0.5)
             
@@ -193,7 +193,7 @@ class WebCamera:
         logger.info(f"Starting blink detection with timeout={timeout}s")
         
         try:
-            with self.camera_session((self.width, self.height)):
+            with self.camera_session((self._width, self._height)):
                 start_time = time.time()
                 blink_counter = 0
                 ear_values = []
