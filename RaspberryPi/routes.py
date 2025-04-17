@@ -255,6 +255,16 @@ def setup_routes(app, door_controller, mqtt_handler, session, backend_url):
         logger.info("Face recognition page requested")
         
         try:
+            # Kill any stray OpenCV processes first to ensure a clean slate
+            import subprocess
+            try:
+                subprocess.run("pkill -f cv2", shell=True, timeout=1)
+            except:
+                pass
+            
+            # Wait a moment for processes to terminate
+            time.sleep(0.5)
+            
             # First, ensure the camera is properly released from previous sessions
             face_service.release_camera()
             
@@ -264,8 +274,13 @@ def setup_routes(app, door_controller, mqtt_handler, session, backend_url):
             # Set Qt environment
             setup_qt_environment()
             
-            # Force service to reinitialize on next use
+            # Force service to reinitialize completely on next use
             face_service.initialized = False
+            
+            # Recreate camera object with fresh state
+            headless_mode = os.environ.get('DISPLAY') is None
+            face_service.camera = WebCamera(headless=headless_mode)
+            
         except Exception as e:
             logger.error(f"Error setting up for face recognition: {e}")
         
@@ -279,8 +294,21 @@ def setup_routes(app, door_controller, mqtt_handler, session, backend_url):
             # Ensure any previous camera session is properly closed
             cv2.destroyAllWindows()
             
-            # Attempt to identify the user with liveness check
-            user_match = face_service.identify_user(timeout=30)
+            # First capture a face with liveness detection
+            face_image = face_service.capture_face_with_liveness(timeout=30)
+            
+            if face_image is None:
+                flash("Face verification failed. Please try again.", "danger")
+                face_service.release_camera()
+                return redirect(url_for("door_entry"))
+            
+            # First try to identify the user
+            user_match = []
+            if face_service.recognition.known_face_encodings:
+                # Only attempt recognition if we have known faces
+                match = face_service.recognition.identify_face(face_image)
+                if match:
+                    user_match = [match]  # Keep format consistent with previous code
             
             if user_match:
                 # User recognized, get their phone number
@@ -310,19 +338,16 @@ def setup_routes(app, door_controller, mqtt_handler, session, backend_url):
                     face_service.release_camera()
                     return redirect(url_for("door_entry"))
             else:
-                # User not recognized, capture image and collect phone number
-                face_image = face_service.capture_face_with_liveness()
-                if face_image is not None:
-                    # Register the face and save encoding temporarily
-                    face_encoding = face_service.register_face(face_image)
-                    if face_encoding:
-                        # Store the encoding in the Flask session
-                        from flask import session as flask_session
-                        # Convert to JSON serializable format (it's already a list from register_face)
-                        flask_session['face_encoding'] = face_encoding
-                            
-                        flash("Face captured successfully. Please enter your phone number to register.", "info")
-                        return render_template("register_face.html")
+                # User not recognized, register the face (we already have the face image)
+                face_encoding = face_service.register_face(face_image)
+                if face_encoding:
+                    # Store the encoding in the Flask session
+                    from flask import session as flask_session
+                    # Convert to JSON serializable format (it's already a list from register_face)
+                    flask_session['face_encoding'] = face_encoding
+                    
+                    flash("Face captured successfully. Please enter your phone number to register.", "info")
+                    return render_template("register_face.html")
                 
                 flash("Face recognition failed. Please try again or use phone number.", "danger")
                 # Always clean up before redirecting

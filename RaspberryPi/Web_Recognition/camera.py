@@ -361,22 +361,28 @@ class WebCamera:
     def _setup_qt_environment(self):
         """Set up appropriate Qt environment variables based on available plugins."""
         try:
-            # Use xcb on Linux (from the error logs)
+            # Fix for thread handling issues
+            os.environ["QT_THREAD_PRIORITY_POLICY"] = "0"  # Use default thread priority
+            
+            # Force GUI onto main thread
+            os.environ["QT_NO_THREADED_OPENGL"] = "1"
+            
+            # Use xcb on Linux
             os.environ["QT_QPA_PLATFORM"] = "xcb"
             
-            # Also set QT_DEBUG_PLUGINS=1 to help diagnose plugin issues
+            # Debug mode for plugins
             os.environ["QT_DEBUG_PLUGINS"] = "1"
             
-            # Add to the _setup_qt_environment method in camera.py
-            os.environ["QT_PLUGIN_PATH"] = "/usr/lib/aarch64-linux-gnu/qt5/plugins"  # For Raspberry Pi
+            # Set plugin path
+            os.environ["QT_PLUGIN_PATH"] = "/usr/lib/aarch64-linux-gnu/qt5/plugins"
             
-            # Force single-threaded operation for Qt objects
-            os.environ["QT_THREAD_PRIORITY_POLICY"] = "1"
+            # Force synchronous operations
+            os.environ["QT_NO_GLIB"] = "1"
             
             # Reset any lingering OpenCV state
             cv2.destroyAllWindows()
             
-            # Sleep to ensure any previous resources are fully released
+            # Allow time for any Qt operations to complete
             time.sleep(0.5)
             
             logger.info("Qt environment configured")

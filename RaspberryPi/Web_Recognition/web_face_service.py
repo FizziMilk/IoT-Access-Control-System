@@ -53,6 +53,9 @@ class WebFaceService:
             bool: True if successful, False otherwise
         """
         try:
+            # First, release any existing resources
+            self.release_camera()
+            
             if self.initialized:
                 logger.info("Service already initialized")
                 return True
