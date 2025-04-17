@@ -128,14 +128,16 @@ def perform_liveness_check(frame):
             "is_live": False
         }
         
-        # Combined decision logic
-        entropy_ok = texture_entropy > 4.0  # Lower threshold from 4.5 to 4.0 for texture entropy
-        gradient_ok = mean_gradient > 15.0  # Higher gradient variation in real faces
-        reflection_ok = bright_spot_ratio < 0.05  # Not too many bright reflective spots
-        color_ok = color_std > 18.0  # Lower threshold from 20.0 to 18.0 for color variation
+        # Combined decision logic - using more relaxed thresholds from Test_Recognition
+        entropy_ok = texture_entropy > 3.5  # Reduced from 4.0 to 3.5 to match Test_Recognition
+        gradient_ok = mean_gradient > 10.0  # Reduced from 15.0 to 10.0 for better compatibility
+        reflection_ok = bright_spot_ratio < 0.08  # Increased from 0.05 to 0.08 for more tolerance
+        color_ok = color_std > 12.0  # Reduced from 18.0 to 12.0 based on observed values
         
-        # Final liveness decision
-        results["is_live"] = entropy_ok and gradient_ok and reflection_ok and color_ok
+        # Final liveness decision - use OR logic instead of AND for better usability
+        # Only require at least 2 of the 4 checks to pass instead of all 4
+        passed_checks = sum([entropy_ok, gradient_ok, reflection_ok, color_ok])
+        results["is_live"] = passed_checks >= 2  # Require at least 2 checks to pass
         
         logger.info(f"Liveness check - entropy: {texture_entropy:.2f}, gradient: {mean_gradient:.2f}, " +
                     f"reflection: {bright_spot_ratio:.4f}, color_std: {color_std:.2f}, " +
