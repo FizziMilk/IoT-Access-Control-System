@@ -315,7 +315,7 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
         
         if request.method == 'POST':
             try:
-                from RaspberryPi.face_recognition_process import run_face_recognition
+                from face_recognition_process import run_face_recognition
                 
                 # Start the face recognition process
                 logger.info("Starting face recognition process")
