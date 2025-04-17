@@ -14,7 +14,7 @@
         }
         .container {
             text-align: center;
-            max-width: 800px;
+            max-width: 700px;
             padding: 30px;
             background-color: white;
             border-radius: 10px;
@@ -70,17 +70,6 @@
             margin: 20px auto;
             max-width: 640px;
         }
-        .blink-status {
-            position: absolute;
-            top: 10px;
-            right: 10px;
-            background-color: rgba(0, 0, 0, 0.6);
-            color: white;
-            padding: 5px 10px;
-            border-radius: 5px;
-            font-weight: bold;
-            display: none;
-        }
     </style>
 </head>
 <body>
@@ -98,8 +87,7 @@
         <div id="instructions">
             <p class="lead">Click the button below to start facial recognition.</p>
             <p>Look directly at the camera and keep your face visible.</p>
-            <p><strong>Important:</strong> Blink a few times to confirm you are a live person.</p>
-            <p>You'll see the eye outlines turn red when a blink is detected.</p>
+            <p><strong>Important:</strong> Ensure your face is well-lit from the front.</p>
         </div>
         
         <button id="startButton" class="btn btn-primary btn-lg">
@@ -107,11 +95,10 @@
         </button>
         
         <div class="video-container">
-            <img id="videoFeed" src="{{ url_for('face_recognition_feed') }}" alt="Face Recognition Feed" onerror="handleVideoError(this)">
+            <img id="videoFeed" src="{{ url_for('video_feed') }}" alt="Face Recognition Feed" onerror="handleVideoError(this)">
             <div id="processingText" class="mt-2">
                 <h4>Processing your face. Please keep still...</h4>
             </div>
-            <div id="blinkStatus" class="blink-status">Blink Detected!</div>
         </div>
         
         <div class="spinner-container" id="loadingSpinner">
@@ -143,7 +130,6 @@
                 <li>Look directly at the camera</li>
                 <li>Hold still during the process</li>
                 <li>Make sure your face is completely visible</li>
-                <li>Blink naturally a few times to complete the liveness check</li>
             </ul>
             
             {% if testing_mode %}
@@ -161,99 +147,6 @@
     </div>
     
     <script>
-        // Global variables to track state
-        let processingStarted = false;
-        let feedUpdateInterval = null;
-        let blinkCount = 0;
-        
-        // Start updating the video feed
-        function startFrameUpdates() {
-            // Start periodic updates of the video feed
-            feedUpdateInterval = setInterval(function() {
-                updateVideoFeed();
-                // Also fetch EAR data for blink detection
-                fetchEarData();
-            }, 100);  // Update every 100ms
-        }
-        
-        // Stop updating the video feed
-        function stopFrameUpdates() {
-            if (feedUpdateInterval) {
-                clearInterval(feedUpdateInterval);
-                feedUpdateInterval = null;
-            }
-        }
-        
-        // Update the video feed with a new timestamp to force refresh
-        function updateVideoFeed() {
-            var videoFeed = document.getElementById('videoFeed');
-            if (videoFeed) {
-                videoFeed.src = "{{ url_for('face_recognition_feed') }}?t=" + new Date().getTime();
-            }
-        }
-        
-        // Fetch EAR data from server using AJAX
-        function fetchEarData() {
-            if (!processingStarted) return;
-            
-            // Create a new XMLHttpRequest
-            const xhr = new XMLHttpRequest();
-            
-            // Configure it to make a GET request to the ear-data endpoint
-            xhr.open('GET', '/ear-data?t=' + new Date().getTime(), true);
-            
-            // Set up what happens when the request is successful
-            xhr.onload = function() {
-                if (xhr.status === 200) {
-                    try {
-                        // Parse the JSON response
-                        const data = JSON.parse(xhr.responseText);
-                        
-                        // Check if we have EAR data
-                        if (data && data.ear_values) {
-                            // Check for blink detection
-                            const blinkDetected = data.ear_values.blink_detected;
-                            
-                            // Show blink status briefly when detected
-                            const blinkStatusEl = document.getElementById('blinkStatus');
-                            if (blinkDetected && blinkStatusEl) {
-                                // Update the blink count
-                                blinkCount = data.ear_values.blink_count || blinkCount + 1;
-                                
-                                // Show the blink status
-                                blinkStatusEl.textContent = `Blink Detected! (${blinkCount})`;
-                                blinkStatusEl.style.display = 'block';
-                                
-                                // Hide the status after 1 second
-                                setTimeout(function() {
-                                    blinkStatusEl.style.display = 'none';
-                                }, 1000);
-                            }
-                        }
-                    } catch (error) {
-                        console.error("Error parsing EAR data", error);
-                    }
-                }
-            };
-            
-            // Set up what happens in case of error
-            xhr.onerror = function() {
-                console.error("Error fetching EAR data");
-            };
-            
-            // Send the request
-            xhr.send();
-        }
-        
-        // Handle video image loading
-        document.getElementById('videoFeed').addEventListener('load', function() {
-            // If this is the first load and we're not processing yet, just ignore
-            if (!processingStarted) {
-                return;
-            }
-        });
-        
-        // Start face recognition process
         document.getElementById('startButton').addEventListener('click', function() {
             // Hide the instructions and button
             document.getElementById('instructions').style.display = 'none';
@@ -262,10 +155,6 @@
             
             // Show the processing text
             document.getElementById('processingText').style.display = 'block';
-            
-            // Start video feed updates
-            processingStarted = true;
-            startFrameUpdates();
             
             // Show the loading spinner
             document.getElementById('loadingSpinner').style.display = 'block';
@@ -301,10 +190,6 @@
                     } else if (progress === 90) {
                         statusText.textContent = statusMessages[5];
                     }
-                } else {
-                    // Stop the animation after progress exceeds 100
-                    clearInterval(progressInterval);
-                    stopFrameUpdates();
                 }
             }, 500); // Updates every 500ms
             
