@@ -281,11 +281,11 @@ class WebFaceService:
     
     def release_camera(self):
         """
-        Comprehensive camera resource cleanup and service reset.
-        This is the central method for ensuring all resources are properly released.
+        Comprehensive camera resource cleanup.
+        This method focuses only on releasing resources, not recreating them.
         """
         try:
-            logger.info("Performing comprehensive camera cleanup")
+            logger.info("Releasing camera resources")
             
             # Explicitly destroy any OpenCV windows first
             try:
@@ -295,7 +295,7 @@ class WebFaceService:
             except Exception as e:
                 logger.error(f"Error destroying OpenCV windows: {e}")
             
-            # First close camera if it exists
+            # Close camera if it exists
             if hasattr(self, 'camera') and self.camera:
                 # Make sure the camera's cap is released
                 if hasattr(self.camera, 'cap') and self.camera.cap is not None:
@@ -318,9 +318,9 @@ class WebFaceService:
             import time
             time.sleep(0.3)
             
-            logger.info("Camera resources fully released and service reset")
+            logger.info("Camera resources fully released")
             return True
         except Exception as e:
-            logger.error(f"Error during comprehensive camera cleanup: {e}")
+            logger.error(f"Error during camera cleanup: {e}")
             logger.error(traceback.format_exc())
             return False 

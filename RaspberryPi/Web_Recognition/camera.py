@@ -180,6 +180,8 @@ class WebCamera:
             bool: True if blinks were detected, False otherwise
         """
         logger.info(f"Starting blink detection with timeout={timeout}s")
+        window_name = "Blink Detection"
+        window_created = False
         
         try:
             with self.camera_session((self._width, self._height)):
@@ -188,10 +190,9 @@ class WebCamera:
                 ear_values = []
                 
                 # Only create a window if not in headless mode
-                window_created = False
                 if not self.headless:
                     try:
-                        cv2.namedWindow("Blink Detection", cv2.WINDOW_NORMAL)
+                        cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
                         window_created = True
                     except Exception as e:
                         logger.error(f"Error creating window: {e}")
@@ -257,7 +258,7 @@ class WebCamera:
                         self._draw_eyes(frame, left_eye, right_eye)
                         
                         # Show frame with feedback
-                        cv2.imshow("Blink Detection", frame)
+                        cv2.imshow(window_name, frame)
                         key = cv2.waitKey(1) & 0xFF
                         
                         # Allow manual exit
@@ -267,7 +268,7 @@ class WebCamera:
                 # Clean up windows
                 if window_created:
                     try:
-                        cv2.destroyWindow("Blink Detection")
+                        cv2.destroyWindow(window_name)
                         cv2.waitKey(1)  # Process window destruction
                     except Exception as e:
                         logger.error(f"Error destroying window: {e}")

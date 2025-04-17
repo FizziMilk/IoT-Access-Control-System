@@ -75,28 +75,11 @@ def check_schedule(door_controller, mqtt_handler, session=None, backend_url=None
     return False
 
 def setup_routes(app, door_controller, mqtt_handler, session, backend_url):
-    # Initialize facial recognition service
-    # Replace old service with new optimized service
+    # Import the WebFaceService for use in routes
     from Web_Recognition.web_face_service import WebFaceService
     
-    # Create a lock for thread safety with face service operations
-    face_service_lock = threading.RLock()
-    
-    # Determine if we're running in a headless environment
-    # Use interactive mode if the DISPLAY environment variable is set
-    headless_mode = os.environ.get('DISPLAY') is None
-    
-    logger.info(f"Initializing face recognition service (headless={headless_mode})")
-    
-    global face_service
-    face_service = WebFaceService(
-        backend_session=session, 
-        backend_url=backend_url,
-        headless=headless_mode
-    )
-    
-    # Initialize the service (load face data)
-    face_service.initialize()
+    # Set up Qt environment once at startup
+    setup_qt_environment()
     
     @app.route('/')
     def index():
@@ -108,17 +91,10 @@ def setup_routes(app, door_controller, mqtt_handler, session, backend_url):
         
         if 'face-recognition' in referrer or 'process-face' in referrer:
             try:
-                # Try to acquire the lock with a timeout (3 seconds)
-                lock_acquired = face_service_lock.acquire(timeout=3)
-                
-                try:
-                    if lock_acquired:
-                        # Only clean up if coming from face recognition
-                        face_service.release_camera()
-                finally:
-                    # Always release the lock if we acquired it
-                    if lock_acquired:
-                        face_service_lock.release()
+                # Just make sure OpenCV windows are destroyed
+                import cv2
+                cv2.destroyAllWindows()
+                cv2.waitKey(1)
             except Exception as e:
                 logger.error(f"Error cleaning up resources: {e}")
         
@@ -257,75 +233,16 @@ def setup_routes(app, door_controller, mqtt_handler, session, backend_url):
         """Display the face recognition page"""
         logger.info("Face recognition page requested")
         
-        # Use the lock with a timeout to prevent deadlocks
-        lock_acquired = False
+        # Clean up any existing OpenCV windows
         try:
-            # Try to acquire the lock with a timeout (5 seconds)
-            lock_acquired = face_service_lock.acquire(timeout=5)
-            
-            if not lock_acquired:
-                logger.error("Could not acquire lock for face recognition - timeout exceeded")
-                flash("System busy, please try again shortly.", "warning")
-                return render_template("entry_options.html")
-            
-            # If we get here, we have the lock
-            try:
-                # More aggressive cleanup - fully recreate service
-                global face_service
-                
-                # First release existing resources
-                if face_service:
-                    try:
-                        # Force camera release
-                        if hasattr(face_service, 'camera') and face_service.camera:
-                            if hasattr(face_service.camera, 'cap') and face_service.camera.cap is not None:
-                                face_service.camera.cap.release()
-                                face_service.camera.cap = None
-                            
-                        # Now call the full release method
-                        face_service.release_camera()
-                    except Exception as e:
-                        logger.error(f"Error releasing camera resources: {e}")
-                
-                # Explicitly release OpenCV windows to be sure
-                try:
-                    import cv2
-                    cv2.destroyAllWindows()
-                    cv2.waitKey(1)
-                except Exception as e:
-                    logger.error(f"Error destroying windows: {e}")
-                
-                # Forcibly wait a bit to ensure resources are released
-                import time
-                time.sleep(0.5)
-                
-                # Determine headless mode
-                headless_mode = os.environ.get('DISPLAY') is None
-                
-                # Create a brand new service instance
-                logger.info("Creating new WebFaceService instance")
-                face_service = WebFaceService(
-                    backend_session=session, 
-                    backend_url=backend_url,
-                    headless=headless_mode
-                )
-                
-                # Set Qt environment
-                setup_qt_environment()
-                
-                # Initialize the service (load face data)
-                success = face_service.initialize()
-                logger.info(f"New service initialization: {'Success' if success else 'Failed'}")
-                
-            except Exception as e:
-                logger.error(f"Error recreating face recognition service: {e}")
-                logger.error(traceback.format_exc())
-                flash("Error initializing face recognition. Please try again.", "danger")
-                return render_template("entry_options.html")
-        finally:
-            # Always release the lock if we acquired it
-            if lock_acquired:
-                face_service_lock.release()
+            import cv2
+            cv2.destroyAllWindows()
+            cv2.waitKey(1)
+        except Exception as e:
+            logger.error(f"Error destroying windows: {e}")
+        
+        # Set Qt environment
+        setup_qt_environment()
         
         # Return the template
         return render_template("face_recognition.html")
@@ -336,39 +253,37 @@ def setup_routes(app, door_controller, mqtt_handler, session, backend_url):
         face_image = None
         match = None
         
+        # Create a fresh service instance for each request
+        local_face_service = None
+        
         try:
-            # Use the lock with a timeout to prevent deadlocks
-            lock_acquired = False
-            try:
-                # Try to acquire the lock with a timeout (5 seconds)
-                lock_acquired = face_service_lock.acquire(timeout=5)
-                
-                if not lock_acquired:
-                    logger.error("Could not acquire lock for face processing - timeout exceeded")
-                    flash("System busy, please try again shortly.", "warning")
-                    return redirect(url_for("door_entry"))
-                
-                # If we get here, we have the lock
-                try:
-                    # First capture a face with liveness detection
-                    face_image = face_service.capture_face_with_liveness(timeout=30)
-                    
-                    if face_image is None:
-                        flash("Face verification failed. Please try again.", "danger")
-                        return redirect(url_for("door_entry"))
-                    
-                    # Try to identify the person from known faces
-                    match = face_service.recognition.identify_face(face_image)
-                finally:
-                    # Always clean up camera resources, regardless of success/failure
-                    try:
-                        face_service.release_camera()
-                    except Exception as e:
-                        logger.error(f"Error releasing camera in process-face: {e}")
-            finally:
-                # Always release the lock if we acquired it
-                if lock_acquired:
-                    face_service_lock.release()
+            # Determine headless mode
+            headless_mode = os.environ.get('DISPLAY') is None
+            
+            # Create a fresh service instance for this request only
+            logger.info("Creating fresh WebFaceService instance for recognition")
+            local_face_service = WebFaceService(
+                backend_session=session, 
+                backend_url=backend_url,
+                headless=headless_mode
+            )
+            
+            # Initialize the service (load face data)
+            success = local_face_service.initialize()
+            
+            if not success:
+                flash("Error initializing face recognition. Please try again.", "danger")
+                return redirect(url_for("door_entry"))
+            
+            # Capture face with liveness detection
+            face_image = local_face_service.capture_face_with_liveness(timeout=30)
+            
+            if face_image is None:
+                flash("Face verification failed. Please try again.", "danger")
+                return redirect(url_for("door_entry"))
+            
+            # Try to identify the person from known faces
+            match = local_face_service.recognition.identify_face(face_image)
             
             # User recognized
             if match:
@@ -412,7 +327,7 @@ def setup_routes(app, door_controller, mqtt_handler, session, backend_url):
             else:
                 # Not recognized - allow registration or other verification
                 # Generate face encoding for potential registration
-                encoding = face_service.recognition.process_face_encoding(face_image)
+                encoding = local_face_service.recognition.process_face_encoding(face_image)
                 
                 if encoding is not None:
                     # Store encoding in session for potential registration
@@ -430,6 +345,21 @@ def setup_routes(app, door_controller, mqtt_handler, session, backend_url):
             logger.error(traceback.format_exc())
             flash("An error occurred during face recognition.", "danger")
             return redirect(url_for("door_entry"))
+        finally:
+            # Always clean up resources in the local service instance
+            if local_face_service:
+                try:
+                    local_face_service.release_camera()
+                except Exception as e:
+                    logger.error(f"Error releasing camera resources: {e}")
+                
+                # Force cleanup of OpenCV windows
+                try:
+                    import cv2
+                    cv2.destroyAllWindows()
+                    cv2.waitKey(1)
+                except Exception:
+                    pass
     
     @app.route('/register-face', methods=['POST'])
     def register_face():
