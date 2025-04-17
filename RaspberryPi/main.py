@@ -2,11 +2,17 @@ from flask import Flask
 from dotenv import load_dotenv
 import os
 import atexit
+import logging
 
 from door_controller import DoorController
 from mqtt_handler import MQTTHandler
 from routes import setup_routes
 from utils import create_backend_session
+
+# Configure logging once at the application level
+logging.basicConfig(level=logging.INFO, 
+                    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+                    handlers=[logging.StreamHandler()])
 
 # Load environment variables
 load_dotenv()

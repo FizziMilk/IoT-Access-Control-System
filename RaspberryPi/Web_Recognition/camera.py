@@ -14,14 +14,8 @@ from skimage import feature as skimage_feature
 import threading
 import queue
 
-# Set up logging once at the module level
+# Simplify logging configuration to avoid duplicates
 logger = logging.getLogger("WebCamera")
-if not logger.handlers:
-    handler = logging.StreamHandler()
-    formatter = logging.Formatter('[%(asctime)s] [%(name)s] [%(levelname)s] %(message)s')
-    handler.setFormatter(formatter)
-    logger.addHandler(handler)
-    logger.setLevel(logging.INFO)
 
 class WebCamera:
     """Camera handling optimized for web applications."""
@@ -193,6 +187,15 @@ class WebCamera:
                 blink_counter = 0
                 ear_values = []
                 
+                # Only create a window if not in headless mode
+                window_created = False
+                if not self.headless:
+                    try:
+                        cv2.namedWindow("Blink Detection", cv2.WINDOW_NORMAL)
+                        window_created = True
+                    except Exception as e:
+                        logger.error(f"Error creating window: {e}")
+                
                 # Continue until timeout or sufficient blinks detected
                 while (time.time() - start_time) < timeout and blink_counter < 2:
                     ret, frame = self.cap.read()
@@ -262,9 +265,12 @@ class WebCamera:
                             break
                 
                 # Clean up windows
-                if not self.headless:
-                    cv2.destroyWindow("Blink Detection")
-                    cv2.waitKey(1)  # Process window destruction
+                if window_created:
+                    try:
+                        cv2.destroyWindow("Blink Detection")
+                        cv2.waitKey(1)  # Process window destruction
+                    except Exception as e:
+                        logger.error(f"Error destroying window: {e}")
                 
                 # Result
                 result = blink_counter >= 2
@@ -426,37 +432,15 @@ class WebCamera:
                 qt_plugin_path = os.path.join(cv_path, 'qt', 'plugins')
                 if os.path.isdir(qt_plugin_path):
                     os.environ['QT_QPA_PLATFORM_PLUGIN_PATH'] = qt_plugin_path
-                    logger.info(f"Set QT_QPA_PLATFORM_PLUGIN_PATH to {qt_plugin_path}")
             
             # Force the same thread for Qt operations
             os.environ['QT_THREAD_PRIORITY_POLICY'] = '1'
             
-            # Check headless mode and platform availability
-            if self.headless:
-                # Try platform options in order of preference
-                if os.path.exists('/usr/lib/x86_64-linux-gnu/qt5/plugins/platforms/libqoffscreen.so') or \
-                   os.path.exists('/usr/lib/aarch64-linux-gnu/qt5/plugins/platforms/libqoffscreen.so'):
-                    os.environ['QT_QPA_PLATFORM'] = 'offscreen'
-                    logger.info("Using 'offscreen' Qt platform")
-                elif os.path.exists('/usr/lib/x86_64-linux-gnu/qt5/plugins/platforms/libqxcb.so') or \
-                     os.path.exists('/usr/lib/aarch64-linux-gnu/qt5/plugins/platforms/libqxcb.so'):
-                    os.environ['QT_QPA_PLATFORM'] = 'xcb'
-                    logger.info("Using 'xcb' Qt platform")
-                else:
-                    # Don't set explicitly, let Qt choose
-                    if 'QT_QPA_PLATFORM' in os.environ:
-                        del os.environ['QT_QPA_PLATFORM']
-                    logger.info("Letting Qt choose platform automatically")
-            else:
-                # For non-headless mode, let Qt choose the platform
-                if 'QT_QPA_PLATFORM' in os.environ:
-                    del os.environ['QT_QPA_PLATFORM']
-                logger.info("Non-headless mode: letting Qt choose platform")
+            # Use xcb for all modes as it's the most reliable on Linux
+            os.environ['QT_QPA_PLATFORM'] = 'xcb'
             
             # Make Qt run in the main thread
             os.environ['QT_FORCE_STDERR_LOGGING'] = '1'
-            
-            logger.info("Qt environment variables set up successfully")
         except Exception as e:
             logger.error(f"Error setting up Qt environment: {str(e)}")
             logger.error(traceback.format_exc())
