@@ -60,6 +60,7 @@
         <div id="instructions">
             <p class="lead">Click the button below to start facial recognition.</p>
             <p>Look directly at the camera and blink naturally when prompted.</p>
+            <p><strong>Important:</strong> Ensure your face is well-lit from the front.</p>
         </div>
         
         <button id="startButton" class="btn btn-primary btn-lg">
@@ -71,6 +72,10 @@
                 <span class="visually-hidden">Loading...</span>
             </div>
             <p class="mt-2">Processing... Please look at the camera and blink naturally</p>
+            <div class="progress mt-3" style="height: 20px;">
+                <div id="progressBar" class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar" style="width: 0%"></div>
+            </div>
+            <p id="statusText" class="mt-2">Initializing camera...</p>
         </div>
         
         <form action="{{ url_for('process_face') }}" method="POST" id="faceForm" style="display:none;">
@@ -117,6 +122,40 @@
             // Show the loading spinner
             document.getElementById('loadingSpinner').style.display = 'block';
             
+            // Animate the progress bar
+            let progressBar = document.getElementById('progressBar');
+            let statusText = document.getElementById('statusText');
+            let progress = 0;
+            let statusMessages = [
+                "Initializing camera...",
+                "Looking for face...",
+                "Performing liveness check...",
+                "Analyzing facial features...",
+                "Matching with database...",
+                "Almost done..."
+            ];
+            
+            // Start progress animation
+            let progressInterval = setInterval(function() {
+                progress += 1;
+                if (progress <= 100) {
+                    progressBar.style.width = progress + '%';
+                    
+                    // Update status text at certain progress points
+                    if (progress === 10) {
+                        statusText.textContent = statusMessages[1];
+                    } else if (progress === 30) {
+                        statusText.textContent = statusMessages[2];
+                    } else if (progress === 50) {
+                        statusText.textContent = statusMessages[3];
+                    } else if (progress === 70) {
+                        statusText.textContent = statusMessages[4];
+                    } else if (progress === 90) {
+                        statusText.textContent = statusMessages[5];
+                    }
+                }
+            }, 500); // Updates every 500ms
+            
             // Check if skip liveness is checked (in testing mode)
             var skipLivenessElement = document.getElementById('skipLivenessCheck');
             if (skipLivenessElement && skipLivenessElement.checked) {
@@ -126,6 +165,9 @@
                 hiddenField.name = 'skip_liveness';
                 hiddenField.value = 'true';
                 document.getElementById('faceForm').appendChild(hiddenField);
+                
+                // Update status text to indicate test mode
+                statusText.textContent = "TEST MODE: Skipping liveness check...";
             }
             
             // Submit the form

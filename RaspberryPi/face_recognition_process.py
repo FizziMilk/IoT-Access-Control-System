@@ -129,10 +129,10 @@ def perform_liveness_check(frame):
         }
         
         # Combined decision logic
-        entropy_ok = texture_entropy > 4.5  # Higher values for real faces with texture variation
+        entropy_ok = texture_entropy > 4.0  # Lower threshold from 4.5 to 4.0 for texture entropy
         gradient_ok = mean_gradient > 15.0  # Higher gradient variation in real faces
         reflection_ok = bright_spot_ratio < 0.05  # Not too many bright reflective spots
-        color_ok = color_std > 20.0  # Good color variation in real skin
+        color_ok = color_std > 18.0  # Lower threshold from 20.0 to 18.0 for color variation
         
         # Final liveness decision
         results["is_live"] = entropy_ok and gradient_ok and reflection_ok and color_ok
@@ -300,7 +300,7 @@ def main():
     parser = argparse.ArgumentParser(description='Face Recognition Process')
     parser.add_argument('--output', required=True, help='Output file path for recognition results')
     parser.add_argument('--backend-url', required=False, help='Backend URL for authentication')
-    parser.add_argument('--timeout', type=int, default=15, help='Timeout in seconds')
+    parser.add_argument('--timeout', type=int, default=30, help='Timeout in seconds')
     parser.add_argument('--skip-liveness', action='store_true', help='Skip liveness detection (for testing)')
     
     args = parser.parse_args()

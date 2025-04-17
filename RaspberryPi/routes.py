@@ -285,7 +285,7 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
             
             # Run the standalone script as a separate process
             process = subprocess.run(cmd, 
-                                    timeout=45,  # Timeout to account for script execution
+                                    timeout=60,  # Increased timeout from 45 to 60 seconds
                                     check=False,
                                     capture_output=True)
             
@@ -293,6 +293,11 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
             
             if process.stderr:
                 logger.warning(f"Process stderr: {process.stderr.decode('utf-8', errors='replace')}")
+                
+                # Log the stderr output to help with debugging
+                stderr_output = process.stderr.decode('utf-8', errors='replace')
+                if "liveness check" in stderr_output.lower():
+                    logger.info("Liveness check details found in stderr - helpful for debugging")
             
             # Wait briefly to ensure the result file is written
             time.sleep(0.5)
@@ -424,7 +429,17 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                     return redirect(url_for("door_entry"))
             else:
                 # Error during face recognition
-                flash(results.get('error', "Face recognition failed. Please try again."), "danger")
+                error_msg = results.get('error', "Face recognition failed. Please try again.")
+                logger.warning(f"Face recognition error: {error_msg}")
+                
+                # Provide more helpful error messages
+                if "liveness" in error_msg.lower():
+                    flash("Couldn't verify this is a real face. Please try with better lighting or enable testing mode.", "warning")
+                elif "timeout" in error_msg.lower():
+                    flash("Face recognition took too long. Please try again in better lighting conditions.", "warning")
+                else:
+                    flash(error_msg, "danger")
+                    
                 return redirect(url_for("door_entry"))
                 
         except subprocess.TimeoutExpired:
