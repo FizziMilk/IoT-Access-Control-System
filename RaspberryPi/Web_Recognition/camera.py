@@ -11,6 +11,8 @@ import logging
 import traceback
 from contextlib import contextmanager
 from skimage import feature as skimage_feature
+import threading
+import queue
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -19,24 +21,78 @@ logger = logging.getLogger("WebCamera")
 class WebCamera:
     """Camera handling optimized for web applications."""
     
-    def __init__(self, headless=False):
+    def __init__(self, config=None):
         """
-        Initialize without claiming resources.
+        Initialize the Camera object.
         
         Args:
-            headless: If True, no windows will be displayed (for server environments)
+            config (dict, optional): Configuration dictionary for the camera.
         """
-        # Defer initialization until needed
-        self.camera = None
-        self.last_frame = None
-        # Configuration
-        self.camera_id = 0
-        self.resolution = (640, 480)
-        self.liveness_resolution = (320, 240)
-        # Constants for blink detection
-        self.EAR_THRESHOLD = 0.20
-        # Operating mode
-        self.headless = headless
+        # Set up configuration
+        self.config = config or {}
+        
+        # Thread safety
+        self._frame_lock = threading.RLock()
+        self._camera_lock = threading.RLock()
+        
+        # Initialize Qt application if needed
+        self._qt_app = None
+        self._setup_qt_environment()
+        
+        # Camera state
+        self._camera = None
+        self._running = False
+        self._current_frame = None
+        self._start_time = None
+        self._frame_count = 0
+        self._last_computed_fps = 0
+        self._capture_thread = None
+        self._stop_event = threading.Event()
+        
+        # Frame observers
+        self._frame_observers = []
+        
+        # Default camera settings
+        self._width = self.config.get('width', 640)
+        self._height = self.config.get('height', 480)
+        self._fps = self.config.get('fps', 30)
+        self._device_index = self.config.get('device_index', 0)
+        
+        # Image processing settings
+        self._face_recognition_model = self.config.get('face_recognition_model', 'hog')
+        self._detection_frequency = self.config.get('detection_frequency', 5)  # every n frames
+        
+        # Initialize the face encoder
+        self._face_encoder = None
+        
+        # Initialize video capture object
+        self.cap = None
+        
+        # Track if camera is running
+        self.is_running = False
+        self.is_paused = False
+        
+        # Threading variables
+        self.lock = threading.RLock()
+        self.capture_thread = None
+        self.stop_event = threading.Event()
+        
+        # Frame buffers
+        self.latest_frame = None
+        self.frame_queue = queue.Queue(maxsize=2)  # Small queue to avoid memory issues
+        
+        # Initialize logs
+        global logger
+        logger = logging.getLogger("WebCamera")
+        if not logger.handlers:
+            handler = logging.StreamHandler()
+            formatter = logging.Formatter('[%(asctime)s] [%(name)s] [%(levelname)s] %(message)s')
+            handler.setFormatter(formatter)
+            logger.addHandler(handler)
+            logger.setLevel(logging.INFO)
+        
+        # This flag will control visualization during texture analysis
+        self.texture_visualization = False
         
     @contextmanager
     def camera_session(self, resolution=None):
@@ -59,7 +115,7 @@ class WebCamera:
                 raise RuntimeError("Failed to initialize camera")
             
             # Store reference
-            self.camera = camera
+            self.cap = camera
             
             # Yield camera for use
             yield camera
@@ -79,7 +135,7 @@ class WebCamera:
         Returns:
             Tuple of (frame, face_location) or (None, None) if no face is found
         """
-        with self.camera_session(resolution or self.resolution):
+        with self.camera_session(resolution or (self.width, self.height)):
             # Give the camera some time to adjust
             time.sleep(0.5)
             
@@ -89,7 +145,7 @@ class WebCamera:
                 # Capture several frames to allow camera to adjust
                 frames = []
                 for _ in range(5):
-                    ret, frame = self.camera.read()
+                    ret, frame = self.cap.read()
                     if ret:
                         frames.append(frame)
                     time.sleep(0.1)
@@ -131,14 +187,14 @@ class WebCamera:
         logger.info(f"Starting blink detection with timeout={timeout}s")
         
         try:
-            with self.camera_session(self.liveness_resolution):
+            with self.camera_session((self.width, self.height)):
                 start_time = time.time()
                 blink_counter = 0
                 ear_values = []
                 
                 # Continue until timeout or sufficient blinks detected
                 while (time.time() - start_time) < timeout and blink_counter < 2:
-                    ret, frame = self.camera.read()
+                    ret, frame = self.cap.read()
                     if not ret:
                         logger.warning("Failed to capture frame")
                         continue
@@ -301,22 +357,22 @@ class WebCamera:
         Returns:
             cv2.VideoCapture: Camera object or None if failed
         """
-        logger.info(f"Initializing camera with ID={self.camera_id}")
+        logger.info(f"Initializing camera with index {self._device_index}")
         
         # First release any existing camera - but only if not already done
-        if self.camera is not None:
+        if self.cap is not None:
             self._release_camera()
         
         # Try to open camera
         try:
-            logger.info(f"Opening camera with index {self.camera_id}")
-            cap = cv2.VideoCapture(self.camera_id)
+            logger.info(f"Opening camera with index {self._device_index}")
+            cap = cv2.VideoCapture(self._device_index)
             
             if cap is None or not cap.isOpened():
-                logger.warning(f"Failed to open camera with index {self.camera_id}")
+                logger.warning(f"Failed to open camera with index {self._device_index}")
                 return None
                 
-            logger.info(f"Successfully opened camera with index {self.camera_id}")
+            logger.info(f"Successfully opened camera with index {self._device_index}")
             
             # Set resolution if provided
             if resolution is not None:
@@ -338,11 +394,11 @@ class WebCamera:
         """
         Release camera resources efficiently.
         """
-        if self.camera is not None:
+        if self.cap is not None:
             try:
                 logger.info("Releasing camera")
-                self.camera.release()
-                self.camera = None
+                self.cap.release()
+                self.cap = None
                 
                 # Destroy windows in non-headless mode
                 if not self.headless:
@@ -355,32 +411,35 @@ class WebCamera:
                 logger.error(f"Error releasing camera: {e}")
                 logger.error(traceback.format_exc())
                 # Still set camera to None even if release fails
-                self.camera = None
+                self.cap = None
     
     def _setup_qt_environment(self):
-        """Set up appropriate Qt environment variables based on available plugins."""
+        """
+        Set up environment variables for Qt/OpenCV compatibility.
+        This prevents thread-related crashes in OpenCV's highgui module.
+        """
         try:
-            # Fix for thread handling issues
-            os.environ["QT_THREAD_PRIORITY_POLICY"] = "0"  # Use default thread priority
+            # Set QT_QPA_PLATFORM_PLUGIN_PATH to avoid errors
+            if 'QT_QPA_PLATFORM_PLUGIN_PATH' not in os.environ:
+                cv_path = os.path.dirname(cv2.__file__)
+                qt_plugin_path = os.path.join(cv_path, 'qt', 'plugins')
+                if os.path.isdir(qt_plugin_path):
+                    os.environ['QT_QPA_PLATFORM_PLUGIN_PATH'] = qt_plugin_path
+                    logger.info(f"Set QT_QPA_PLATFORM_PLUGIN_PATH to {qt_plugin_path}")
             
-            # Force GUI onto main thread
-            os.environ["QT_NO_THREADED_OPENGL"] = "1"
+            # Force the same thread for Qt operations
+            os.environ['QT_THREAD_PRIORITY_POLICY'] = '1'
             
-            # Use xcb on Linux
-            os.environ["QT_QPA_PLATFORM"] = "xcb"
+            # Disable QPA threading
+            os.environ['QT_QPA_PLATFORM'] = 'offscreen'
             
-            # Debug mode for plugins (only when needed for troubleshooting)
-            # os.environ["QT_DEBUG_PLUGINS"] = "1"
+            # Make Qt run in the main thread
+            os.environ['QT_FORCE_STDERR_LOGGING'] = '1'
             
-            # Set plugin path
-            os.environ["QT_PLUGIN_PATH"] = "/usr/lib/aarch64-linux-gnu/qt5/plugins"
-            
-            # Force synchronous operations
-            os.environ["QT_NO_GLIB"] = "1"
-            
-            logger.info("Qt environment configured")
+            logger.info("Qt environment variables set up successfully")
         except Exception as e:
-            logger.error(f"Error setting up Qt environment: {e}")
+            logger.error(f"Error setting up Qt environment: {str(e)}")
+            logger.error(traceback.format_exc())
 
     def analyze_facial_texture(self, frame):
         """
@@ -530,42 +589,284 @@ class WebCamera:
             lbp3: LBP at radius 3
             magnitude: Gradient magnitude
         """
-        # Normalize LBP images for visualization
-        micro_texture = cv2.normalize(lbp1.astype(np.uint8), None, 0, 255, cv2.NORM_MINMAX)
-        medium_texture = cv2.normalize(lbp2.astype(np.uint8), None, 0, 255, cv2.NORM_MINMAX)
-        macro_texture = cv2.normalize(lbp3.astype(np.uint8), None, 0, 255, cv2.NORM_MINMAX)
-        gradient_viz = cv2.normalize(magnitude.astype(np.uint8), None, 0, 255, cv2.NORM_MINMAX)
+        try:
+            # First destroy any existing window with this name to prevent conflicts
+            cv2.destroyWindow("Texture Analysis")
+            cv2.waitKey(1)  # Process window destruction
+            
+            # Normalize LBP images for visualization
+            micro_texture = cv2.normalize(lbp1.astype(np.uint8), None, 0, 255, cv2.NORM_MINMAX)
+            medium_texture = cv2.normalize(lbp2.astype(np.uint8), None, 0, 255, cv2.NORM_MINMAX)
+            macro_texture = cv2.normalize(lbp3.astype(np.uint8), None, 0, 255, cv2.NORM_MINMAX)
+            gradient_viz = cv2.normalize(magnitude.astype(np.uint8), None, 0, 255, cv2.NORM_MINMAX)
+            
+            # Create a visualization with layout
+            h, w = frame.shape[:2]
+            viz_size = (w//2, h//2)  # Smaller size for the visualization
+            
+            # Resize images for the visualization
+            frame_resized = cv2.resize(frame, viz_size)
+            gray_resized = cv2.resize(cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR), viz_size)
+            equalized_resized = cv2.resize(cv2.cvtColor(equalized, cv2.COLOR_GRAY2BGR), viz_size)
+            
+            lbp1_viz = cv2.resize(cv2.cvtColor(micro_texture, cv2.COLOR_GRAY2BGR), viz_size)
+            lbp2_viz = cv2.resize(cv2.cvtColor(medium_texture, cv2.COLOR_GRAY2BGR), viz_size)
+            lbp3_viz = cv2.resize(cv2.cvtColor(macro_texture, cv2.COLOR_GRAY2BGR), viz_size)
+            
+            gradient_viz = cv2.resize(cv2.cvtColor(gradient_viz, cv2.COLOR_GRAY2BGR), viz_size)
+            
+            # Create rows of images
+            row1 = np.hstack([frame_resized, gray_resized])
+            row2 = np.hstack([lbp1_viz, lbp3_viz])
+            row3 = np.hstack([gradient_viz, equalized_resized])
+            
+            # Combine rows
+            visualization = np.vstack([row1, row2, row3])
+            
+            # Add labels
+            cv2.putText(visualization, "TEXTURE ANALYSIS", (10, 30), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
+            
+            # Create the window first
+            cv2.namedWindow("Texture Analysis", cv2.WINDOW_NORMAL)
+            
+            # Display the visualization
+            cv2.imshow("Texture Analysis", visualization)
+            cv2.waitKey(100)  # Brief display
+            
+            # Explicitly destroy window after display
+            cv2.destroyWindow("Texture Analysis")
+            cv2.waitKey(1)  # Process window destruction
+        except Exception as e:
+            logger.error(f"Error creating texture visualization: {e}")
+            # Ensure window is closed even on error
+            try:
+                cv2.destroyWindow("Texture Analysis")
+                cv2.waitKey(1)
+            except:
+                pass 
+
+    def start(self):
+        """
+        Start the camera capture thread.
         
-        # Create a visualization with layout
-        h, w = frame.shape[:2]
-        viz_size = (w//2, h//2)  # Smaller size for the visualization
+        This method initializes the camera and starts the frame capture in a separate thread.
+        Returns True if camera started successfully, False otherwise.
+        """
+        if self._running:
+            logger.warning("Camera is already running")
+            return True
         
-        # Resize images for the visualization
-        frame_resized = cv2.resize(frame, viz_size)
-        gray_resized = cv2.resize(cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR), viz_size)
-        equalized_resized = cv2.resize(cv2.cvtColor(equalized, cv2.COLOR_GRAY2BGR), viz_size)
+        try:
+            # Initialize camera in the main thread before starting background thread
+            logger.info(f"Opening camera with index {self._device_index}")
+            self.cap = cv2.VideoCapture(self._device_index)
+            
+            if not self.cap.isOpened():
+                logger.error(f"Failed to open camera with index {self._device_index}")
+                return False
+            
+            # Set camera properties
+            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self._width)
+            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self._height)
+            self.cap.set(cv2.CAP_PROP_FPS, self._fps)
+            
+            # Get actual camera properties
+            actual_width = self.cap.get(cv2.CAP_PROP_FRAME_WIDTH)
+            actual_height = self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
+            actual_fps = self.cap.get(cv2.CAP_PROP_FPS)
+            
+            logger.info(f"Camera initialized with resolution: {actual_width}x{actual_height}, FPS: {actual_fps}")
+            
+            # Reset control flags
+            self._stop_event.clear()
+            self._running = True
+            
+            # Start capture thread
+            self._capture_thread = threading.Thread(target=self._capture_loop, daemon=True)
+            self._capture_thread.start()
+            
+            logger.info("Camera started successfully")
+            return True
         
-        lbp1_viz = cv2.resize(cv2.cvtColor(micro_texture, cv2.COLOR_GRAY2BGR), viz_size)
-        lbp2_viz = cv2.resize(cv2.cvtColor(medium_texture, cv2.COLOR_GRAY2BGR), viz_size)
-        lbp3_viz = cv2.resize(cv2.cvtColor(macro_texture, cv2.COLOR_GRAY2BGR), viz_size)
+        except Exception as e:
+            logger.error(f"Error starting camera: {str(e)}")
+            logger.error(traceback.format_exc())
+            self.release()
+            return False 
+
+    def _capture_loop(self):
+        """
+        Main camera capture loop that runs in a separate thread.
+        Continuously captures frames until stopped.
+        """
+        try:
+            logger.info("Frame capture loop started")
+            
+            while not self._stop_event.is_set() and self.cap and self.cap.isOpened():
+                # Capture frame
+                ret, frame = self.cap.read()
+                if not ret or frame is None:
+                    logger.warning("Failed to capture frame, retrying...")
+                    time.sleep(0.1)
+                    continue
+                
+                # Handle the frame in a way that's thread-safe for Qt
+                try:
+                    # Process the frame without any Qt operations in this thread
+                    processed_frame = self._process_frame(frame)
+                    
+                    # Update the frame in a thread-safe way
+                    with self._frame_lock:
+                        self._current_frame = processed_frame
+                        self._new_frame_available = True
+                    
+                    # Notify observers about the new frame
+                    self._notify_frame_observers(processed_frame)
+                    
+                except Exception as e:
+                    logger.error(f"Error processing frame: {str(e)}")
+                    logger.error(traceback.format_exc())
+                
+                # Sleep to maintain desired frame rate
+                time.sleep(1.0 / self._fps)
+                
+        except Exception as e:
+            logger.error(f"Error in capture loop: {str(e)}")
+            logger.error(traceback.format_exc())
+        finally:
+            logger.info("Capture loop ending, releasing resources")
+            self._cleanup_resources()
         
-        gradient_viz = cv2.resize(cv2.cvtColor(gradient_viz, cv2.COLOR_GRAY2BGR), viz_size)
+    def _process_frame(self, frame):
+        """
+        Process a frame before sending it to observers.
+        This method can be overridden in subclasses to add custom processing.
         
-        # Create rows of images
-        row1 = np.hstack([frame_resized, gray_resized])
-        row2 = np.hstack([lbp1_viz, lbp3_viz])
-        row3 = np.hstack([gradient_viz, equalized_resized])
+        Args:
+            frame (numpy.ndarray): The original frame from camera
+            
+        Returns:
+            numpy.ndarray: The processed frame
+        """
+        # By default, return a copy of the frame to avoid observers modifying the original
+        if frame is not None:
+            return frame.copy()
+        return None
         
-        # Combine rows
-        visualization = np.vstack([row1, row2, row3])
+    def _update_frame(self, frame):
+        """
+        Updates the current frame and notifies observers.
         
-        # Add labels
-        cv2.putText(visualization, "TEXTURE ANALYSIS", (10, 30), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
+        Args:
+            frame (numpy.ndarray): The new frame from camera
+        """
+        if frame is not None:
+            with self._frame_lock:
+                self._current_frame = frame.copy()
+            
+            # Process the frame before notifying observers
+            processed_frame = self._process_frame(frame)
+            self._notify_frame_observers(processed_frame)
+    
+    def add_frame_observer(self, observer):
+        """
+        Add a frame observer that will be notified when a new frame is available.
         
-        # Display the visualization
-        cv2.imshow("Texture Analysis", visualization)
-        cv2.waitKey(100)  # Brief display
+        Args:
+            observer (callable): A callable that accepts a frame parameter.
+                                The callable will be invoked with the latest frame.
         
-        # Explicitly destroy window after display
-        cv2.destroyWindow("Texture Analysis") 
+        Returns:
+            bool: True if the observer was added, False otherwise
+        """
+        if not callable(observer):
+            logger.warning("Attempted to add non-callable frame observer")
+            return False
+            
+        with self._frame_lock:
+            if observer not in self._frame_observers:
+                self._frame_observers.append(observer)
+                logger.debug(f"Added frame observer, total observers: {len(self._frame_observers)}")
+            return True
+    
+    def remove_frame_observer(self, observer):
+        """
+        Remove a previously registered frame observer.
+        
+        Args:
+            observer (callable): The observer to remove
+            
+        Returns:
+            bool: True if the observer was removed, False if it wasn't found
+        """
+        with self._frame_lock:
+            if observer in self._frame_observers:
+                self._frame_observers.remove(observer)
+                logger.debug(f"Removed frame observer, remaining observers: {len(self._frame_observers)}")
+                return True
+            return False
+    
+    def _notify_frame_observers(self, frame):
+        """
+        Notify all registered observers about a new frame.
+        
+        This method makes a copy of the observer list under a lock to avoid modification
+        during iteration. Each observer is called with the frame as an argument.
+        
+        Args:
+            frame (numpy.ndarray): The processed frame to send to observers
+        """
+        observers_to_notify = []
+        
+        # Get a copy of observers under lock
+        with self._frame_lock:
+            observers_to_notify = self._frame_observers.copy()
+            
+        # Notify each observer with the new frame
+        for observer in observers_to_notify:
+            try:
+                observer(frame)
+            except Exception as e:
+                logger.error(f"Error in frame observer: {e}")
+                # Consider removing problematic observers here if needed
+        
+    def _cleanup_resources(self):
+        """
+        Clean up resources when the capture loop ends.
+        """
+        try:
+            # Release camera resources if they exist
+            if hasattr(self, 'cap') and self.cap is not None:
+                self.cap.release()
+                self.cap = None
+                
+            # Reset state flags
+            self._running = False
+            self._new_frame_available = False
+            self._current_frame = None
+            
+            logger.info("Camera resources released")
+        except Exception as e:
+            logger.error(f"Error during resource cleanup: {str(e)}")
+
+    def get_frame(self):
+        """
+        Safely retrieves the latest frame captured by the camera.
+        
+        Returns:
+            numpy.ndarray or None: The most recent camera frame or None if no frame is available
+        """
+        if not self._running or not hasattr(self, '_current_frame'):
+            logger.warning("Attempted to get frame but camera is not running")
+            return None
+        
+        # Safely get the current frame using the lock
+        with self._frame_lock:
+            if self._current_frame is None:
+                return None
+            # Return a copy to avoid thread safety issues
+            frame = self._current_frame.copy()
+            self._new_frame_available = False
+        
+        return frame 
