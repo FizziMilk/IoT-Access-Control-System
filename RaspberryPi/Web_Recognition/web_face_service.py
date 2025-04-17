@@ -283,7 +283,15 @@ class WebFaceService:
             logger.info("Releasing camera resources")
             if hasattr(self, 'camera') and self.camera:
                 self.camera._release_camera()
-            logger.info("Camera resources released")
+            
+            # Explicitly destroy any OpenCV windows
+            import cv2
+            cv2.destroyAllWindows()
+            
+            # Reset initialization flag to force proper reinitialization
+            self.initialized = False
+            
+            logger.info("Camera resources released successfully")
         except Exception as e:
             logger.error(f"Error releasing camera resources: {e}")
             logger.error(traceback.format_exc()) 

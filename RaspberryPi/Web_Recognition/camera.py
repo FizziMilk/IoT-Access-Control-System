@@ -331,13 +331,19 @@ class WebCamera:
             try:
                 logger.info("Releasing camera")
                 self.camera.release()
+                self.camera = None
+                
+                # Ensure all OpenCV windows are destroyed
                 cv2.destroyAllWindows()
+                
+                # Wait to ensure resources are released
+                time.sleep(0.5)
+                logger.info("Camera resources released")
             except Exception as e:
                 logger.error(f"Error releasing camera: {e}")
-            finally:
+                logger.error(traceback.format_exc())
+                # Still set camera to None even if release fails
                 self.camera = None
-                time.sleep(0.5)  # Wait to ensure resources are released
-                logger.info("Camera resources released")
     
     def _setup_qt_environment(self):
         """Set up appropriate Qt environment variables based on available plugins."""

@@ -232,6 +232,9 @@ def setup_routes(app, door_controller, mqtt_handler, session, backend_url):
         logger.info("Face recognition page requested")
         
         try:
+            # First, ensure the camera is properly released from previous sessions
+            face_service.release_camera()
+            
             # Close any potential OpenCV windows
             cv2.destroyAllWindows()
             
@@ -250,6 +253,9 @@ def setup_routes(app, door_controller, mqtt_handler, session, backend_url):
     def process_face():
         """Process facial recognition and redirect based on result"""
         try:
+            # Ensure any previous camera session is properly closed
+            cv2.destroyAllWindows()
+            
             # Attempt to identify the user with liveness check
             user_match = face_service.identify_user(timeout=30)
             
