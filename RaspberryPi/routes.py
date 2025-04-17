@@ -647,18 +647,21 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
         def generate_frames():
             """Generator function to yield frames as they become available"""
             last_modified_time = 0
+            
+            # Create a placeholder frame to use when no image is available
+            placeholder = np.zeros((480, 640, 3), dtype=np.uint8)
+            cv2.putText(placeholder, "Waiting for camera...", (150, 240),
+                       cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+            _, placeholder_buffer = cv2.imencode('.jpg', placeholder, [cv2.IMWRITE_JPEG_QUALITY, 90])
+            placeholder_bytes = placeholder_buffer.tobytes()
+            
             while True:
                 try:
                     # Check if UPLOAD_FOLDER exists
                     if 'UPLOAD_FOLDER' not in app.config:
                         # Return placeholder image
-                        img = np.zeros((480, 640, 3), dtype=np.uint8)
-                        cv2.putText(img, "Waiting for camera...", (150, 240),
-                                   cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
-                        _, buffer = cv2.imencode('.jpg', img)
-                        frame = buffer.tobytes()
                         yield (b'--frame\r\n'
-                               b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
+                               b'Content-Type: image/jpeg\r\n\r\n' + placeholder_bytes + b'\r\n')
                         time.sleep(0.05)  # Short delay before next frame
                         continue
                     
@@ -666,30 +669,47 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                     
                     # Check if file exists and has been modified
                     if os.path.exists(debug_frame_path):
-                        current_modified_time = os.path.getmtime(debug_frame_path)
-                        
-                        # Only read if the file has been modified since last read
-                        if current_modified_time != last_modified_time:
-                            # Read the image
-                            frame = cv2.imread(debug_frame_path)
-                            last_modified_time = current_modified_time
+                        try:
+                            # Get file size and modification time
+                            file_size = os.path.getsize(debug_frame_path)
+                            current_modified_time = os.path.getmtime(debug_frame_path)
                             
-                            if frame is not None:
-                                # Convert to JPEG
-                                _, buffer = cv2.imencode('.jpg', frame)
-                                frame = buffer.tobytes()
-                                yield (b'--frame\r\n'
-                                       b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
-                                continue
+                            # Only read if the file has been modified since last read and has valid size
+                            if current_modified_time != last_modified_time and file_size > 0:
+                                # Read the image with file access protection
+                                try:
+                                    # Use a with statement to ensure file is properly closed
+                                    with open(debug_frame_path, 'rb') as f:
+                                        file_bytes = f.read()
+                                    
+                                    # Decode the image in memory instead of using imread
+                                    # This helps avoid file locking issues
+                                    nparr = np.frombuffer(file_bytes, np.uint8)
+                                    frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+                                    
+                                    if frame is not None and frame.size > 0:
+                                        # Update last modified time only if read was successful
+                                        last_modified_time = current_modified_time
+                                        
+                                        # Encode with specified quality to avoid corruption
+                                        _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 90])
+                                        frame_bytes = buffer.tobytes()
+                                        
+                                        # Only yield if we got valid data
+                                        if len(frame_bytes) > 0:
+                                            yield (b'--frame\r\n'
+                                                   b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+                                            time.sleep(0.033)  # ~30fps
+                                            continue
+                                except Exception as e:
+                                    logger.error(f"Error reading image file: {e}")
+                                    # Fall through to placeholder
+                        except Exception as e:
+                            logger.error(f"File access error: {e}")
                     
-                    # If file doesn't exist or we couldn't read it, send a placeholder
-                    img = np.zeros((480, 640, 3), dtype=np.uint8)
-                    cv2.putText(img, "Waiting for camera...", (150, 240),
-                               cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
-                    _, buffer = cv2.imencode('.jpg', img)
-                    frame = buffer.tobytes()
+                    # If we reached here, use the placeholder
                     yield (b'--frame\r\n'
-                           b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
+                           b'Content-Type: image/jpeg\r\n\r\n' + placeholder_bytes + b'\r\n')
                     
                     # Small delay to reduce CPU usage
                     time.sleep(0.05)
@@ -697,6 +717,10 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                 except Exception as e:
                     logger.error(f"Error in video streaming: {e}")
                     time.sleep(0.1)
+                    
+                    # On error, yield the placeholder frame
+                    yield (b'--frame\r\n'
+                           b'Content-Type: image/jpeg\r\n\r\n' + placeholder_bytes + b'\r\n')
                     continue
         
         # Return the streaming response

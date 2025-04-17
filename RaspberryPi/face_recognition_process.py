@@ -381,10 +381,40 @@ def save_debug_frame(frame, face_locations, liveness_results, match_names=None, 
             os.makedirs(upload_folder, exist_ok=True)
             logger.info(f"Created debug frame directory: {upload_folder}")
         
-        # Save the frame
+        # Use a safer approach to write the frame
         debug_frame_path = os.path.join(upload_folder, 'debug_frame.jpg')
-        cv2.imwrite(debug_frame_path, debug_frame)
-        logger.info(f"Saved debug frame to {debug_frame_path}")
+        temp_frame_path = os.path.join(upload_folder, f'debug_frame_temp_{os.getpid()}.jpg')
+        
+        # First encode the image in memory
+        encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), 95]  
+        _, buffer = cv2.imencode('.jpg', debug_frame, encode_params)
+        
+        # Write the buffer directly to a file
+        with open(temp_frame_path, 'wb') as f:
+            f.write(buffer)
+            f.flush()
+            os.fsync(f.fileno())  # Ensure file is written to disk
+            
+        # On Windows, we need to remove the destination file first
+        if os.name == 'nt' and os.path.exists(debug_frame_path):
+            try:
+                os.remove(debug_frame_path)
+            except Exception as e:
+                logger.warning(f"Failed to remove existing debug frame on Windows: {e}")
+                
+        # Rename the temporary file to the final filename
+        try:
+            os.rename(temp_frame_path, debug_frame_path)
+        except Exception as e:
+            logger.warning(f"Failed to rename debug frame: {e}")
+            # If rename fails (which can happen on Windows), try copy and delete
+            import shutil
+            try:
+                shutil.copy2(temp_frame_path, debug_frame_path)
+                os.remove(temp_frame_path)
+            except Exception as copy_err:
+                logger.error(f"Failed to copy debug frame: {copy_err}")
+                
     except Exception as e:
         logger.error(f"Error saving debug frame: {e}")
         logger.error(traceback.format_exc())
