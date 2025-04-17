@@ -86,9 +86,7 @@ def check_schedule(door_controller, mqtt_handler, backend_session=None, backend_
                 return True
     return False
 
-def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_url):
-    # Import the WebFaceService for use in routes
-    from Web_Recognition.web_face_service import WebFaceService
+def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_url): 
     
     # Set up Qt environment once at startup
     setup_qt_environment()
