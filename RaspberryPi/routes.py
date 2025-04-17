@@ -15,6 +15,15 @@ import traceback
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("WebRoutes")
 
+def setup_qt_environment():
+    """Set up appropriate Qt environment variables based on available plugins"""
+    try:
+        # Use xcb as it's the most reliable on Linux
+        os.environ["QT_QPA_PLATFORM"] = "xcb"
+        logger.info("Using Qt platform plugin: xcb")
+    except Exception as e:
+        logger.error(f"Error setting up Qt environment: {e}")
+
 def check_schedule(door_controller, mqtt_handler, session=None, backend_url=None):
     """Check if door should be unlocked based on current schedule"""
     now = datetime.now()
@@ -217,17 +226,6 @@ def setup_routes(app, door_controller, mqtt_handler, session, backend_url):
         # Show the phone entry form
         return render_template("door_entry.html")
     
-    def setup_qt_environment():
-        """Set up appropriate Qt environment variables based on available plugins"""
-        import os
-        
-        try:
-            # From the error message, we know "xcb" is available
-            os.environ["QT_QPA_PLATFORM"] = "xcb"
-            print("[DEBUG] Using Qt platform plugin: xcb")
-        except Exception as e:
-            print(f"[DEBUG] Error setting up Qt environment: {e}")
-
     @app.route('/face-recognition', methods=['GET'])
     def face_recognition():
         """Display the face recognition page"""
