@@ -298,6 +298,19 @@ class WebCamera:
         
         # Try to open camera
         try:
+            # Wait a moment to ensure previous camera sessions are fully closed
+            time.sleep(1.0)
+            
+            # Force destroy any lingering windows
+            cv2.destroyAllWindows()
+            
+            # Clear any pre-existing OpenCV state 
+            for i in range(5):
+                cap = cv2.VideoCapture(self.camera_id)
+                if cap is not None and cap.isOpened():
+                    cap.release()
+                    time.sleep(0.2)
+            
             logger.info(f"Opening camera with index {self.camera_id}")
             cap = cv2.VideoCapture(self.camera_id)
             
@@ -356,9 +369,15 @@ class WebCamera:
             
             # Add to the _setup_qt_environment method in camera.py
             os.environ["QT_PLUGIN_PATH"] = "/usr/lib/aarch64-linux-gnu/qt5/plugins"  # For Raspberry Pi
-            # If that doesn't work, try one of these paths based on your Qt installation:
-            # os.environ["QT_PLUGIN_PATH"] = "/usr/lib/qt5/plugins"
-            # os.environ["QT_PLUGIN_PATH"] = "/usr/lib/x86_64-linux-gnu/qt5/plugins"
+            
+            # Force single-threaded operation for Qt objects
+            os.environ["QT_THREAD_PRIORITY_POLICY"] = "1"
+            
+            # Reset any lingering OpenCV state
+            cv2.destroyAllWindows()
+            
+            # Sleep to ensure any previous resources are fully released
+            time.sleep(0.5)
             
             logger.info("Qt environment configured")
         except Exception as e:

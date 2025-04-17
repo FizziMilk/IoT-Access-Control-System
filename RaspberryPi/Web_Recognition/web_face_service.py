@@ -277,10 +277,12 @@ class WebFaceService:
     
     def release_camera(self):
         """
-        Release camera resources safely.
+        Release camera resources safely and reset service state.
         """
         try:
             logger.info("Releasing camera resources")
+            
+            # Release camera resources
             if hasattr(self, 'camera') and self.camera:
                 self.camera._release_camera()
             
@@ -288,10 +290,18 @@ class WebFaceService:
             import cv2
             cv2.destroyAllWindows()
             
-            # Reset initialization flag to force proper reinitialization
+            # Reset service state
             self.initialized = False
             
-            logger.info("Camera resources released successfully")
+            # Recreate the camera instance to ensure clean state
+            headless = getattr(self.camera, 'headless', True) if hasattr(self, 'camera') else True
+            self.camera = WebCamera(headless=headless)
+            
+            # Allow time for resources to be fully released
+            import time
+            time.sleep(1.0)
+            
+            logger.info("Camera resources released successfully and service reset")
         except Exception as e:
             logger.error(f"Error releasing camera resources: {e}")
             logger.error(traceback.format_exc()) 

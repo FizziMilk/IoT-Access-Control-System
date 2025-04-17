@@ -95,6 +95,29 @@ def setup_routes(app, door_controller, mqtt_handler, session, backend_url):
     
     @app.route('/')
     def index():
+        """
+        Root route that also ensures any running camera resources are cleaned up
+        """
+        try:
+            # Clean up any OpenCV windows
+            cv2.destroyAllWindows()
+            
+            # Release camera resources 
+            face_service.release_camera()
+            
+            # Extra cleanup to ensure no stray processes
+            import os
+            import signal
+            import subprocess
+            
+            # Kill any stray OpenCV processes that might be hanging
+            try:
+                subprocess.run("pkill -f cv2", shell=True)
+            except:
+                pass
+        except Exception as e:
+            logger.error(f"Error cleaning up resources: {e}")
+        
         return render_template('entry_options.html')
 
     @app.route('/verify', methods=['POST'])
