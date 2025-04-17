@@ -21,6 +21,11 @@ load_dotenv()
 app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", "supersecretkey")
 
+# Set up upload folder for face recognition debug frames
+uploads_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'uploads')
+os.makedirs(uploads_dir, exist_ok=True)
+app.config['UPLOAD_FOLDER'] = uploads_dir
+
 # Check required environment variables
 required_env_vars = ["MQTT_BROKER_URL", "MQTT_PORT", "CA_CERT", "BACKEND_URL"]
 for var in required_env_vars:

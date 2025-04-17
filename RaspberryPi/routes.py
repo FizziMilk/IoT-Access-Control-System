@@ -304,7 +304,18 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
     def face_recognition_feed():
         """Return the latest frame from the face recognition process with detection overlays"""
         try:
-            debug_frame_path = os.path.join(app.config['UPLOAD_FOLDER'], 'debug_frame.jpg')
+            # Make sure the UPLOAD_FOLDER is defined
+            if 'UPLOAD_FOLDER' not in app.config:
+                logger.error("UPLOAD_FOLDER not defined in app configuration")
+                return send_placeholder_image()
+            
+            # Make sure the uploads directory exists
+            upload_folder = app.config['UPLOAD_FOLDER']
+            if not os.path.exists(upload_folder):
+                logger.warning(f"Upload folder does not exist: {upload_folder}, creating it")
+                os.makedirs(upload_folder, exist_ok=True)
+            
+            debug_frame_path = os.path.join(upload_folder, 'debug_frame.jpg')
             
             # If no debug frame exists yet, return a placeholder
             if not os.path.exists(debug_frame_path):
@@ -347,6 +358,18 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
         logger.info(f"Backend API availability: {backend_is_available}")
         
         try:
+            # Check if UPLOAD_FOLDER is configured
+            if 'UPLOAD_FOLDER' not in app.config:
+                logger.error("UPLOAD_FOLDER not configured in app settings")
+                flash("System configuration error. Please contact administrator.", "danger")
+                return redirect(url_for("door_entry"))
+            
+            # Ensure upload folder exists
+            upload_folder = app.config['UPLOAD_FOLDER']
+            if not os.path.exists(upload_folder):
+                logger.warning(f"Upload folder does not exist: {upload_folder}, creating it")
+                os.makedirs(upload_folder, exist_ok=True)
+            
             # Generate a unique output file
             output_dir = '/tmp/face_recognition_results'
             os.makedirs(output_dir, exist_ok=True)
@@ -368,7 +391,7 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                 '--output', output_file,
                 '--debug-frames',
                 '--frames-dir', frames_dir,
-                '--upload-folder', app.config['UPLOAD_FOLDER'],
+                '--upload-folder', upload_folder,
             ]
             
             # Only add backend URL if backend is available
