@@ -13,8 +13,6 @@ import traceback
 import numpy as np
 import uuid
 import subprocess
-from .web_face_service import WebFaceService
-from .door_controller import DoorController
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
