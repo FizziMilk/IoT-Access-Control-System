@@ -304,6 +304,11 @@ def perform_liveness_check(frame, face_locations):
 def load_known_face_encodings(backend_url):
     """Load known face encodings from backend"""
     try:
+        # Check if backend URL is provided
+        if not backend_url:
+            logger.info("No backend URL provided, skipping face encoding retrieval")
+            return [], [], []
+            
         response = requests.get(f"{backend_url}/get-all-encodings")
         if response.status_code == 200:
             data = response.json()
@@ -321,8 +326,12 @@ def load_known_face_encodings(backend_url):
                 known_face_ids.append(face_data['id'])
             
             return known_face_encodings, known_face_names, known_face_ids
+        elif response.status_code == 404:
+            # This might be normal if no faces have been registered yet
+            logger.info(f"No face encodings found (404): {response.status_code}")
+            return [], [], []
         else:
-            logger.error(f"Failed to get encodings: {response.status_code}")
+            logger.warning(f"Failed to get encodings: {response.status_code}")
             return [], [], []
     except Exception as e:
         logger.error(f"Error loading face encodings: {e}")
@@ -426,6 +435,19 @@ def run_face_recognition(output_file, backend_url, max_attempts=100, confidence_
         frame_share_dir = '/tmp/camera_frames'
         os.makedirs(frame_share_dir, exist_ok=True)
         frame_path = os.path.join(frame_share_dir, 'current_frame.jpg')
+        
+        # Create a placeholder frame if none exists to help with initialization
+        if not os.path.exists(frame_path):
+            try:
+                placeholder = np.zeros((480, 640, 3), dtype=np.uint8)
+                cv2.putText(placeholder, "Initializing camera...", (150, 240),
+                          cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+                _, buffer = cv2.imencode('.jpg', placeholder)
+                with open(frame_path, 'wb') as f:
+                    f.write(buffer)
+                logger.info(f"Created placeholder frame at {frame_path}")
+            except Exception as e:
+                logger.error(f"Failed to create placeholder frame: {e}")
         
         # Wait for the first frame to be available
         retries = 0

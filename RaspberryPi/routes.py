@@ -95,6 +95,9 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
     # Set up Qt environment once at startup
     setup_qt_environment()
     
+    # Set up shared camera frames directory
+    prepare_frame_sharing()
+    
     # Flag to track if backend connectivity has been verified
     backend_available = False
     
@@ -752,6 +755,7 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                 camera.set(cv2.CAP_PROP_FPS, 30)
                 # Reduce buffer size to minimize latency
                 camera.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                logger.info("Camera initialized successfully")
             except Exception as e:
                 logger.error(f"Error opening camera: {e}")
                 
@@ -766,6 +770,14 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
             frame_share_dir = '/tmp/camera_frames'
             os.makedirs(frame_share_dir, exist_ok=True)
             shared_frame_path = os.path.join(frame_share_dir, 'current_frame.jpg')
+            
+            # Save placeholder initially
+            try:
+                with open(shared_frame_path, 'wb') as f:
+                    f.write(placeholder_buffer)
+                logger.info(f"Saved initial placeholder to {shared_frame_path}")
+            except Exception as e:
+                logger.error(f"Error saving initial placeholder: {e}")
             
             # Processing flag
             is_processing = False
