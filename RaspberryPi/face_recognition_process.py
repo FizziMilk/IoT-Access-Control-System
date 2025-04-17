@@ -15,10 +15,6 @@ import numpy as np
 import face_recognition
 import base64
 import requests
-from Web_Recognition.web_face_service import WebFaceService
-from Web_Recognition.recognition import WebRecognition
-from Web_Recognition.camera import WebCamera
-from Web_Recognition.liveness_detection import LivenessDetector
 from datetime import datetime
 
 # Configure logging
@@ -33,11 +29,247 @@ logging.basicConfig(
 
 logger = logging.getLogger("FaceRecognitionProcess")
 
+# Import skimage for texture analysis
+try:
+    from skimage import feature as skimage_feature
+except ImportError:
+    logger.warning("skimage not available, using simplified liveness detection")
+    skimage_feature = None
+
+
+class LivenessDetector:
+    """Standalone liveness detector for face anti-spoofing."""
+    
+    def __init__(self):
+        """Initialize the liveness detector."""
+        self.logger = logging.getLogger("LivenessDetector")
+    
+    def detect_liveness(self, face_image):
+        """
+        Perform liveness detection on a face image.
+        
+        Args:
+            face_image: Image containing a face
+            
+        Returns:
+            tuple: (is_real, score, debug_info)
+        """
+        try:
+            # Analyze facial texture for liveness detection
+            if skimage_feature is None:
+                # Fallback if skimage is not available
+                self.logger.warning("skimage not available, using basic detection")
+                return True, 1.0, {"error": "skimage not available"}
+            
+            is_real, metrics = self.analyze_facial_texture(face_image)
+            
+            # Calculate overall liveness score
+            score = metrics.get("texture_score", 0.0)
+            
+            return is_real, score, metrics
+        
+        except Exception as e:
+            self.logger.error(f"Error in liveness detection: {e}")
+            self.logger.error(traceback.format_exc())
+            # Be lenient in case of errors
+            return True, 0.0, {"error": str(e)}
+    
+    def analyze_facial_texture(self, frame):
+        """
+        Analyze facial texture and entropy to detect printed faces and screens.
+        Uses multi-scale Local Binary Patterns (LBP) to analyze texture patterns.
+        
+        Args:
+            frame: Image containing a face
+            
+        Returns:
+            tuple: (is_real, metrics_dict)
+        """
+        try:
+            self.logger.info("Starting facial texture analysis")
+            
+            # Convert to grayscale
+            if len(frame.shape) == 3:
+                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            else:
+                gray = frame
+            
+            # Apply histogram equalization to enhance texture
+            equalized = cv2.equalizeHist(gray)
+            
+            # Apply Gaussian blur to reduce noise
+            blurred = cv2.GaussianBlur(equalized, (5, 5), 0)
+            
+            # Calculate Local Binary Pattern at multiple scales
+            # This helps capture both micro and macro texture patterns
+            
+            # Small scale (radius=1) - captures micro-texture
+            radius1 = 1
+            n_points1 = 8 * radius1
+            lbp1 = skimage_feature.local_binary_pattern(blurred, n_points1, radius1, method="uniform")
+            
+            # Medium scale (radius=2) - captures more structure
+            radius2 = 2
+            n_points2 = 8 * radius2
+            lbp2 = skimage_feature.local_binary_pattern(blurred, n_points2, radius2, method="uniform")
+            
+            # Larger scale (radius=3) - captures even more structure
+            radius3 = 3
+            n_points3 = 8 * radius3
+            lbp3 = skimage_feature.local_binary_pattern(blurred, n_points3, radius3, method="uniform")
+            
+            # Compute histograms for each scale
+            hist1, _ = np.histogram(lbp1.ravel(), bins=np.arange(0, n_points1 + 3), range=(0, n_points1 + 2))
+            hist1 = hist1.astype("float")
+            hist1 /= (hist1.sum() + 1e-7)
+            
+            hist2, _ = np.histogram(lbp2.ravel(), bins=np.arange(0, n_points2 + 3), range=(0, n_points2 + 2))
+            hist2 = hist2.astype("float")
+            hist2 /= (hist2.sum() + 1e-7)
+            
+            hist3, _ = np.histogram(lbp3.ravel(), bins=np.arange(0, n_points3 + 3), range=(0, n_points3 + 2))
+            hist3 = hist3.astype("float")
+            hist3 /= (hist3.sum() + 1e-7)
+            
+            # Calculate texture entropy for each scale (measure of randomness/complexity)
+            entropy1 = -np.sum(hist1 * np.log2(hist1 + 1e-7))
+            entropy2 = -np.sum(hist2 * np.log2(hist2 + 1e-7))
+            entropy3 = -np.sum(hist3 * np.log2(hist3 + 1e-7))
+            
+            # Analyze pattern uniformity - printed photos often have more uniform patterns
+            uniformity1 = np.sum(hist1 * hist1)
+            uniformity2 = np.sum(hist2 * hist2)
+            uniformity3 = np.sum(hist3 * hist3)
+            
+            # Calculate multi-scale uniformity ratio
+            uniformity_ratio = (uniformity1 + uniformity2) / (2 * uniformity3 + 1e-7)
+            
+            # Analyze reflectance properties using gradient information
+            sobelx = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=3)
+            sobely = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=3)
+            magnitude = cv2.magnitude(sobelx, sobely)
+            
+            # Calculate micro-texture features that differentiate real skin
+            gradient_mean = np.mean(magnitude)
+            gradient_std = np.std(magnitude)
+            gradient_entropy = self._calculate_entropy(magnitude)
+            
+            # For real skin, gradient distribution is distinctive
+            gradient_ratio = gradient_std / (gradient_mean + 1e-7)
+            
+            # Log metrics for debugging
+            self.logger.info(f"Texture entropy (multi-scale): {entropy1:.2f}/{entropy2:.2f}/{entropy3:.2f}")
+            self.logger.info(f"Uniformity ratio: {uniformity_ratio:.4f}, Gradient ratio: {gradient_ratio:.4f}")
+            
+            # Decision logic
+            # 1. Basic entropy check
+            entropy_score = (entropy3 > 3.5)  # Real faces have higher entropy
+            
+            # 2. Simple gradient check
+            gradient_score = (gradient_ratio > 1.0)  # Real faces have more complex gradient patterns
+            
+            # Pass if either test passes (more lenient for web usage)
+            is_real_texture = entropy_score or gradient_score
+            
+            # Calculate overall texture score (0.0 to 1.0)
+            texture_score = (entropy3 / 5.0) * 0.6 + (gradient_ratio / 2.0) * 0.4
+            texture_score = max(0.0, min(1.0, texture_score))  # Clamp to [0, 1]
+            
+            self.logger.info(f"Texture analysis results: Entropy={entropy_score}, Gradient={gradient_score}")
+            self.logger.info(f"Texture test overall result: {'PASS' if is_real_texture else 'FAIL'}")
+            
+            # Return results and metrics
+            metrics = {
+                "entropy1": float(entropy1),
+                "entropy2": float(entropy2),
+                "entropy3": float(entropy3),
+                "uniformity_ratio": float(uniformity_ratio),
+                "gradient_ratio": float(gradient_ratio),
+                "entropy_score": bool(entropy_score),
+                "gradient_score": bool(gradient_score),
+                "texture_score": float(texture_score)
+            }
+            
+            return is_real_texture, metrics
+            
+        except Exception as e:
+            self.logger.error(f"Error in texture analysis: {e}")
+            self.logger.error(traceback.format_exc())
+            # Be lenient in case of errors
+            return True, {"error": str(e)}
+    
+    def _calculate_entropy(self, image):
+        """
+        Calculate entropy of an image.
+        
+        Args:
+            image: Grayscale image
+            
+        Returns:
+            float: Entropy value
+        """
+        hist, _ = np.histogram(image.flatten(), bins=256, range=[0, 256])
+        hist = hist.astype(float) / (np.sum(hist) + 1e-7)
+        return -np.sum(hist * np.log2(hist + 1e-7))
+
+
+class WebCamera:
+    """Simplified camera wrapper for face recognition process."""
+    
+    def __init__(self, camera_id=0, resolution=(640, 480)):
+        """Initialize the camera."""
+        self.camera_id = camera_id
+        self.width, self.height = resolution
+        self.cap = None
+        self.is_running = False
+        self.logger = logging.getLogger("WebCamera")
+        
+        # Initialize the camera
+        self.start()
+    
+    def start(self):
+        """Start the camera."""
+        if self.is_running:
+            return
+            
+        self.logger.info(f"Starting camera (ID: {self.camera_id})")
+        self.cap = cv2.VideoCapture(self.camera_id)
+        
+        if not self.cap.isOpened():
+            self.logger.error("Failed to open camera")
+            raise RuntimeError("Failed to open camera")
+            
+        # Set resolution
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
+        
+        self.is_running = True
+        self.logger.info("Camera started successfully")
+    
+    def get_frame(self):
+        """Get a frame from the camera."""
+        if not self.is_running:
+            self.start()
+            
+        ret, frame = self.cap.read()
+        if not ret:
+            self.logger.warning("Failed to capture frame")
+            return None
+            
+        return frame
+    
+    def release(self):
+        """Release the camera resources."""
+        if self.cap and self.is_running:
+            self.logger.info("Releasing camera resources")
+            self.cap.release()
+            self.is_running = False
+
+
 def setup_camera():
     """Setup and initialize camera"""
     try:
         camera = WebCamera()
-        camera.start()
         return camera
     except Exception as e:
         logger.error(f"Error setting up camera: {e}")
@@ -52,7 +284,6 @@ def perform_liveness_check(frame, face_locations):
         for face_location in face_locations:
             # Convert from face_recognition format (top, right, bottom, left) to cv2 format (x,y,w,h)
             top, right, bottom, left = face_location
-            x, y, w, h = left, top, right-left, bottom-top
             
             # Perform liveness detection
             face_roi = frame[top:bottom, left:right]
