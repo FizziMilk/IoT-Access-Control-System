@@ -216,28 +216,60 @@ class WebFaceService:
     
     def decode_face_data(self, face_encoding_b64):
         """
-        Decode base64 face encoding.
+        Decode face encoding from various possible formats.
         
         Args:
-            face_encoding_b64: Base64 encoded face data
-            
+            face_encoding_b64: Face encoding data that could be in different formats:
+                               - A list directly
+                               - Base64 encoded JSON string
+                               - Binary pickled numpy array
+                               
         Returns:
             numpy.ndarray or None: Decoded face encoding
         """
         try:
-            # Check if face_encoding_b64 is already a list
-            if isinstance(face_encoding_b64, list):
+            # Check if face_encoding_b64 is already a list or numpy array
+            if isinstance(face_encoding_b64, (list, np.ndarray)):
                 return np.array(face_encoding_b64)
                 
-            # The encoding is first base64 encoded JSON string
-            # First decode from base64 to string
-            encoding_json = base64.b64decode(face_encoding_b64).decode('utf-8')
-            
-            # Then parse the JSON string to get the list representation
-            encoding_list = json.loads(encoding_json)
-            
-            # Convert to numpy array and return
-            return np.array(encoding_list)
+            # Try to decode as base64
+            try:
+                # First attempt: Try as base64 encoded JSON string
+                decoded_data = base64.b64decode(face_encoding_b64)
+                
+                # Try to decode as UTF-8 string (JSON)
+                try:
+                    encoding_json = decoded_data.decode('utf-8')
+                    encoding_list = json.loads(encoding_json)
+                    return np.array(encoding_list)
+                except UnicodeDecodeError:
+                    # Not a UTF-8 string, could be binary pickled data
+                    logger.info("Face encoding is not UTF-8 encoded JSON, trying alternative decoding")
+                    
+                    # Try to interpret as pickled numpy array
+                    try:
+                        import pickle
+                        encoding_array = pickle.loads(decoded_data)
+                        if isinstance(encoding_array, np.ndarray):
+                            return encoding_array
+                    except:
+                        pass
+                        
+                    # Last resort: try to interpret as raw numpy array data
+                    try:
+                        encoding_array = np.frombuffer(decoded_data, dtype=np.float64)
+                        # Most face recognition models use 128-dimensional face embeddings
+                        if len(encoding_array) == 128:
+                            return encoding_array
+                    except:
+                        pass
+            except:
+                logger.warning("Could not decode as base64")
+                
+            # If we got here, we couldn't decode the data
+            logger.error(f"Unable to decode face encoding data, unknown format")
+            return None
+                
         except Exception as e:
             logger.error(f"Error decoding face data: {e}")
             logger.error(traceback.format_exc())
