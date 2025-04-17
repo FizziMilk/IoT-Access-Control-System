@@ -420,17 +420,19 @@ def save_debug_frame(frame, face_locations, liveness_results, match_names=None, 
         logger.error(traceback.format_exc())
 
 def run_face_recognition(output_file, backend_url, max_attempts=100, confidence_threshold=60, upload_folder=None):
-    """Run the face recognition process"""
+    """Run the face recognition process using frames captured by the web video feed"""
     try:
-        # Try using the same camera source as the video_feed to avoid conflicts
-        if os.name == 'nt':  # Windows
-            camera = WebCamera(camera_id=0, resolution=(640, 480))
-        else:  # Linux/macOS
-            # On Linux/macOS, use a different API to avoid conflicts
-            camera = WebCamera(camera_id=0, resolution=(640, 480))
-            # Set some properties to improve compatibility
-            if camera.cap is not None:
-                camera.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc('M', 'J', 'P', 'G'))
+        # Frame sharing approach - use frames from the video feed instead of opening camera directly
+        frame_share_dir = '/tmp/camera_frames'
+        os.makedirs(frame_share_dir, exist_ok=True)
+        frame_path = os.path.join(frame_share_dir, 'current_frame.jpg')
+        
+        # Wait for the first frame to be available
+        retries = 0
+        while not os.path.exists(frame_path) and retries < 10:
+            logger.info(f"Waiting for shared camera frame ({retries}/10)...")
+            time.sleep(0.5)
+            retries += 1
                 
         # Load known faces from backend
         known_face_encodings, known_face_names, known_face_ids = load_known_face_encodings(backend_url)
@@ -460,12 +462,29 @@ def run_face_recognition(output_file, backend_url, max_attempts=100, confidence_
             save_debug_frame(instruction_frame, [], [], upload_folder=upload_folder)
         
         while attempt_count < max_attempts:
-            # Get frame from camera
-            frame = camera.get_frame()
-            
-            if frame is None:
-                logger.warning("No frame captured, trying again...")
-                time.sleep(0.05)  # Shorter sleep for better responsiveness
+            # Read frame from shared location
+            try:
+                # Check if the file exists and has content
+                if os.path.exists(frame_path) and os.path.getsize(frame_path) > 0:
+                    # Read the frame safely
+                    with open(frame_path, 'rb') as f:
+                        img_data = f.read()
+                    
+                    # Decode the image
+                    img_array = np.frombuffer(img_data, dtype=np.uint8)
+                    frame = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
+                    
+                    if frame is None or frame.size == 0:
+                        logger.warning("Failed to decode shared frame")
+                        time.sleep(0.1)
+                        continue
+                else:
+                    logger.warning("Shared frame not available yet")
+                    time.sleep(0.1)
+                    continue
+            except Exception as e:
+                logger.warning(f"Error reading shared frame: {e}")
+                time.sleep(0.1)
                 continue
             
             # Always save a frame with current status to show progress
@@ -634,9 +653,6 @@ def run_face_recognition(output_file, backend_url, max_attempts=100, confidence_
             cv2.putText(failure_frame, "Please try again", (180, 240),
                       cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
             save_debug_frame(failure_frame, [], [], upload_folder=upload_folder)
-        
-        # Clean up
-        camera.release()
         
         # Write results to output file
         with open(output_file, 'w') as f:

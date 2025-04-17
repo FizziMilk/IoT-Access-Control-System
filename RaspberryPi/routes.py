@@ -1,4 +1,4 @@
-from flask import render_template, request, redirect, url_for, flash, session as flask_session, jsonify, send_file, send_from_directory
+from flask import render_template, request, redirect, url_for, flash, session as flask_session, jsonify, send_file, send_from_directory, Response
 from datetime import datetime
 import time
 from utils import verify_otp_rest
@@ -14,6 +14,7 @@ import numpy as np
 import uuid
 import subprocess
 import io
+import requests
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -115,6 +116,30 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
         except Exception as e:
             logger.warning(f"Backend API connectivity test failed: {e}")
             return False
+    
+    # Function to prepare shared camera frames directory
+    def prepare_frame_sharing():
+        """Set up shared frame directory for face recognition process"""
+        frame_share_dir = '/tmp/camera_frames'
+        os.makedirs(frame_share_dir, exist_ok=True)
+        
+        # Make sure the directory is clean
+        shared_frame_path = os.path.join(frame_share_dir, 'current_frame.jpg')
+        if os.path.exists(shared_frame_path):
+            try:
+                # Write a test frame to check if we can write to the directory
+                test_frame = np.zeros((480, 640, 3), dtype=np.uint8)
+                cv2.putText(test_frame, "Camera initializing", (150, 240),
+                           cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+                _, buffer = cv2.imencode('.jpg', test_frame, [cv2.IMWRITE_JPEG_QUALITY, 95])
+                with open(shared_frame_path, 'wb') as f:
+                    f.write(buffer)
+                logger.info("Frame sharing initialized successfully")
+                return True
+            except Exception as e:
+                logger.error(f"Error initializing frame sharing: {e}")
+                return False
+        return True
     
     # Function to unlock door without using backend API
     def unlock_door_direct(method="Manual Override", user="Local System"):
@@ -276,29 +301,95 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
         # Show the phone entry form
         return render_template("door_entry.html")
     
-    @app.route('/face-recognition', methods=['GET'])
+    @app.route('/face-recognition', methods=['GET', 'POST'])
     def face_recognition():
-        """Display the face recognition page"""
-        logger.info("Face recognition page requested")
+        """Handle face recognition page and process"""
+        # Initialize variables
+        message = ""
+        status = ""
+        show_debug_image = False
         
-        # Clean up any existing OpenCV windows and force camera release
-        try:
-            import cv2
-            cv2.destroyAllWindows()
-            cv2.waitKey(1)
-            
-            # Try to force release camera at OS level
-            import subprocess
-            subprocess.run('sudo fuser -k /dev/video0 2>/dev/null || true', 
-                           shell=True, timeout=2)
-        except Exception as e:
-            logger.error(f"Error cleaning up resources: {e}")
+        # Check the upload directory exists
+        if not os.path.exists(app.config['UPLOAD_FOLDER']):
+            os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
         
-        # Check if testing mode - pass this to the template
-        testing_mode = request.args.get('testing', 'false').lower() == 'true'
+        if request.method == 'POST':
+            try:
+                from RaspberryPi.face_recognition_process import run_face_recognition
+                
+                # Start the face recognition process
+                logger.info("Starting face recognition process")
+                result = run_face_recognition(app.config['UPLOAD_FOLDER'])
+                
+                logger.info(f"Face recognition result: {result}")
+                
+                if result.get('status') == 'success':
+                    # A face was recognized
+                    recognized_name = result.get('name', 'Unknown')
+                    
+                    if recognized_name != 'Unknown':
+                        # Unlock the door for recognized person
+                        door_controller.unlock_door()
+                        message = f"Welcome, {recognized_name}!"
+                        status = "success"
+                        
+                        # Log successful access
+                        if backend_session and backend_url:
+                            try:
+                                backend_session.post(f"{backend_url}/log-door-access", json={
+                                    "user": recognized_name,
+                                    "method": "Face Recognition",
+                                    "status": "Unlocked",
+                                    "details": "Face recognized successfully"
+                                })
+                            except Exception as e:
+                                logger.error(f"Error logging access: {e}")
+                    else:
+                        message = "Face not recognized."
+                        status = "error"
+                        
+                        # Log failed access attempt
+                        if backend_session and backend_url:
+                            try:
+                                backend_session.post(f"{backend_url}/log-door-access", json={
+                                    "user": "Unknown",
+                                    "method": "Face Recognition",
+                                    "status": "Denied",
+                                    "details": "Face not recognized"
+                                })
+                            except Exception as e:
+                                logger.error(f"Error logging access: {e}")
+                else:
+                    # Handle failure
+                    message = result.get('message', 'Face recognition failed')
+                    status = "error"
+                    
+                    # Log failed attempt with reason
+                    if backend_session and backend_url:
+                        try:
+                            backend_session.post(f"{backend_url}/log-door-access", json={
+                                "user": "Unknown",
+                                "method": "Face Recognition",
+                                "status": "Denied",
+                                "details": message
+                            })
+                        except Exception as e:
+                            logger.error(f"Error logging access: {e}")
+            except Exception as e:
+                logger.error(f"Error in face recognition: {e}")
+                traceback.print_exc()
+                message = f"Error: {str(e)}"
+                status = "error"
         
-        # Return the template
-        return render_template("face_recognition.html", testing_mode=testing_mode)
+        # Check if debug image was saved
+        debug_img_path = os.path.join(app.config['UPLOAD_FOLDER'], 'debug_frame.jpg')
+        if os.path.exists(debug_img_path):
+            show_debug_image = True
+        
+        return render_template('face_recognition.html', 
+                              message=message, 
+                              status=status,
+                              show_debug_image=show_debug_image)
     
     @app.route('/face-recognition-feed')
     def face_recognition_feed():
@@ -669,6 +760,11 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
             _, placeholder_buffer = cv2.imencode('.jpg', placeholder, [cv2.IMWRITE_JPEG_QUALITY, 90])
             placeholder_bytes = placeholder_buffer.tobytes()
             
+            # Set up shared frame directory for face recognition process
+            frame_share_dir = '/tmp/camera_frames'
+            os.makedirs(frame_share_dir, exist_ok=True)
+            shared_frame_path = os.path.join(frame_share_dir, 'current_frame.jpg')
+            
             # Processing flag
             is_processing = False
             
@@ -697,6 +793,16 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                                b'Content-Type: image/jpeg\r\n\r\n' + placeholder_bytes + b'\r\n')
                         time.sleep(0.1)
                         continue
+                    
+                    # Save the frame for face recognition process to use
+                    try:
+                        # Encode the frame with high quality
+                        _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 95])
+                        # Save to shared location
+                        with open(shared_frame_path, 'wb') as f:
+                            f.write(buffer)
+                    except Exception as e:
+                        logger.warning(f"Error saving shared frame: {e}")
                     
                     # Check if facial recognition is in progress
                     if 'UPLOAD_FOLDER' in app.config:
@@ -758,5 +864,9 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
             generate_frames(),
             mimetype='multipart/x-mixed-replace; boundary=frame'
         )
+
+    @app.context_processor
+    def utility_processor():
+        return dict(time=time.time)
 
     return app 
