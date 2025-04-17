@@ -152,7 +152,7 @@ def perform_liveness_check(frame):
 
 def load_known_faces(backend_url):
     """
-    Load known face encodings from backend
+    Load known face encodings from backend using the available get-face-data endpoint
     
     Args:
         backend_url: Backend API URL
@@ -168,11 +168,12 @@ def load_known_faces(backend_url):
         # Create a session for API calls
         session = requests.Session()
         
-        # Request face data from backend
+        # Request face data from backend using the available endpoint
         response = session.get(f"{backend_url}/get-face-data")
         
         if response.status_code != 200:
             logger.warning(f"Backend returned non-200 status: {response.status_code}")
+            logger.warning(f"Response content: {response.text[:500]}")
             return [], []
             
         data = response.json()
@@ -200,14 +201,29 @@ def load_known_faces(backend_url):
             try:
                 # First attempt: Try as base64 encoded JSON string
                 decoded_data = base64.b64decode(face_encoding_b64)
-                encoding_json = decoded_data.decode('utf-8')
-                encoding_list = json.loads(encoding_json)
-                encoding = np.array(encoding_list)
+                
+                # Try various decoding approaches
+                try:
+                    # Try as JSON string
+                    encoding_json = decoded_data.decode('utf-8')
+                    encoding_list = json.loads(encoding_json)
+                    encoding = np.array(encoding_list)
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    # Binary data, try to interpret directly
+                    try:
+                        # If this is raw binary face data, interpret it
+                        import pickle
+                        encoding = pickle.loads(decoded_data)
+                    except:
+                        # Try to interpret as raw numpy array data
+                        encoding = np.frombuffer(decoded_data, dtype=np.float64)
                 
                 if len(encoding) == 128:  # Typical face encoding length
                     encodings.append(encoding)
                     names.append(phone_number)
                     logger.info(f"Decoded face encoding for {phone_number}")
+                else:
+                    logger.warning(f"Invalid encoding length: {len(encoding)} for {phone_number}")
             except Exception as e:
                 logger.error(f"Error decoding face encoding for {phone_number}: {e}")
                 logger.error(traceback.format_exc())
@@ -327,6 +343,11 @@ def main():
             encodings, names = load_known_faces(args.backend_url)
             if encodings:
                 recognition.load_encodings(encodings, names)
+                logger.info(f"Recognition running with {len(encodings)} known faces")
+            else:
+                logger.warning("No face encodings loaded from backend, running in detection-only mode")
+        else:
+            logger.warning("No backend URL provided, running in detection-only mode (no face matching)")
         
         # Initialize camera
         camera = setup_camera()

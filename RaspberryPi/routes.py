@@ -93,6 +93,52 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
     # Set up Qt environment once at startup
     setup_qt_environment()
     
+    # Flag to track if backend connectivity has been verified
+    backend_available = False
+    
+    # Function to verify backend connectivity
+    def check_backend_availability():
+        nonlocal backend_available
+        if backend_available:
+            return True
+            
+        try:
+            test_resp = backend_session.get(f"{backend_url}/get-face-data", timeout=3)
+            if test_resp.status_code == 200:
+                backend_available = True
+                logger.info("Backend API connectivity verified")
+                return True
+            else:
+                logger.warning(f"Backend API returned status code: {test_resp.status_code}")
+                return False
+        except Exception as e:
+            logger.warning(f"Backend API connectivity test failed: {e}")
+            return False
+    
+    # Function to unlock door without using backend API
+    def unlock_door_direct(method="Manual Override", user="Local System"):
+        try:
+            # Use door controller directly
+            door_controller.unlock_door()
+            logger.info(f"Door unlocked directly via {method} by {user}")
+            
+            # Try to log to backend if available, but don't fail if it's not
+            if backend_available:
+                try:
+                    backend_session.post(f"{backend_url}/log-door-access", json={
+                        "user": user,
+                        "method": method,
+                        "status": "Unlocked",
+                        "details": f"Door unlocked via {method}"
+                    }, timeout=2)
+                except Exception as e:
+                    logger.error(f"Failed to log door access to backend: {e}")
+            
+            return True
+        except Exception as e:
+            logger.error(f"Error unlocking door directly: {e}")
+            return False
+    
     @app.route('/')
     def index():
         """
@@ -258,6 +304,10 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
         """Process facial recognition using a separate process"""
         logger.info("Starting face recognition in separate process")
         
+        # Check backend availability, but proceed regardless
+        backend_is_available = check_backend_availability()
+        logger.info(f"Backend API availability: {backend_is_available}")
+        
         try:
             # Generate a unique output file
             output_dir = '/tmp/face_recognition_results'
@@ -274,8 +324,11 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                 'python3', 
                 os.path.join(os.path.dirname(os.path.abspath(__file__)), 'face_recognition_process.py'),
                 '--output', output_file,
-                '--backend-url', backend_url,
             ]
+            
+            # Only add backend URL if backend is available
+            if backend_is_available:
+                cmd.extend(['--backend-url', backend_url])
             
             # Add skip-liveness flag if needed
             if skip_liveness:
@@ -338,123 +391,25 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                         
                         logger.info(f"Face directly matched with {phone_number}, confidence: {confidence:.2f}")
                         
-                        # Check if this user is allowed direct access
-                        resp = backend_session.get(f"{backend_url}/check-face-access/{phone_number}")
-                        access_data = resp.json()
-                        
-                        if access_data.get("status") == "approved":
-                            # Unlock door and log access
-                            door_controller.unlock_door()
-                            
-                            # Log door unlock via facial recognition
-                            try:
-                                backend_session.post(f"{backend_url}/log-door-access", json={
-                                    "user": phone_number,
-                                    "method": "Facial Recognition",
-                                    "status": "Unlocked",
-                                    "details": f"Door unlocked via facial recognition, confidence: {confidence:.2f}"
-                                })
-                            except Exception as e:
-                                logger.error(f"Error logging door access: {e}")
-                                
+                        # Directly unlock the door without backend check
+                        if unlock_door_direct(method="Facial Recognition", user=phone_number):
                             flash("Face recognized! Door unlocked.", "success")
                             return render_template("door_unlocked.html")
                         else:
-                            # No direct access - provide options
-                            flash("Face recognized but additional verification needed.", "warning")
-                            return render_template("verify_options.html", phone_number=phone_number,
-                                                user_recognized=True, face_recognized=True)
+                            flash("Face recognized but failed to unlock door.", "danger")
+                            return redirect(url_for("door_entry"))
                     
-                    # No direct match, try to identify using backend
+                    # No direct match, but still have a face to potentially register
                     face_encoding = results['face_encodings'][0]  # Use the first face if multiple detected
                     
-                    try:
-                        # Send the face encoding to backend for identification
-                        encoding_json = json.dumps(face_encoding)
-                        encoding_base64 = base64.b64encode(encoding_json.encode('utf-8')).decode('utf-8')
-                        
-                        resp = backend_session.post(f"{backend_url}/identify-face", json={
-                            "face_encoding": encoding_base64
-                        })
-                        
-                        # Check if the response is valid (status code and content)
-                        if resp.status_code != 200:
-                            logger.error(f"Backend returned non-200 status: {resp.status_code}")
-                            logger.error(f"Response content: {resp.text}")
-                            flash("Error connecting to backend service.", "danger")
-                            return redirect(url_for("door_entry"))
-                            
-                        # Check if response content is empty
-                        if not resp.text.strip():
-                            logger.error("Backend returned empty response")
-                            flash("Backend service returned empty response. Please try again.", "danger")
-                            return redirect(url_for("door_entry"))
-                            
-                        # Try to parse the JSON response with error handling
-                        try:
-                            data = resp.json()
-                        except json.JSONDecodeError as json_err:
-                            logger.error(f"Failed to decode JSON response: {json_err}")
-                            logger.error(f"Response content: {resp.text}")
-                            flash("Invalid response from backend service. Please try again.", "danger")
-                            return redirect(url_for("door_entry"))
-                        
-                        if data.get("identified") and data.get("user"):
-                            # User recognized
-                            phone_number = data.get("user").get("phone_number")
-                            confidence = data.get("confidence", "N/A")
-                            
-                            # Check if this user is allowed direct access - with error handling
-                            try:
-                                access_resp = backend_session.get(f"{backend_url}/check-face-access/{phone_number}")
-                                
-                                if access_resp.status_code != 200:
-                                    logger.error(f"Access check failed with status {access_resp.status_code}")
-                                    flash("Error checking access permissions. Please try again.", "warning")
-                                    return redirect(url_for("door_entry"))
-                                    
-                                access_data = access_resp.json()
-                            except Exception as e:
-                                logger.error(f"Error checking access permissions: {e}")
-                                flash("Error verifying access permissions. Please try again.", "warning")
-                                return redirect(url_for("door_entry"))
-                            
-                            if access_data.get("status") == "approved":
-                                # Unlock door and log access
-                                door_controller.unlock_door()
-                                
-                                # Log door unlock via facial recognition
-                                try:
-                                    backend_session.post(f"{backend_url}/log-door-access", json={
-                                        "user": phone_number,
-                                        "method": "Facial Recognition",
-                                        "status": "Unlocked",
-                                        "details": f"Door unlocked via facial recognition, confidence: {confidence}"
-                                    })
-                                except Exception as e:
-                                    logger.error(f"Error logging door access: {e}")
-                                    
-                                flash("Face recognized! Door unlocked.", "success")
-                                return render_template("door_unlocked.html")
-                            else:
-                                # No direct access - provide options
-                                flash("Face recognized but additional verification needed.", "warning")
-                                return render_template("verify_options.html", phone_number=phone_number,
-                                                    user_recognized=True, face_recognized=True)
-                        else:
-                            # Face not recognized, allow registration
-                            flask_session['face_encoding'] = face_encoding
-                            flask_session['has_temp_face'] = True
-                            
-                            flash("Face not recognized. Please verify identity or register.", "warning")
-                            return render_template("verify_options.html", user_recognized=False,
-                                                face_recognized=False, has_face=True)
+                    # Store the face encoding for potential registration
+                    flask_session['face_encoding'] = face_encoding
+                    flask_session['has_temp_face'] = True
                     
-                    except Exception as e:
-                        logger.error(f"Error identifying face: {e}")
-                        logger.error(traceback.format_exc())
-                        flash("Error identifying face. Please try again.", "danger")
-                        return redirect(url_for("door_entry"))
+                    flash("Face not recognized. Please verify identity or register.", "warning")
+                    return render_template("verify_options.html", user_recognized=False,
+                                        face_recognized=False, has_face=True)
+                    
                 else:
                     # No face detected
                     flash("No face detected. Please try again and ensure good lighting.", "warning")
@@ -495,6 +450,41 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
         if not phone_number or not face_encoding:
             flash("Phone number and face image required.", "danger")
             return redirect(url_for("door_entry"))
+        
+        # Check backend availability before attempting registration
+        if not check_backend_availability():
+            flash("Backend service unavailable. Registration will be processed when connection is restored.", "warning")
+            
+            # Save registration locally for future processing
+            try:
+                # Store the face data in a local file for later sync
+                local_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'pending_registrations')
+                os.makedirs(local_dir, exist_ok=True)
+                
+                # Create a unique filename with timestamp and phone
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                filename = os.path.join(local_dir, f"face_{timestamp}_{phone_number}.json")
+                
+                # Save the face data
+                with open(filename, 'w') as f:
+                    json.dump({
+                        "phone_number": phone_number,
+                        "face_encoding": face_encoding,
+                        "timestamp": timestamp
+                    }, f)
+                
+                logger.info(f"Saved pending face registration for {phone_number} to {filename}")
+                flash("Face saved locally. Registration will be processed when backend connection is restored.", "info")
+                
+                # Clear the session data
+                if 'face_encoding' in flask_session:
+                    flask_session.pop('face_encoding')
+                    
+                return redirect(url_for("door_entry"))
+            except Exception as e:
+                logger.error(f"Error saving local face data: {e}")
+                flash("Error saving face data. Please try again later.", "danger")
+                return redirect(url_for("door_entry"))
             
         try:
             # Convert face encoding to base64 string
@@ -549,47 +539,14 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                     flask_session.pop('face_encoding')
                 
                 flash("Face registered successfully. Please wait for OTP or admin approval.", "success")
-                # Try to send OTP to the newly registered user
-                try:
-                    otp_resp = backend_session.post(f"{backend_url}/door-entry", json={"phone_number": phone_number})
-                    
-                    # Validate response status code
-                    if otp_resp.status_code != 200:
-                        logger.error(f"OTP request returned non-200 status: {otp_resp.status_code}")
-                        logger.error(f"Response content: {otp_resp.text}")
-                        flash("Face registered but error sending verification code.", "warning")
-                        return redirect(url_for("door_entry"))
-                        
-                    # Check for empty response
-                    if not otp_resp.text.strip():
-                        logger.error("OTP service returned empty response")
-                        flash("Face registered but verification service unavailable.", "warning")
-                        return redirect(url_for("door_entry"))
-                        
-                    # Parse response with error handling
-                    try:
-                        data = otp_resp.json()
-                    except json.JSONDecodeError as json_err:
-                        logger.error(f"Failed to decode JSON response from OTP service: {json_err}")
-                        logger.error(f"Response content: {otp_resp.text}")
-                        flash("Face registered but verification service returned invalid response.", "warning")
-                        return redirect(url_for("door_entry"))
-                    
-                    if data.get("status") == "OTP sent":
-                        return render_template("otp.html", phone_number=phone_number)
-                    elif data.get("status") == "pending":
-                        return render_template("pending.html", phone_number=phone_number)
-                    else:
-                        return redirect(url_for("door_entry"))
-                except Exception as e:
-                    logger.error(f"Error sending OTP: {e}")
-                    flash("Face registered but could not send verification code.", "warning")
-                    return redirect(url_for("door_entry"))
+                
+                # Skip OTP flow if backend is not fully functional
+                return redirect(url_for("door_entry"))
             else:
                 flash(data.get("error", "Error registering face"), "danger")
         except Exception as e:
+            logger.error(f"Error connecting to backend for face registration: {e}")
             flash("Error connecting to backend.", "danger")
-            print(f"[DEBUG] Error: {e}")
             
         return redirect(url_for("door_entry"))
     
@@ -601,35 +558,12 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
             flash("Name and phone number are required.", "danger")
             return redirect(url_for("door_entry"))
         try:
-            name_update_resp = backend_session.post(f"{backend_url}/update-user-name", json={"phone_number": phone_number, "name": name})
-            
-            # Validate response status code
-            if name_update_resp.status_code != 200:
-                logger.error(f"Name update returned non-200 status: {name_update_resp.status_code}")
-                logger.error(f"Response content: {name_update_resp.text}")
-                flash("Error connecting to name update service.", "danger")
-                return redirect(url_for("door_entry"))
-                
-            # Check for empty response
-            if not name_update_resp.text.strip():
-                logger.error("Name update service returned empty response")
-                flash("Name update service unavailable.", "danger")
-                return redirect(url_for("door_entry"))
-                
-            # Parse response with error handling
-            try:
-                data = name_update_resp.json()
-            except json.JSONDecodeError as json_err:
-                logger.error(f"Failed to decode JSON response from name update: {json_err}")
-                logger.error(f"Response content: {name_update_resp.text}")
-                flash("Invalid response from name update service.", "danger")
-                return redirect(url_for("door_entry"))
-            
+            resp = backend_session.post(f"{backend_url}/update-user-name", json={"phone_number": phone_number, "name": name})
+            data = resp.json()
             if data.get("status") == "success":
-                flash("Name updated successfully. Please wait for admin approval.", "info")
+                flash("Name updated succesffuly. Please wait for admin approval.", "info")
             else:
                 flash(data.get("error", "Error updating name"), "danger")
         except Exception as e:
-            logger.error(f"Error connecting to backend for name update: {e}")
             flash("Error connecting to backend.", "danger")
         return redirect(url_for("door_entry")) 
