@@ -328,7 +328,7 @@ def load_known_face_encodings(backend_url):
         logger.error(f"Error loading face encodings: {e}")
         return [], [], []
 
-def save_debug_frame(frame, face_locations, liveness_results, match_names=None):
+def save_debug_frame(frame, face_locations, liveness_results, match_names=None, upload_folder=None):
     """Save a debug frame with detection visualizations"""
     try:
         debug_frame = frame.copy()
@@ -363,17 +363,33 @@ def save_debug_frame(frame, face_locations, liveness_results, match_names=None):
                 cv2.putText(debug_frame, name_text, (left, bottom + 20),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
         
-        # Save the frame
-        upload_folder = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'uploads')
-        if not os.path.exists(upload_folder):
-            os.makedirs(upload_folder)
+        # If no upload folder specified, use a default
+        if not upload_folder:
+            # Try to get the upload folder from command line arguments
+            parser = argparse.ArgumentParser()
+            parser.add_argument('--upload-folder', help='Flask upload folder for debug frames')
+            args, _ = parser.parse_known_args()
+            
+            if args.upload_folder:
+                upload_folder = args.upload_folder
+            else:
+                # Fall back to default location
+                upload_folder = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'uploads')
         
+        # Ensure upload folder exists
+        if not os.path.exists(upload_folder):
+            os.makedirs(upload_folder, exist_ok=True)
+            logger.info(f"Created debug frame directory: {upload_folder}")
+        
+        # Save the frame
         debug_frame_path = os.path.join(upload_folder, 'debug_frame.jpg')
         cv2.imwrite(debug_frame_path, debug_frame)
+        logger.info(f"Saved debug frame to {debug_frame_path}")
     except Exception as e:
         logger.error(f"Error saving debug frame: {e}")
+        logger.error(traceback.format_exc())
 
-def run_face_recognition(output_file, backend_url, max_attempts=100, confidence_threshold=60):
+def run_face_recognition(output_file, backend_url, max_attempts=100, confidence_threshold=60, upload_folder=None):
     """Run the face recognition process"""
     try:
         camera = setup_camera()
@@ -405,7 +421,7 @@ def run_face_recognition(output_file, backend_url, max_attempts=100, confidence_
             # No faces detected
             if not face_locations:
                 logger.info("No faces detected in frame")
-                save_debug_frame(frame, [], [])  # Save empty frame
+                save_debug_frame(frame, [], [], upload_folder=upload_folder)  # Save empty frame
                 time.sleep(0.1)
                 attempt_count += 1
                 continue
@@ -419,7 +435,7 @@ def run_face_recognition(output_file, backend_url, max_attempts=100, confidence_
             # If no real faces, continue to next frame
             if not real_faces:
                 logger.info("No real faces detected, possible spoofing attempt")
-                save_debug_frame(frame, face_locations, liveness_results)  # Save frame with fake faces
+                save_debug_frame(frame, face_locations, liveness_results, upload_folder=upload_folder)  # Save frame with fake faces
                 time.sleep(0.1)
                 attempt_count += 1
                 continue
@@ -463,7 +479,7 @@ def run_face_recognition(output_file, backend_url, max_attempts=100, confidence_
                             })
             
             # Save frame with detection results
-            save_debug_frame(frame, face_locations, liveness_results, match_names)
+            save_debug_frame(frame, face_locations, liveness_results, match_names, upload_folder=upload_folder)
             
             # If we found a match, exit the loop
             if matched_ids:
@@ -537,169 +553,19 @@ def main():
         upload_folder = args.upload_folder
         os.makedirs(upload_folder, exist_ok=True)
         logger.info(f"Web debug enabled, frames will be saved to {upload_folder}")
-        
-    camera = None
-    result = {
-        'success': False,
-        'error': None,
-        'face_detected': False,
-        'is_live': False
-    }
     
-    try:
-        logger.info(f"Starting face recognition process. Output will be saved to {args.output}")
-        
-        # Initialize recognition system
-        recognition = WebRecognition()
-        
-        # Load known faces if backend URL provided
-        if args.backend_url:
-            logger.info(f"Loading known faces from backend: {args.backend_url}")
-            encodings, names, ids = load_known_face_encodings(args.backend_url)
-            if encodings:
-                recognition.load_encodings(encodings, names)
-                logger.info(f"Recognition running with {len(encodings)} known faces")
-            else:
-                logger.warning("No face encodings loaded from backend, running in detection-only mode")
-        else:
-            logger.warning("No backend URL provided, running in detection-only mode (no face matching)")
-        
-        # Initialize camera
-        camera = setup_camera()
-        if not camera:
-            result['error'] = "Failed to initialize camera"
-            write_results(args.output, result)
-            return 1
-            
-        # Give the camera time to warm up
-        time.sleep(0.5)
-        
-        # Capture and analyze multiple frames for reliability
-        max_attempts = 15
-        start_time = time.time()
-        
-        for i in range(max_attempts):
-            # Check timeout
-            if time.time() - start_time > args.timeout:
-                logger.warning(f"Recognition timed out after {args.timeout} seconds")
-                result['error'] = f"Timeout after {args.timeout} seconds"
-                break
-                
-            logger.info(f"Capturing frame {i+1}/{max_attempts}")
-            frame_result = run_face_recognition(
-                args.output,
-                args.backend_url,
-                max_attempts=max_attempts,
-                confidence_threshold=60
-            )
-            
-            if frame_result:
-                # If we found a face, update our result
-                result['face_detected'] = True
-                result['face_locations'] = face_recognition.face_locations(cv2.cvtColor(camera.get_frame(), cv2.COLOR_BGR2RGB))
-                
-                # If we have encodings and liveness check passed (or skipped)
-                if result['face_encodings'] and (result['is_live'] or args.skip_liveness):
-                    result['face_encodings'] = result['face_encodings']
-                    result['is_live'] = True if args.skip_liveness else result['is_live']
-                    result['liveness_metrics'] = result.get('liveness_metrics', {})
-                    
-                    # If we found a match
-                    if result.get('match'):
-                        result['match'] = result['match']
-                        logger.info(f"Face matched with {result['match']['name']}")
-                        
-                    result['success'] = True
-                    logger.info("Face detected and encoded successfully")
-                    break
-                elif result['face_encodings'] and not result['is_live']:
-                    # Face detected but failed liveness check
-                    logger.warning("Face detected but failed liveness check")
-                    result['is_live'] = False
-                    result['liveness_metrics'] = result.get('liveness_metrics', {})
-                    
-                    # Continue trying for a better frame
-                    time.sleep(0.2)
-                else:
-                    # Face detected but no encodings
-                    time.sleep(0.2)
-            else:
-                # Error in processing this frame
-                logger.warning(f"Error in frame {i+1}: {result.get('error')}")
-                time.sleep(0.2)
-        
-        # If we went through all attempts without a successful recognition
-        if not result.get('success'):
-            # If we at least found a face
-            if result['face_detected']:
-                if not result.get('is_live'):
-                    result['error'] = "Face failed liveness detection"
-                elif not result.get('face_encodings'):
-                    result['error'] = "Could not generate face encoding"
-                else:
-                    result['error'] = "Face detected but not recognized"
-                    result['success'] = True  # Consider it a success even if not recognized
-            else:
-                result['error'] = "No face detected after multiple attempts"
+    # Run the face recognition process    
+    logger.info(f"Starting face recognition process. Output will be saved to {args.output}")
     
-    except Exception as e:
-        logger.error(f"Unhandled exception: {str(e)}")
-        logger.error(traceback.format_exc())
-        result['error'] = f"Unhandled exception: {str(e)}"
+    # Run face recognition directly
+    success = run_face_recognition(
+        args.output,
+        args.backend_url,
+        max_attempts=int(args.timeout * 2),  # Set max attempts based on timeout
+        upload_folder=upload_folder
+    )
     
-    finally:
-        # Clean up
-        if camera:
-            camera.release()
-        cv2.destroyAllWindows()
-        
-        # Save results
-        write_results(args.output, result)
-            
-    return 0 if result.get('success', False) else 1
-
-def write_results(output_file, results):
-    """Write results to the output file"""
-    try:
-        # Ensure directory exists
-        os.makedirs(os.path.dirname(os.path.abspath(output_file)), exist_ok=True)
-        
-        # Make sure all values are JSON serializable
-        def convert_to_serializable(obj):
-            if isinstance(obj, np.ndarray):
-                return obj.tolist()
-            elif isinstance(obj, np.generic):
-                return obj.item()  # Convert numpy scalars to Python types
-            elif isinstance(obj, (bool, int, float, str, list, dict, tuple, type(None))):
-                return obj
-            else:
-                return str(obj)  # Convert any other types to strings
-        
-        # Convert all values in the results dict
-        serializable_results = {}
-        for key, value in results.items():
-            if isinstance(value, dict):
-                # Handle nested dictionaries
-                serializable_results[key] = {k: convert_to_serializable(v) for k, v in value.items()}
-            else:
-                serializable_results[key] = convert_to_serializable(value)
-        
-        # Write to output file using the serializable results
-        with open(output_file, 'w') as f:
-            json.dump(serializable_results, f)
-        
-        logger.info(f"Results written to {output_file}")
-    except Exception as e:
-        logger.error(f"Error writing results: {e}")
-        logger.error(traceback.format_exc())
-        
-        # Emergency fallback - write a simple valid JSON with the error
-        try:
-            with open(output_file, 'w') as f:
-                json.dump({"success": False, "error": f"JSON serialization error: {str(e)}"}, f)
-            logger.info(f"Fallback results written to {output_file}")
-        except Exception as e2:
-            logger.error(f"Fallback writing also failed: {e2}")
+    return 0 if success else 1
 
 if __name__ == "__main__":
     sys.exit(main()) 
