@@ -1,4 +1,4 @@
-from flask import render_template, request, redirect, url_for, flash, session as flask_session, jsonify
+from flask import render_template, request, redirect, url_for, flash, session as flask_session, jsonify, send_file, send_from_directory
 from datetime import datetime
 import time
 from utils import verify_otp_rest
@@ -13,6 +13,7 @@ import traceback
 import numpy as np
 import uuid
 import subprocess
+import io
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -299,6 +300,43 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
         # Return the template
         return render_template("face_recognition.html", testing_mode=testing_mode)
     
+    @app.route('/face-recognition-feed')
+    def face_recognition_feed():
+        """Return the latest frame from the face recognition process with detection overlays"""
+        try:
+            debug_frame_path = os.path.join(app.config['UPLOAD_FOLDER'], 'debug_frame.jpg')
+            
+            # If no debug frame exists yet, return a placeholder
+            if not os.path.exists(debug_frame_path):
+                return send_placeholder_image()
+            
+            # Return the latest frame
+            return send_file(debug_frame_path, mimetype='image/jpeg', cache_timeout=0)
+        except Exception as e:
+            app.logger.error(f"Error serving face recognition feed: {str(e)}")
+            return send_placeholder_image()
+    
+    def send_placeholder_image():
+        """Create and send a placeholder image when no frame is available"""
+        # Create a blank image with text
+        import cv2
+        import numpy as np
+        import io
+        
+        # Create a blank image with text
+        img = np.zeros((480, 640, 3), dtype=np.uint8)
+        cv2.putText(img, "Waiting for camera...", (150, 240),
+                   cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+        
+        # Convert to JPEG
+        _, buffer = cv2.imencode('.jpg', img)
+        
+        # Convert to bytes and create a file-like object
+        io_buf = io.BytesIO(buffer)
+        io_buf.seek(0)
+        
+        return send_file(io_buf, mimetype='image/jpeg')
+        
     @app.route('/process-face', methods=['POST'])
     def process_face():
         """Process facial recognition using a separate process"""
@@ -319,11 +357,18 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
             if skip_liveness:
                 logger.warning("Skipping liveness detection - TESTING MODE ONLY")
             
+            # Set up frames directory for debug display
+            frames_dir = '/tmp/face_recognition_frames'
+            os.makedirs(frames_dir, exist_ok=True)
+            
             # Build the command
             cmd = [
                 'python3', 
                 os.path.join(os.path.dirname(os.path.abspath(__file__)), 'face_recognition_process.py'),
                 '--output', output_file,
+                '--debug-frames',
+                '--frames-dir', frames_dir,
+                '--upload-folder', app.config['UPLOAD_FOLDER'],
             ]
             
             # Only add backend URL if backend is available
@@ -566,4 +611,20 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                 flash(data.get("error", "Error updating name"), "danger")
         except Exception as e:
             flash("Error connecting to backend.", "danger")
-        return redirect(url_for("door_entry")) 
+        return redirect(url_for("door_entry"))
+
+    @app.route('/upload/<filename>')
+    def uploaded_file(filename):
+        return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
+
+    @app.route('/video_feed')
+    def video_feed():
+        """Serve the latest debug frame for streaming"""
+        latest_frame_path = os.path.join(app.config['UPLOAD_FOLDER'], 'latest_frame.jpg')
+        if os.path.exists(latest_frame_path):
+            return send_file(latest_frame_path, mimetype='image/jpeg')
+        else:
+            return send_file(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static', 'placeholder.jpg'), 
+                            mimetype='image/jpeg')
+
+    return app 
