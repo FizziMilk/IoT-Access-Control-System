@@ -299,12 +299,12 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
     
     def add_visualization_overlays(frame, face_locations, ear_values=None):
         """
-        Add visualization overlays to the frame showing face boxes and EAR values
+        Add visualization overlays to the frame showing face boxes and eye contours
         
         Args:
             frame: The video frame to add overlays to
             face_locations: List of face location tuples (top, right, bottom, left)
-            ear_values: Optional dict with left_ear and right_ear values
+            ear_values: Optional dict with left_ear and right_ear values and landmarks
             
         Returns:
             The frame with overlays added
@@ -320,35 +320,45 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                 # Draw face bounding box
                 cv2.rectangle(vis_frame, (left, top), (right, bottom), (0, 255, 0), 2)
         
-        # Add EAR values if available
+        # Add eye contours if available
         if ear_values and isinstance(ear_values, dict):
-            left_ear = ear_values.get('left_ear', 0)
-            right_ear = ear_values.get('right_ear', 0)
-            avg_ear = ear_values.get('avg_ear', 0)
+            # Get blink status
             blink_detected = ear_values.get('blink_detected', False)
             
-            # Position for the EAR text (top-left corner)
-            ear_text_pos_y = 30
+            # Set the color for eye contours based on blink detection
+            # Red if blink detected, green otherwise
+            eye_color = (0, 0, 255) if blink_detected else (0, 255, 0)
             
-            # Add EAR values to the frame
-            cv2.putText(vis_frame, f"Left EAR: {left_ear:.2f}", 
-                       (10, ear_text_pos_y), cv2.FONT_HERSHEY_SIMPLEX, 
-                       0.6, (0, 255, 0), 2)
+            # Check if we have eye landmarks
+            left_eye_landmarks = ear_values.get('left_eye_landmarks', [])
+            right_eye_landmarks = ear_values.get('right_eye_landmarks', [])
             
-            cv2.putText(vis_frame, f"Right EAR: {right_ear:.2f}", 
-                       (10, ear_text_pos_y + 30), cv2.FONT_HERSHEY_SIMPLEX, 
-                       0.6, (0, 255, 0), 2)
+            # Draw eye contours if we have landmarks
+            if left_eye_landmarks:
+                # Convert landmarks to points
+                points = [(int(x), int(y)) for x, y in left_eye_landmarks]
+                # Draw the eye contour
+                for i in range(len(points)):
+                    pt1 = points[i]
+                    pt2 = points[(i + 1) % len(points)]
+                    cv2.line(vis_frame, pt1, pt2, eye_color, 2)
             
-            cv2.putText(vis_frame, f"Avg EAR: {avg_ear:.2f}", 
-                       (10, ear_text_pos_y + 60), cv2.FONT_HERSHEY_SIMPLEX, 
-                       0.6, (0, 255, 0), 2)
+            if right_eye_landmarks:
+                # Convert landmarks to points
+                points = [(int(x), int(y)) for x, y in right_eye_landmarks]
+                # Draw the eye contour
+                for i in range(len(points)):
+                    pt1 = points[i]
+                    pt2 = points[(i + 1) % len(points)]
+                    cv2.line(vis_frame, pt1, pt2, eye_color, 2)
             
-            # Show blink detection status
-            blink_color = (0, 255, 0) if blink_detected else (0, 0, 255)
-            blink_text = "BLINK DETECTED" if blink_detected else "NO BLINK"
-            cv2.putText(vis_frame, blink_text, 
-                       (10, ear_text_pos_y + 90), cv2.FONT_HERSHEY_SIMPLEX, 
-                       0.6, blink_color, 2)
+            # If we don't have detailed landmarks, draw a blink status indicator
+            if not left_eye_landmarks and not right_eye_landmarks:
+                blink_text = "BLINK DETECTED" if blink_detected else "LOOKING FOR EYES"
+                blink_color = (0, 0, 255) if blink_detected else (0, 255, 0)
+                cv2.putText(vis_frame, blink_text, 
+                           (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 
+                           0.6, blink_color, 2)
         
         return vis_frame
     
@@ -966,23 +976,47 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
         try:
             # Check if upload folder exists
             if 'UPLOAD_FOLDER' not in app.config:
-                return jsonify({"error": "Upload folder not configured"}), 500
+                return jsonify({"status": "error", "message": "Upload folder not configured"}), 200
                 
             upload_folder = app.config['UPLOAD_FOLDER']
             debug_data_path = os.path.join(upload_folder, 'debug_data.json')
             
             # Check if debug data file exists
             if not os.path.exists(debug_data_path):
-                return jsonify({"error": "No EAR data available"}), 404
+                # Return empty data instead of 404
+                return jsonify({
+                    "status": "waiting", 
+                    "message": "No EAR data available yet",
+                    "ear_values": {
+                        "left_ear": 0,
+                        "right_ear": 0,
+                        "avg_ear": 0,
+                        "blink_detected": False
+                    },
+                    "face_locations": []
+                }), 200
                 
             # Read the debug data file
             with open(debug_data_path, 'r') as f:
                 debug_data = json.load(f)
                 
+            # Add status to the response
+            debug_data["status"] = "success"
+            
             # Return the data as JSON
             return jsonify(debug_data)
         except Exception as e:
             logger.error(f"Error fetching EAR data: {e}")
-            return jsonify({"error": str(e)}), 500
+            return jsonify({
+                "status": "error", 
+                "message": str(e),
+                "ear_values": {
+                    "left_ear": 0,
+                    "right_ear": 0,
+                    "avg_ear": 0,
+                    "blink_detected": False
+                },
+                "face_locations": []
+            }), 200
 
     return app 

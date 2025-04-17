@@ -70,37 +70,16 @@
             margin: 20px auto;
             max-width: 640px;
         }
-        .feedback-panel {
-            background-color: #f8f9fa;
-            border: 1px solid #dee2e6;
-            border-radius: 5px;
-            padding: 10px;
-            margin: 10px 0;
-            text-align: left;
-        }
-        .ear-value {
-            font-weight: bold;
-        }
-        .ear-good {
-            color: #28a745;
-        }
-        .ear-bad {
-            color: #dc3545;
-        }
         .blink-status {
-            display: inline-block;
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background-color: rgba(0, 0, 0, 0.6);
+            color: white;
             padding: 5px 10px;
-            border-radius: 15px;
+            border-radius: 5px;
             font-weight: bold;
-            margin-top: 5px;
-        }
-        .blink-detected {
-            background-color: #28a745;
-            color: white;
-        }
-        .no-blink {
-            background-color: #dc3545;
-            color: white;
+            display: none;
         }
     </style>
 </head>
@@ -120,6 +99,7 @@
             <p class="lead">Click the button below to start facial recognition.</p>
             <p>Look directly at the camera and keep your face visible.</p>
             <p><strong>Important:</strong> Blink a few times to confirm you are a live person.</p>
+            <p>You'll see the eye outlines turn red when a blink is detected.</p>
         </div>
         
         <button id="startButton" class="btn btn-primary btn-lg">
@@ -131,21 +111,7 @@
             <div id="processingText" class="mt-2">
                 <h4>Processing your face. Please keep still...</h4>
             </div>
-        </div>
-        
-        <!-- Feedback Panel -->
-        <div class="feedback-panel" id="feedbackPanel" style="display: none;">
-            <h5><i class="fas fa-eye"></i> Eye Tracking Status</h5>
-            <div class="row">
-                <div class="col-6">
-                    <p>Left Eye EAR: <span id="leftEarValue" class="ear-value">-</span></p>
-                </div>
-                <div class="col-6">
-                    <p>Right Eye EAR: <span id="rightEarValue" class="ear-value">-</span></p>
-                </div>
-            </div>
-            <p>Average EAR: <span id="avgEarValue" class="ear-value">-</span></p>
-            <p>Blink Status: <span id="blinkStatus" class="blink-status no-blink">No Blink Detected</span></p>
+            <div id="blinkStatus" class="blink-status">Blink Detected!</div>
         </div>
         
         <div class="spinner-container" id="loadingSpinner">
@@ -200,20 +166,17 @@
         let feedUpdateInterval = null;
         let blinkCount = 0;
         
-        // Start periodic frame updates when recognition begins
+        // Start updating the video feed
         function startFrameUpdates() {
-            // Show the feedback panel
-            document.getElementById('feedbackPanel').style.display = 'block';
-            
-            // Update the feed image with a timestamp to prevent caching
+            // Start periodic updates of the video feed
             feedUpdateInterval = setInterval(function() {
                 updateVideoFeed();
-                // Also fetch the latest EAR data
+                // Also fetch EAR data for blink detection
                 fetchEarData();
-            }, 200); // Update every 200ms
+            }, 100);  // Update every 100ms
         }
         
-        // Stop frame updates
+        // Stop updating the video feed
         function stopFrameUpdates() {
             if (feedUpdateInterval) {
                 clearInterval(feedUpdateInterval);
@@ -221,14 +184,11 @@
             }
         }
         
-        // Update the video feed
+        // Update the video feed with a new timestamp to force refresh
         function updateVideoFeed() {
-            const img = document.getElementById('videoFeed');
-            // Add timestamp to prevent caching
-            if (img.src.includes('?')) {
-                img.src = img.src.split('?')[0] + '?t=' + new Date().getTime();
-            } else {
-                img.src = img.src + '?t=' + new Date().getTime();
+            var videoFeed = document.getElementById('videoFeed');
+            if (videoFeed) {
+                videoFeed.src = "{{ url_for('face_recognition_feed') }}?t=" + new Date().getTime();
             }
         }
         
@@ -251,29 +211,23 @@
                         
                         // Check if we have EAR data
                         if (data && data.ear_values) {
-                            // Update the display with actual values
-                            updateEARDisplay(
-                                data.ear_values.left_ear,
-                                data.ear_values.right_ear,
-                                data.ear_values.avg_ear,
-                                data.ear_values.blink_detected
-                            );
+                            // Check for blink detection
+                            const blinkDetected = data.ear_values.blink_detected;
                             
-                            // Update blink count
-                            if (data.ear_values.blink_count !== undefined) {
-                                blinkCount = data.ear_values.blink_count;
+                            // Show blink status briefly when detected
+                            const blinkStatusEl = document.getElementById('blinkStatus');
+                            if (blinkDetected && blinkStatusEl) {
+                                // Update the blink count
+                                blinkCount = data.ear_values.blink_count || blinkCount + 1;
                                 
-                                // Update the blink count display
-                                const blinkStatusEl = document.getElementById('blinkStatus');
-                                if (blinkCount > 0) {
-                                    blinkStatusEl.textContent = `Blinks Detected: ${blinkCount}`;
-                                    blinkStatusEl.className = 'blink-status blink-detected';
-                                    
-                                    // If we have detailed status text, use it
-                                    if (data.ear_values.status_text) {
-                                        blinkStatusEl.textContent = data.ear_values.status_text;
-                                    }
-                                }
+                                // Show the blink status
+                                blinkStatusEl.textContent = `Blink Detected! (${blinkCount})`;
+                                blinkStatusEl.style.display = 'block';
+                                
+                                // Hide the status after 1 second
+                                setTimeout(function() {
+                                    blinkStatusEl.style.display = 'none';
+                                }, 1000);
                             }
                         }
                     } catch (error) {
@@ -289,36 +243,6 @@
             
             // Send the request
             xhr.send();
-        }
-        
-        // Update the EAR display
-        function updateEARDisplay(leftEar, rightEar, avgEar, blinkDetected) {
-            // Update EAR values
-            document.getElementById('leftEarValue').textContent = leftEar.toFixed(3);
-            document.getElementById('rightEarValue').textContent = rightEar.toFixed(3);
-            document.getElementById('avgEarValue').textContent = avgEar.toFixed(3);
-            
-            // Update EAR value colors
-            const earThreshold = 0.25;
-            
-            const leftEarEl = document.getElementById('leftEarValue');
-            leftEarEl.className = leftEar < earThreshold ? 'ear-value ear-bad' : 'ear-value ear-good';
-            
-            const rightEarEl = document.getElementById('rightEarValue');
-            rightEarEl.className = rightEar < earThreshold ? 'ear-value ear-bad' : 'ear-value ear-good';
-            
-            const avgEarEl = document.getElementById('avgEarValue');
-            avgEarEl.className = avgEar < earThreshold ? 'ear-value ear-bad' : 'ear-value ear-good';
-            
-            // Update blink status
-            const blinkStatusEl = document.getElementById('blinkStatus');
-            if (blinkDetected || blinkCount > 0) {
-                blinkStatusEl.textContent = `Blinks Detected: ${blinkCount || 1}`;
-                blinkStatusEl.className = 'blink-status blink-detected';
-            } else {
-                blinkStatusEl.textContent = 'No Blink Detected';
-                blinkStatusEl.className = 'blink-status no-blink';
-            }
         }
         
         // Handle video image loading

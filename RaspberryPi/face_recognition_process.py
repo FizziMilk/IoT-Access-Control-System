@@ -359,7 +359,7 @@ def detect_blink(landmarks, frame, ear_threshold=0.25):
         ear_threshold: Threshold for detecting a blink
         
     Returns:
-        tuple: (left_ear, right_ear, avg_ear, blink_detected)
+        dict: Eye measurements and blink detection data
     """
     if not landmarks:
         return None
@@ -408,11 +408,14 @@ def detect_blink(landmarks, frame, ear_threshold=0.25):
         pts = pts.reshape((-1, 1, 2))
         cv2.polylines(frame, [pts], True, (0, 255, 255), 1)
     
+    # Return both EAR values and landmarks for visualization
     return {
         'left_ear': float(left_ear),
         'right_ear': float(right_ear),
         'avg_ear': float(avg_ear),
-        'blink_detected': bool(blink_detected)
+        'blink_detected': bool(blink_detected),
+        'left_eye_landmarks': [[float(point[0]), float(point[1])] for point in left_eye],
+        'right_eye_landmarks': [[float(point[0]), float(point[1])] for point in right_eye]
     }
 
 def save_debug_frame(frame, face_locations, liveness_results, match_names=None, upload_folder=None):
