@@ -376,16 +376,48 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                         resp = backend_session.post(f"{backend_url}/identify-face", json={
                             "face_encoding": encoding_base64
                         })
-                        data = resp.json()
+                        
+                        # Check if the response is valid (status code and content)
+                        if resp.status_code != 200:
+                            logger.error(f"Backend returned non-200 status: {resp.status_code}")
+                            logger.error(f"Response content: {resp.text}")
+                            flash("Error connecting to backend service.", "danger")
+                            return redirect(url_for("door_entry"))
+                            
+                        # Check if response content is empty
+                        if not resp.text.strip():
+                            logger.error("Backend returned empty response")
+                            flash("Backend service returned empty response. Please try again.", "danger")
+                            return redirect(url_for("door_entry"))
+                            
+                        # Try to parse the JSON response with error handling
+                        try:
+                            data = resp.json()
+                        except json.JSONDecodeError as json_err:
+                            logger.error(f"Failed to decode JSON response: {json_err}")
+                            logger.error(f"Response content: {resp.text}")
+                            flash("Invalid response from backend service. Please try again.", "danger")
+                            return redirect(url_for("door_entry"))
                         
                         if data.get("identified") and data.get("user"):
                             # User recognized
                             phone_number = data.get("user").get("phone_number")
                             confidence = data.get("confidence", "N/A")
                             
-                            # Check if this user is allowed direct access
-                            resp = backend_session.get(f"{backend_url}/check-face-access/{phone_number}")
-                            access_data = resp.json()
+                            # Check if this user is allowed direct access - with error handling
+                            try:
+                                access_resp = backend_session.get(f"{backend_url}/check-face-access/{phone_number}")
+                                
+                                if access_resp.status_code != 200:
+                                    logger.error(f"Access check failed with status {access_resp.status_code}")
+                                    flash("Error checking access permissions. Please try again.", "warning")
+                                    return redirect(url_for("door_entry"))
+                                    
+                                access_data = access_resp.json()
+                            except Exception as e:
+                                logger.error(f"Error checking access permissions: {e}")
+                                flash("Error verifying access permissions. Please try again.", "warning")
+                                return redirect(url_for("door_entry"))
                             
                             if access_data.get("status") == "approved":
                                 # Unlock door and log access
@@ -488,7 +520,28 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                 "phone_number": phone_number,
                 "face_encoding": encoding_base64
             })
-            data = resp.json()
+            
+            # Validate response status code
+            if resp.status_code != 200:
+                logger.error(f"Backend returned non-200 status: {resp.status_code}")
+                logger.error(f"Response content: {resp.text}")
+                flash("Error connecting to backend service.", "danger")
+                return redirect(url_for("door_entry"))
+                
+            # Check for empty response
+            if not resp.text.strip():
+                logger.error("Backend returned empty response for face registration")
+                flash("Backend service returned empty response. Please try again.", "danger")
+                return redirect(url_for("door_entry"))
+                
+            # Parse response with error handling
+            try:
+                data = resp.json()
+            except json.JSONDecodeError as json_err:
+                logger.error(f"Failed to decode JSON response from face registration: {json_err}")
+                logger.error(f"Response content: {resp.text}")
+                flash("Invalid response from backend service. Please try again.", "danger")
+                return redirect(url_for("door_entry"))
             
             if data.get("status") == "success":
                 # Clear the session data
@@ -497,14 +550,40 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                 
                 flash("Face registered successfully. Please wait for OTP or admin approval.", "success")
                 # Try to send OTP to the newly registered user
-                resp = backend_session.post(f"{backend_url}/door-entry", json={"phone_number": phone_number})
-                data = resp.json()
-                
-                if data.get("status") == "OTP sent":
-                    return render_template("otp.html", phone_number=phone_number)
-                elif data.get("status") == "pending":
-                    return render_template("pending.html", phone_number=phone_number)
-                else:
+                try:
+                    otp_resp = backend_session.post(f"{backend_url}/door-entry", json={"phone_number": phone_number})
+                    
+                    # Validate response status code
+                    if otp_resp.status_code != 200:
+                        logger.error(f"OTP request returned non-200 status: {otp_resp.status_code}")
+                        logger.error(f"Response content: {otp_resp.text}")
+                        flash("Face registered but error sending verification code.", "warning")
+                        return redirect(url_for("door_entry"))
+                        
+                    # Check for empty response
+                    if not otp_resp.text.strip():
+                        logger.error("OTP service returned empty response")
+                        flash("Face registered but verification service unavailable.", "warning")
+                        return redirect(url_for("door_entry"))
+                        
+                    # Parse response with error handling
+                    try:
+                        data = otp_resp.json()
+                    except json.JSONDecodeError as json_err:
+                        logger.error(f"Failed to decode JSON response from OTP service: {json_err}")
+                        logger.error(f"Response content: {otp_resp.text}")
+                        flash("Face registered but verification service returned invalid response.", "warning")
+                        return redirect(url_for("door_entry"))
+                    
+                    if data.get("status") == "OTP sent":
+                        return render_template("otp.html", phone_number=phone_number)
+                    elif data.get("status") == "pending":
+                        return render_template("pending.html", phone_number=phone_number)
+                    else:
+                        return redirect(url_for("door_entry"))
+                except Exception as e:
+                    logger.error(f"Error sending OTP: {e}")
+                    flash("Face registered but could not send verification code.", "warning")
                     return redirect(url_for("door_entry"))
             else:
                 flash(data.get("error", "Error registering face"), "danger")
@@ -522,12 +601,35 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
             flash("Name and phone number are required.", "danger")
             return redirect(url_for("door_entry"))
         try:
-            resp = backend_session.post(f"{backend_url}/update-user-name", json={"phone_number": phone_number, "name": name})
-            data = resp.json()
+            name_update_resp = backend_session.post(f"{backend_url}/update-user-name", json={"phone_number": phone_number, "name": name})
+            
+            # Validate response status code
+            if name_update_resp.status_code != 200:
+                logger.error(f"Name update returned non-200 status: {name_update_resp.status_code}")
+                logger.error(f"Response content: {name_update_resp.text}")
+                flash("Error connecting to name update service.", "danger")
+                return redirect(url_for("door_entry"))
+                
+            # Check for empty response
+            if not name_update_resp.text.strip():
+                logger.error("Name update service returned empty response")
+                flash("Name update service unavailable.", "danger")
+                return redirect(url_for("door_entry"))
+                
+            # Parse response with error handling
+            try:
+                data = name_update_resp.json()
+            except json.JSONDecodeError as json_err:
+                logger.error(f"Failed to decode JSON response from name update: {json_err}")
+                logger.error(f"Response content: {name_update_resp.text}")
+                flash("Invalid response from name update service.", "danger")
+                return redirect(url_for("door_entry"))
+            
             if data.get("status") == "success":
-                flash("Name updated succesffuly. Please wait for admin approval.", "info")
+                flash("Name updated successfully. Please wait for admin approval.", "info")
             else:
                 flash(data.get("error", "Error updating name"), "danger")
         except Exception as e:
+            logger.error(f"Error connecting to backend for name update: {e}")
             flash("Error connecting to backend.", "danger")
         return redirect(url_for("door_entry")) 
