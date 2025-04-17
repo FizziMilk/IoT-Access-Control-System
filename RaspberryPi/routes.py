@@ -95,6 +95,30 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
     # Set up Qt environment once at startup
     setup_qt_environment()
     
+    # Function to prepare shared camera frames directory
+    def prepare_frame_sharing():
+        """Set up shared frame directory for face recognition process"""
+        frame_share_dir = '/tmp/camera_frames'
+        os.makedirs(frame_share_dir, exist_ok=True)
+        
+        # Make sure the directory is clean
+        shared_frame_path = os.path.join(frame_share_dir, 'current_frame.jpg')
+        if os.path.exists(shared_frame_path):
+            try:
+                # Write a test frame to check if we can write to the directory
+                test_frame = np.zeros((480, 640, 3), dtype=np.uint8)
+                cv2.putText(test_frame, "Camera initializing", (150, 240),
+                           cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+                _, buffer = cv2.imencode('.jpg', test_frame, [cv2.IMWRITE_JPEG_QUALITY, 95])
+                with open(shared_frame_path, 'wb') as f:
+                    f.write(buffer)
+                logger.info("Frame sharing initialized successfully")
+                return True
+            except Exception as e:
+                logger.error(f"Error initializing frame sharing: {e}")
+                return False
+        return True
+    
     # Set up shared camera frames directory
     prepare_frame_sharing()
     
@@ -119,30 +143,6 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
         except Exception as e:
             logger.warning(f"Backend API connectivity test failed: {e}")
             return False
-    
-    # Function to prepare shared camera frames directory
-    def prepare_frame_sharing():
-        """Set up shared frame directory for face recognition process"""
-        frame_share_dir = '/tmp/camera_frames'
-        os.makedirs(frame_share_dir, exist_ok=True)
-        
-        # Make sure the directory is clean
-        shared_frame_path = os.path.join(frame_share_dir, 'current_frame.jpg')
-        if os.path.exists(shared_frame_path):
-            try:
-                # Write a test frame to check if we can write to the directory
-                test_frame = np.zeros((480, 640, 3), dtype=np.uint8)
-                cv2.putText(test_frame, "Camera initializing", (150, 240),
-                           cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
-                _, buffer = cv2.imencode('.jpg', test_frame, [cv2.IMWRITE_JPEG_QUALITY, 95])
-                with open(shared_frame_path, 'wb') as f:
-                    f.write(buffer)
-                logger.info("Frame sharing initialized successfully")
-                return True
-            except Exception as e:
-                logger.error(f"Error initializing frame sharing: {e}")
-                return False
-        return True
     
     # Function to unlock door without using backend API
     def unlock_door_direct(method="Manual Override", user="Local System"):
