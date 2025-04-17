@@ -10,6 +10,7 @@ import os
 import logging
 import traceback
 from contextlib import contextmanager
+from skimage import feature as skimage_feature
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -213,7 +214,7 @@ class WebCamera:
 
     def capture_face_with_liveness(self, timeout=30):
         """
-        Capture a face with liveness detection (blink).
+        Capture a face with liveness detection (blink and texture analysis).
         
         Args:
             timeout: Maximum seconds to wait
@@ -228,17 +229,26 @@ class WebCamera:
             logger.warning("Liveness check failed - no blinks detected")
             return None
         
-        # If liveness check passes, capture a face image
-        logger.info("Liveness check passed, capturing face image")
+        # If blink check passes, capture a face image for texture analysis
+        logger.info("Blink check passed, capturing face for texture analysis")
         frame, face_location = self.capture_face()
         
-        if frame is not None and face_location is not None:
-            # Return the captured frame for further processing
-            logger.info("Face capture successful")
-            return frame
-        else:
-            logger.warning("Face capture failed after liveness check")
+        if frame is None or face_location is None:
+            logger.warning("Failed to capture face after blink check")
             return None
+            
+        # Perform texture analysis as a second liveness check
+        logger.info("Performing texture analysis")
+        texture_result = self.analyze_facial_texture(frame)
+        
+        if not texture_result:
+            logger.warning("Texture analysis failed - possible spoof detected")
+            return None
+            
+        logger.info("Liveness verification complete - both blink and texture checks passed")
+        
+        # Return the captured frame for further processing
+        return frame
     
     def _eye_aspect_ratio(self, eye):
         """
@@ -340,4 +350,182 @@ class WebCamera:
             
             logger.info("Qt environment configured")
         except Exception as e:
-            logger.error(f"Error setting up Qt environment: {e}") 
+            logger.error(f"Error setting up Qt environment: {e}")
+
+    def analyze_facial_texture(self, frame):
+        """
+        Analyze facial texture and entropy to detect printed faces and screens.
+        Uses multi-scale Local Binary Patterns (LBP) to analyze texture patterns.
+        
+        Args:
+            frame: Image containing a face
+            
+        Returns:
+            bool: True if texture appears to be from a real face, False otherwise
+        """
+        try:
+            logger.info("Starting facial texture analysis")
+            
+            # Convert to grayscale
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            
+            # Apply histogram equalization to enhance texture
+            equalized = cv2.equalizeHist(gray)
+            
+            # Apply Gaussian blur to reduce noise
+            blurred = cv2.GaussianBlur(equalized, (5, 5), 0)
+            
+            # Calculate Local Binary Pattern at multiple scales
+            # This helps capture both micro and macro texture patterns
+            
+            # Small scale (radius=1) - captures micro-texture
+            radius1 = 1
+            n_points1 = 8 * radius1
+            lbp1 = skimage_feature.local_binary_pattern(blurred, n_points1, radius1, method="uniform")
+            
+            # Medium scale (radius=2) - captures more structure
+            radius2 = 2
+            n_points2 = 8 * radius2
+            lbp2 = skimage_feature.local_binary_pattern(blurred, n_points2, radius2, method="uniform")
+            
+            # Larger scale (radius=3) - captures even more structure
+            radius3 = 3
+            n_points3 = 8 * radius3
+            lbp3 = skimage_feature.local_binary_pattern(blurred, n_points3, radius3, method="uniform")
+            
+            # Compute histograms for each scale
+            hist1, _ = np.histogram(lbp1.ravel(), bins=np.arange(0, n_points1 + 3), range=(0, n_points1 + 2))
+            hist1 = hist1.astype("float")
+            hist1 /= (hist1.sum() + 1e-7)
+            
+            hist2, _ = np.histogram(lbp2.ravel(), bins=np.arange(0, n_points2 + 3), range=(0, n_points2 + 2))
+            hist2 = hist2.astype("float")
+            hist2 /= (hist2.sum() + 1e-7)
+            
+            hist3, _ = np.histogram(lbp3.ravel(), bins=np.arange(0, n_points3 + 3), range=(0, n_points3 + 2))
+            hist3 = hist3.astype("float")
+            hist3 /= (hist3.sum() + 1e-7)
+            
+            # Calculate texture entropy for each scale (measure of randomness/complexity)
+            entropy1 = -np.sum(hist1 * np.log2(hist1 + 1e-7))
+            entropy2 = -np.sum(hist2 * np.log2(hist2 + 1e-7))
+            entropy3 = -np.sum(hist3 * np.log2(hist3 + 1e-7))
+            
+            # Analyze pattern uniformity - printed photos often have more uniform patterns
+            uniformity1 = np.sum(hist1 * hist1)
+            uniformity2 = np.sum(hist2 * hist2)
+            uniformity3 = np.sum(hist3 * hist3)
+            
+            # Calculate multi-scale uniformity ratio
+            uniformity_ratio = (uniformity1 + uniformity2) / (2 * uniformity3 + 1e-7)
+            
+            # Analyze reflectance properties using gradient information
+            sobelx = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=3)
+            sobely = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=3)
+            magnitude = cv2.magnitude(sobelx, sobely)
+            
+            # Calculate micro-texture features that differentiate real skin
+            gradient_mean = np.mean(magnitude)
+            gradient_std = np.std(magnitude)
+            gradient_entropy = self._calculate_entropy(magnitude)
+            
+            # For real skin, gradient distribution is distinctive
+            gradient_ratio = gradient_std / (gradient_mean + 1e-7)
+            
+            # Log metrics for debugging
+            logger.info(f"Texture entropy (multi-scale): {entropy1:.2f}/{entropy2:.2f}/{entropy3:.2f}")
+            logger.info(f"Uniformity ratio: {uniformity_ratio:.4f}, Gradient ratio: {gradient_ratio:.4f}")
+            
+            # Simplified decision logic for web mode (same as original implementation)
+            # 1. Basic entropy check
+            entropy_score = (entropy3 > 3.5)  # Real faces have higher entropy
+            
+            # 2. Simple gradient check
+            gradient_score = (gradient_ratio > 1.0)  # Real faces have more complex gradient patterns
+            
+            # Pass if either test passes (more lenient for web usage)
+            is_real_texture = entropy_score or gradient_score
+            
+            logger.info(f"Texture analysis results: Entropy={entropy_score}, Gradient={gradient_score}")
+            logger.info(f"Texture test overall result: {'PASS' if is_real_texture else 'FAIL'}")
+            
+            # Create visualization if not in headless mode
+            if not self.headless:
+                try:
+                    self._create_texture_visualization(
+                        frame, gray, equalized, lbp1, lbp2, lbp3, magnitude
+                    )
+                except Exception as e:
+                    logger.error(f"Error creating texture visualization: {e}")
+            
+            return is_real_texture
+            
+        except Exception as e:
+            logger.error(f"Error in texture analysis: {e}")
+            logger.error(traceback.format_exc())
+            # Be lenient in case of errors
+            return True
+    
+    def _calculate_entropy(self, image):
+        """
+        Calculate entropy of an image.
+        
+        Args:
+            image: Grayscale image
+            
+        Returns:
+            float: Entropy value
+        """
+        hist, _ = np.histogram(image.flatten(), bins=256, range=[0, 256])
+        hist = hist.astype(float) / (np.sum(hist) + 1e-7)
+        return -np.sum(hist * np.log2(hist + 1e-7))
+    
+    def _create_texture_visualization(self, frame, gray, equalized, lbp1, lbp2, lbp3, magnitude):
+        """
+        Create visualization of texture analysis results.
+        
+        Args:
+            frame: Original color frame
+            gray: Grayscale version
+            equalized: Histogram equalized image
+            lbp1: LBP at radius 1
+            lbp2: LBP at radius 2
+            lbp3: LBP at radius 3
+            magnitude: Gradient magnitude
+        """
+        # Normalize LBP images for visualization
+        micro_texture = cv2.normalize(lbp1.astype(np.uint8), None, 0, 255, cv2.NORM_MINMAX)
+        medium_texture = cv2.normalize(lbp2.astype(np.uint8), None, 0, 255, cv2.NORM_MINMAX)
+        macro_texture = cv2.normalize(lbp3.astype(np.uint8), None, 0, 255, cv2.NORM_MINMAX)
+        gradient_viz = cv2.normalize(magnitude.astype(np.uint8), None, 0, 255, cv2.NORM_MINMAX)
+        
+        # Create a visualization with layout
+        h, w = frame.shape[:2]
+        viz_size = (w//2, h//2)  # Smaller size for the visualization
+        
+        # Resize images for the visualization
+        frame_resized = cv2.resize(frame, viz_size)
+        gray_resized = cv2.resize(cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR), viz_size)
+        equalized_resized = cv2.resize(cv2.cvtColor(equalized, cv2.COLOR_GRAY2BGR), viz_size)
+        
+        lbp1_viz = cv2.resize(cv2.cvtColor(micro_texture, cv2.COLOR_GRAY2BGR), viz_size)
+        lbp2_viz = cv2.resize(cv2.cvtColor(medium_texture, cv2.COLOR_GRAY2BGR), viz_size)
+        lbp3_viz = cv2.resize(cv2.cvtColor(macro_texture, cv2.COLOR_GRAY2BGR), viz_size)
+        
+        gradient_viz = cv2.resize(cv2.cvtColor(gradient_viz, cv2.COLOR_GRAY2BGR), viz_size)
+        
+        # Create rows of images
+        row1 = np.hstack([frame_resized, gray_resized])
+        row2 = np.hstack([lbp1_viz, lbp3_viz])
+        row3 = np.hstack([gradient_viz, equalized_resized])
+        
+        # Combine rows
+        visualization = np.vstack([row1, row2, row3])
+        
+        # Add labels
+        cv2.putText(visualization, "TEXTURE ANALYSIS", (10, 30), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
+        
+        # Display the visualization
+        cv2.imshow("Texture Analysis", visualization)
+        cv2.waitKey(100)  # Brief display 

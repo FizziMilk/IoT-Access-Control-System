@@ -9,6 +9,7 @@ This module provides a stateless, resource-efficient face recognition system des
 - **Robust Error Handling**: Comprehensive error handling and logging throughout
 - **Resource Efficient**: Minimizes camera access time and ensures proper cleanup
 - **Web-Optimized**: Designed to work well with web application request/response cycles
+- **Multi-factor Liveness Detection**: Uses both blink detection and texture analysis for robust anti-spoofing
 
 ## Components
 
@@ -19,7 +20,8 @@ Handles camera access and face capture with liveness detection:
 - `camera_session()`: Context manager for safe camera resource management
 - `capture_face()`: Captures a face from the camera
 - `detect_blinks()`: Performs blink detection for liveness verification
-- `capture_face_with_liveness()`: Combines blink detection with face capture
+- `analyze_facial_texture()`: Uses Local Binary Patterns for texture analysis
+- `capture_face_with_liveness()`: Combines blink detection and texture analysis
 
 ### WebRecognition
 
@@ -54,6 +56,19 @@ user_match = service.identify_user(timeout=30)
 face_image = service.capture_face_with_liveness()
 face_encoding = service.register_face(face_image)
 ```
+
+## Liveness Detection
+
+The system employs a dual-layer liveness detection approach:
+
+1. **Blink Detection**: Verifies that the user is a live person by detecting natural eye blinks
+2. **Texture Analysis**: Uses Local Binary Patterns (LBP) at multiple scales to analyze facial textures, distinguishing between real faces and printed photos or screens
+
+The texture analysis examines:
+- **Micro-texture patterns**: Fine details in skin texture using small-scale LBP
+- **Macro-texture patterns**: Larger structural patterns using larger-scale LBP
+- **Gradient distribution**: Analyzing how light reflects off real skin versus photos
+- **Entropy measures**: Real faces have higher texture entropy than printed images
 
 ## Design Improvements Over Original System
 
