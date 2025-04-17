@@ -10,6 +10,7 @@ import json
 import base64
 import threading
 import traceback
+import numpy as np
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -251,6 +252,29 @@ def setup_routes(app, door_controller, mqtt_handler, session, backend_url):
         face_image = None
         match = None
         
+        # Add debugging to see what's happening with camera access
+        logger.info("Starting face recognition process")
+        
+        # Check camera device directly
+        import subprocess
+        try:
+            # Check if camera is in use
+            result = subprocess.run(['lsof', '/dev/video0'], capture_output=True, text=True)
+            logger.info(f"Camera device status before processing: {'In use' if result.stdout else 'Available'}")
+            
+            if result.stdout:
+                # Camera appears to be in use, attempt to force-release
+                logger.warning("Camera appears to be in use, will attempt to release")
+                try:
+                    cv2.destroyAllWindows()
+                    # Add a longer wait to ensure full cleanup
+                    import time
+                    time.sleep(1)
+                except Exception as e:
+                    logger.error(f"Error in pre-cleanup: {e}")
+        except Exception as e:
+            logger.error(f"Could not check camera status: {e}")
+        
         # Create a fresh service instance for each request
         local_face_service = None
         
@@ -266,25 +290,48 @@ def setup_routes(app, door_controller, mqtt_handler, session, backend_url):
                 headless=headless_mode
             )
             
-            # Initialize the service (load face data)
-            success = local_face_service.initialize()
+            # Add timeout/retry for initialization
+            max_retries = 3
+            retry_count = 0
+            success = False
+            
+            while retry_count < max_retries and not success:
+                try:
+                    # Initialize the service (load face data)
+                    success = local_face_service.initialize()
+                    if not success:
+                        logger.warning(f"Service initialization failed, attempt {retry_count+1}/{max_retries}")
+                        retry_count += 1
+                        import time
+                        time.sleep(1)  # Wait before retrying
+                    else:
+                        logger.info("Service initialized successfully")
+                except Exception as e:
+                    logger.error(f"Error during initialization: {e}")
+                    retry_count += 1
+                    import time
+                    time.sleep(1)  # Wait before retrying
             
             if not success:
                 flash("Error initializing face recognition. Please try again.", "danger")
                 return redirect(url_for("door_entry"))
             
             # Capture face with liveness detection
+            logger.info("Starting face capture with liveness detection")
             face_image = local_face_service.capture_face_with_liveness(timeout=30)
             
             if face_image is None:
+                logger.warning("Face verification failed - no face detected or liveness check failed")
                 flash("Face verification failed. Please try again.", "danger")
                 return redirect(url_for("door_entry"))
             
+            logger.info("Face captured successfully, attempting recognition")
             # Try to identify the person from known faces
             match = local_face_service.recognition.identify_face(face_image)
             
             # User recognized
             if match:
+                logger.info(f"Face recognized as: {match.get('name')}")
                 # Get their phone number
                 phone_number = match['name']
                 
@@ -329,7 +376,18 @@ def setup_routes(app, door_controller, mqtt_handler, session, backend_url):
                 
                 if encoding is not None:
                     # Store encoding in session for potential registration
-                    session['face_encoding'] = encoding.tolist()
+                    # Check if it's a numpy array or already a list
+                    try:
+                        if isinstance(encoding, np.ndarray):
+                            session['face_encoding'] = encoding.tolist()
+                        else:
+                            # Already a list, store directly
+                            session['face_encoding'] = encoding
+                    except Exception as e:
+                        logger.error(f"Error storing face encoding: {e}")
+                        # Try direct assignment as fallback
+                        session['face_encoding'] = encoding
+                    
                     session['has_temp_face'] = True
                     flash("Face not recognized. Please verify identity or register.", "warning")
                     return render_template("verify_options.html", user_recognized=False,
@@ -358,6 +416,32 @@ def setup_routes(app, door_controller, mqtt_handler, session, backend_url):
                     cv2.waitKey(1)
                 except Exception:
                     pass
+                
+                # RPI OS-specific: Try resetting the camera device directly
+                try:
+                    # Check if we're on Linux (RPI OS)
+                    if os.path.exists('/dev/video0'):
+                        logger.info("Attempting direct camera device reset")
+                        
+                        # Try killing any processes that might have the camera open
+                        try:
+                            import subprocess
+                            # This is safer than pkill - it only affects video0 processes
+                            subprocess.run('sudo fuser -k /dev/video0 2>/dev/null || true', 
+                                          shell=True, timeout=2)
+                            time.sleep(0.5)
+                        except Exception as e:
+                            logger.error(f"Error resetting camera device: {e}")
+                except Exception as e:
+                    logger.error(f"Error in OS-specific cleanup: {e}")
+            
+            # Add final check to see if camera was properly released
+            try:
+                import subprocess
+                result = subprocess.run(['lsof', '/dev/video0'], capture_output=True, text=True)
+                logger.info(f"Camera device status after cleanup: {'Still in use' if result.stdout else 'Released'}")
+            except Exception:
+                pass
     
     @app.route('/register-face', methods=['POST'])
     def register_face():
@@ -374,6 +458,17 @@ def setup_routes(app, door_controller, mqtt_handler, session, backend_url):
             
         try:
             # Convert face encoding to base64 string
+            # Make sure face_encoding is serializable (should be a list at this point)
+            if not isinstance(face_encoding, list):
+                try:
+                    # Try to convert if it's a numpy array
+                    if isinstance(face_encoding, np.ndarray):
+                        face_encoding = face_encoding.tolist()
+                except Exception as e:
+                    logger.error(f"Error converting face encoding: {e}")
+                    flash("Error processing face data.", "danger")
+                    return redirect(url_for("door_entry"))
+            
             # Convert face encoding list to JSON string
             encoding_json = json.dumps(face_encoding)
             

@@ -400,20 +400,34 @@ class WebCamera:
     
     def _release_camera(self):
         """
-        Release camera resources efficiently.
+        Release camera resources efficiently with specific handling for Raspberry Pi.
         """
         if self.cap is not None:
             try:
                 logger.info("Releasing camera")
+                # For V4L2 on Raspberry Pi, try multiple approaches to ensure release
+                
+                # 1. Standard OpenCV release
                 self.cap.release()
+                
+                # 2. Force garbage collection to clean up any lingering references
+                try:
+                    import gc
+                    gc.collect()
+                except:
+                    pass
+                
+                # 3. Add a delay to allow the OS to fully release the device
+                time.sleep(0.5)
+                
+                # 4. Set to None to remove reference
                 self.cap = None
                 
                 # Destroy windows in non-headless mode
                 if not self.headless:
                     cv2.destroyAllWindows()
+                    cv2.waitKey(1)  # Process window destruction
                 
-                # Brief wait to ensure resources are released
-                time.sleep(0.1)
                 logger.info("Camera resources released")
             except Exception as e:
                 logger.error(f"Error releasing camera: {e}")
