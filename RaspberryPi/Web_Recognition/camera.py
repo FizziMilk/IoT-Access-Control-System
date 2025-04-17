@@ -436,8 +436,27 @@ class WebCamera:
             # Force the same thread for Qt operations
             os.environ['QT_THREAD_PRIORITY_POLICY'] = '1'
             
-            # Disable QPA threading
-            os.environ['QT_QPA_PLATFORM'] = 'offscreen'
+            # Check headless mode and platform availability
+            if self.headless:
+                # Try platform options in order of preference
+                if os.path.exists('/usr/lib/x86_64-linux-gnu/qt5/plugins/platforms/libqoffscreen.so') or \
+                   os.path.exists('/usr/lib/aarch64-linux-gnu/qt5/plugins/platforms/libqoffscreen.so'):
+                    os.environ['QT_QPA_PLATFORM'] = 'offscreen'
+                    logger.info("Using 'offscreen' Qt platform")
+                elif os.path.exists('/usr/lib/x86_64-linux-gnu/qt5/plugins/platforms/libqxcb.so') or \
+                     os.path.exists('/usr/lib/aarch64-linux-gnu/qt5/plugins/platforms/libqxcb.so'):
+                    os.environ['QT_QPA_PLATFORM'] = 'xcb'
+                    logger.info("Using 'xcb' Qt platform")
+                else:
+                    # Don't set explicitly, let Qt choose
+                    if 'QT_QPA_PLATFORM' in os.environ:
+                        del os.environ['QT_QPA_PLATFORM']
+                    logger.info("Letting Qt choose platform automatically")
+            else:
+                # For non-headless mode, let Qt choose the platform
+                if 'QT_QPA_PLATFORM' in os.environ:
+                    del os.environ['QT_QPA_PLATFORM']
+                logger.info("Non-headless mode: letting Qt choose platform")
             
             # Make Qt run in the main thread
             os.environ['QT_FORCE_STDERR_LOGGING'] = '1'
