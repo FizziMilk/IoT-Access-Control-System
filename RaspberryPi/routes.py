@@ -257,6 +257,7 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
         
         # Check camera device directly
         import subprocess
+        import time  # Ensure time is imported
         try:
             # Check if camera is in use
             result = subprocess.run(['lsof', '/dev/video0'], capture_output=True, text=True)
@@ -268,7 +269,6 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                 try:
                     cv2.destroyAllWindows()
                     # Add a longer wait to ensure full cleanup
-                    import time
                     time.sleep(1)
                 except Exception as e:
                     logger.error(f"Error in pre-cleanup: {e}")
@@ -426,6 +426,7 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                         # Try killing any processes that might have the camera open
                         try:
                             import subprocess
+                            import time  # Make sure time is imported here
                             # This is safer than pkill - it only affects video0 processes
                             subprocess.run('sudo fuser -k /dev/video0 2>/dev/null || true', 
                                           shell=True, timeout=2)
@@ -438,10 +439,14 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
             # Add final check to see if camera was properly released
             try:
                 import subprocess
+                import time  # Ensure time is imported
                 result = subprocess.run(['lsof', '/dev/video0'], capture_output=True, text=True)
                 logger.info(f"Camera device status after cleanup: {'Still in use' if result.stdout else 'Released'}")
-            except Exception:
-                pass
+                
+                # Add a small delay to let the system finish any processes
+                time.sleep(0.1)
+            except Exception as e:
+                logger.error(f"Error in final camera check: {e}")
     
     @app.route('/register-face', methods=['POST'])
     def register_face():
