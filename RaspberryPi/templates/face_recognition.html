@@ -14,7 +14,7 @@
         }
         .container {
             text-align: center;
-            max-width: 700px;
+            max-width: 800px;
             padding: 30px;
             background-color: white;
             border-radius: 10px;
@@ -70,6 +70,38 @@
             margin: 20px auto;
             max-width: 640px;
         }
+        .feedback-panel {
+            background-color: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 5px;
+            padding: 10px;
+            margin: 10px 0;
+            text-align: left;
+        }
+        .ear-value {
+            font-weight: bold;
+        }
+        .ear-good {
+            color: #28a745;
+        }
+        .ear-bad {
+            color: #dc3545;
+        }
+        .blink-status {
+            display: inline-block;
+            padding: 5px 10px;
+            border-radius: 15px;
+            font-weight: bold;
+            margin-top: 5px;
+        }
+        .blink-detected {
+            background-color: #28a745;
+            color: white;
+        }
+        .no-blink {
+            background-color: #dc3545;
+            color: white;
+        }
     </style>
 </head>
 <body>
@@ -87,7 +119,7 @@
         <div id="instructions">
             <p class="lead">Click the button below to start facial recognition.</p>
             <p>Look directly at the camera and keep your face visible.</p>
-            <p><strong>Important:</strong> Ensure your face is well-lit from the front.</p>
+            <p><strong>Important:</strong> Blink a few times to confirm you are a live person.</p>
         </div>
         
         <button id="startButton" class="btn btn-primary btn-lg">
@@ -95,10 +127,25 @@
         </button>
         
         <div class="video-container">
-            <img id="videoFeed" src="{{ url_for('video_feed') }}" alt="Face Recognition Feed" onerror="handleVideoError(this)">
+            <img id="videoFeed" src="{{ url_for('face_recognition_feed') }}" alt="Face Recognition Feed" onerror="handleVideoError(this)">
             <div id="processingText" class="mt-2">
                 <h4>Processing your face. Please keep still...</h4>
             </div>
+        </div>
+        
+        <!-- Feedback Panel -->
+        <div class="feedback-panel" id="feedbackPanel" style="display: none;">
+            <h5><i class="fas fa-eye"></i> Eye Tracking Status</h5>
+            <div class="row">
+                <div class="col-6">
+                    <p>Left Eye EAR: <span id="leftEarValue" class="ear-value">-</span></p>
+                </div>
+                <div class="col-6">
+                    <p>Right Eye EAR: <span id="rightEarValue" class="ear-value">-</span></p>
+                </div>
+            </div>
+            <p>Average EAR: <span id="avgEarValue" class="ear-value">-</span></p>
+            <p>Blink Status: <span id="blinkStatus" class="blink-status no-blink">No Blink Detected</span></p>
         </div>
         
         <div class="spinner-container" id="loadingSpinner">
@@ -130,6 +177,7 @@
                 <li>Look directly at the camera</li>
                 <li>Hold still during the process</li>
                 <li>Make sure your face is completely visible</li>
+                <li>Blink naturally a few times to complete the liveness check</li>
             </ul>
             
             {% if testing_mode %}
@@ -147,6 +195,141 @@
     </div>
     
     <script>
+        // Global variables to track state
+        let processingStarted = false;
+        let feedUpdateInterval = null;
+        let blinkCount = 0;
+        
+        // Start periodic frame updates when recognition begins
+        function startFrameUpdates() {
+            // Show the feedback panel
+            document.getElementById('feedbackPanel').style.display = 'block';
+            
+            // Update the feed image with a timestamp to prevent caching
+            feedUpdateInterval = setInterval(function() {
+                updateVideoFeed();
+                // Also fetch the latest EAR data
+                fetchEarData();
+            }, 200); // Update every 200ms
+        }
+        
+        // Stop frame updates
+        function stopFrameUpdates() {
+            if (feedUpdateInterval) {
+                clearInterval(feedUpdateInterval);
+                feedUpdateInterval = null;
+            }
+        }
+        
+        // Update the video feed
+        function updateVideoFeed() {
+            const img = document.getElementById('videoFeed');
+            // Add timestamp to prevent caching
+            if (img.src.includes('?')) {
+                img.src = img.src.split('?')[0] + '?t=' + new Date().getTime();
+            } else {
+                img.src = img.src + '?t=' + new Date().getTime();
+            }
+        }
+        
+        // Fetch EAR data from server using AJAX
+        function fetchEarData() {
+            if (!processingStarted) return;
+            
+            // Create a new XMLHttpRequest
+            const xhr = new XMLHttpRequest();
+            
+            // Configure it to make a GET request to the ear-data endpoint
+            xhr.open('GET', '/ear-data?t=' + new Date().getTime(), true);
+            
+            // Set up what happens when the request is successful
+            xhr.onload = function() {
+                if (xhr.status === 200) {
+                    try {
+                        // Parse the JSON response
+                        const data = JSON.parse(xhr.responseText);
+                        
+                        // Check if we have EAR data
+                        if (data && data.ear_values) {
+                            // Update the display with actual values
+                            updateEARDisplay(
+                                data.ear_values.left_ear,
+                                data.ear_values.right_ear,
+                                data.ear_values.avg_ear,
+                                data.ear_values.blink_detected
+                            );
+                            
+                            // Update blink count
+                            if (data.ear_values.blink_count !== undefined) {
+                                blinkCount = data.ear_values.blink_count;
+                                
+                                // Update the blink count display
+                                const blinkStatusEl = document.getElementById('blinkStatus');
+                                if (blinkCount > 0) {
+                                    blinkStatusEl.textContent = `Blinks Detected: ${blinkCount}`;
+                                    blinkStatusEl.className = 'blink-status blink-detected';
+                                    
+                                    // If we have detailed status text, use it
+                                    if (data.ear_values.status_text) {
+                                        blinkStatusEl.textContent = data.ear_values.status_text;
+                                    }
+                                }
+                            }
+                        }
+                    } catch (error) {
+                        console.error("Error parsing EAR data", error);
+                    }
+                }
+            };
+            
+            // Set up what happens in case of error
+            xhr.onerror = function() {
+                console.error("Error fetching EAR data");
+            };
+            
+            // Send the request
+            xhr.send();
+        }
+        
+        // Update the EAR display
+        function updateEARDisplay(leftEar, rightEar, avgEar, blinkDetected) {
+            // Update EAR values
+            document.getElementById('leftEarValue').textContent = leftEar.toFixed(3);
+            document.getElementById('rightEarValue').textContent = rightEar.toFixed(3);
+            document.getElementById('avgEarValue').textContent = avgEar.toFixed(3);
+            
+            // Update EAR value colors
+            const earThreshold = 0.25;
+            
+            const leftEarEl = document.getElementById('leftEarValue');
+            leftEarEl.className = leftEar < earThreshold ? 'ear-value ear-bad' : 'ear-value ear-good';
+            
+            const rightEarEl = document.getElementById('rightEarValue');
+            rightEarEl.className = rightEar < earThreshold ? 'ear-value ear-bad' : 'ear-value ear-good';
+            
+            const avgEarEl = document.getElementById('avgEarValue');
+            avgEarEl.className = avgEar < earThreshold ? 'ear-value ear-bad' : 'ear-value ear-good';
+            
+            // Update blink status
+            const blinkStatusEl = document.getElementById('blinkStatus');
+            if (blinkDetected || blinkCount > 0) {
+                blinkStatusEl.textContent = `Blinks Detected: ${blinkCount || 1}`;
+                blinkStatusEl.className = 'blink-status blink-detected';
+            } else {
+                blinkStatusEl.textContent = 'No Blink Detected';
+                blinkStatusEl.className = 'blink-status no-blink';
+            }
+        }
+        
+        // Handle video image loading
+        document.getElementById('videoFeed').addEventListener('load', function() {
+            // If this is the first load and we're not processing yet, just ignore
+            if (!processingStarted) {
+                return;
+            }
+        });
+        
+        // Start face recognition process
         document.getElementById('startButton').addEventListener('click', function() {
             // Hide the instructions and button
             document.getElementById('instructions').style.display = 'none';
@@ -155,6 +338,10 @@
             
             // Show the processing text
             document.getElementById('processingText').style.display = 'block';
+            
+            // Start video feed updates
+            processingStarted = true;
+            startFrameUpdates();
             
             // Show the loading spinner
             document.getElementById('loadingSpinner').style.display = 'block';
@@ -190,6 +377,10 @@
                     } else if (progress === 90) {
                         statusText.textContent = statusMessages[5];
                     }
+                } else {
+                    // Stop the animation after progress exceeds 100
+                    clearInterval(progressInterval);
+                    stopFrameUpdates();
                 }
             }, 500); // Updates every 500ms
             

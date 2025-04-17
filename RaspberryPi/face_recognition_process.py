@@ -328,353 +328,500 @@ def load_known_face_encodings(backend_url):
         logger.error(f"Error loading face encodings: {e}")
         return [], [], []
 
+def calculate_ear(eye_landmarks):
+    """
+    Calculate Eye Aspect Ratio (EAR) using facial landmarks
+    
+    Args:
+        eye_landmarks: List of (x, y) coordinates for the eye
+        
+    Returns:
+        float: Eye Aspect Ratio value
+    """
+    # Compute the euclidean distances between the two sets of vertical eye landmarks
+    A = np.linalg.norm(np.array(eye_landmarks[1]) - np.array(eye_landmarks[5]))
+    B = np.linalg.norm(np.array(eye_landmarks[2]) - np.array(eye_landmarks[4]))
+    
+    # Compute the euclidean distance between the horizontal eye landmarks
+    C = np.linalg.norm(np.array(eye_landmarks[0]) - np.array(eye_landmarks[3]))
+    
+    # Calculate the EAR
+    ear = (A + B) / (2.0 * C)
+    return ear
+
+def detect_blink(landmarks, frame, ear_threshold=0.25):
+    """
+    Detect blinks using facial landmarks and calculate EAR values
+    
+    Args:
+        landmarks: Facial landmarks from face_recognition
+        frame: Image containing the face
+        ear_threshold: Threshold for detecting a blink
+        
+    Returns:
+        tuple: (left_ear, right_ear, avg_ear, blink_detected)
+    """
+    if not landmarks:
+        return None
+    
+    # Get the facial landmarks
+    facial_landmarks = landmarks[0]
+    
+    # The facial landmarks for the left and right eyes
+    # These indices correspond to the 68-point facial landmark detector in dlib
+    # that's used by the face_recognition library
+    
+    # Left eye indices in face_recognition library format
+    left_eye = [
+        facial_landmarks['left_eye'][0],  # left corner
+        facial_landmarks['left_eye'][1],  # top left
+        facial_landmarks['left_eye'][2],  # top right
+        facial_landmarks['left_eye'][3],  # right corner
+        facial_landmarks['left_eye'][4],  # bottom right
+        facial_landmarks['left_eye'][5],  # bottom left
+    ]
+    
+    # Right eye indices in face_recognition library format
+    right_eye = [
+        facial_landmarks['right_eye'][0],  # left corner
+        facial_landmarks['right_eye'][1],  # top left
+        facial_landmarks['right_eye'][2],  # top right
+        facial_landmarks['right_eye'][3],  # right corner
+        facial_landmarks['right_eye'][4],  # bottom right
+        facial_landmarks['right_eye'][5],  # bottom left
+    ]
+    
+    # Calculate the EAR for each eye
+    left_ear = calculate_ear(left_eye)
+    right_ear = calculate_ear(right_eye)
+    
+    # Average the EAR value for both eyes
+    avg_ear = (left_ear + right_ear) / 2.0
+    
+    # Check if EAR is below the blink threshold
+    blink_detected = avg_ear < ear_threshold
+    
+    # For visualization - draw eye contours in the debug image
+    height, width = frame.shape[:2]
+    for eye in [left_eye, right_eye]:
+        pts = np.array(eye, np.int32)
+        pts = pts.reshape((-1, 1, 2))
+        cv2.polylines(frame, [pts], True, (0, 255, 255), 1)
+    
+    return {
+        'left_ear': float(left_ear),
+        'right_ear': float(right_ear),
+        'avg_ear': float(avg_ear),
+        'blink_detected': bool(blink_detected)
+    }
+
 def save_debug_frame(frame, face_locations, liveness_results, match_names=None, upload_folder=None):
-    """Save a debug frame with detection visualizations"""
+    """
+    Save current debug frame with annotations for visualization
+    
+    Args:
+        frame: The current video frame
+        face_locations: List of face location tuples (top, right, bottom, left)
+        liveness_results: Results from liveness detection
+        match_names: Optional list of matched names for identified faces
+        upload_folder: Where to save the debug frame
+    
+    Returns:
+        None
+    """
     try:
+        if frame is None:
+            logger.error("Cannot save debug frame - frame is None")
+            return
+            
+        # Create a copy for visualization
         debug_frame = frame.copy()
         
-        # Draw face locations and liveness results
-        for i, face_location in enumerate(face_locations):
-            top, right, bottom, left = face_location
+        # Debug data to save as JSON
+        debug_data = {
+            'face_locations': face_locations,
+            'liveness_results': liveness_results,
+            'match_names': match_names or []
+        }
+        
+        ear_values = None
+        
+        # Draw face boxes and liveness information
+        for i, (top, right, bottom, left) in enumerate(face_locations):
+            # Draw face bounding box
+            face_color = (0, 255, 0)  # Default: green (live face)
             
-            # Get liveness result if available
-            is_real = False
-            score = 0
+            # Get liveness result for this face (if available)
             if i < len(liveness_results):
-                is_real = liveness_results[i]["is_real"]
-                score = liveness_results[i]["score"]
+                is_live, score, _ = liveness_results[i]
+                if not is_live:
+                    face_color = (0, 0, 255)  # Red (fake face)
             
-            # Draw face rectangle
-            if is_real:
-                color = (0, 255, 0)  # Green for real
-            else:
-                color = (0, 0, 255)  # Red for fake
+            # Draw face bounding box
+            cv2.rectangle(debug_frame, (left, top), (right, bottom), face_color, 2)
             
-            cv2.rectangle(debug_frame, (left, top), (right, bottom), color, 2)
+            # Show liveness score if available
+            if i < len(liveness_results):
+                is_live, score, _ = liveness_results[i]
+                status = "Live" if is_live else "Fake"
+                cv2.putText(debug_frame, f"{status}: {score:.2f}", 
+                           (left, top - 10), cv2.FONT_HERSHEY_SIMPLEX, 
+                           0.5, face_color, 2)
             
-            # Add liveness score text
-            liveness_text = f"Real: {is_real}, Score: {score:.2f}"
-            cv2.putText(debug_frame, liveness_text, (left, top - 10),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
-            
-            # Add person name if matched
+            # Show matched name if available
             if match_names and i < len(match_names) and match_names[i]:
-                name_text = f"Name: {match_names[i]}"
-                cv2.putText(debug_frame, name_text, (left, bottom + 20),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-        
-        # If no upload folder specified, use a default
-        if not upload_folder:
-            # Try to get the upload folder from command line arguments
-            parser = argparse.ArgumentParser()
-            parser.add_argument('--upload-folder', help='Flask upload folder for debug frames')
-            args, _ = parser.parse_known_args()
+                name = match_names[i]
+                cv2.putText(debug_frame, f"{name}", 
+                           (left, bottom + 20), cv2.FONT_HERSHEY_SIMPLEX, 
+                           0.5, face_color, 2)
             
-            if args.upload_folder:
-                upload_folder = args.upload_folder
-            else:
-                # Fall back to default location
-                upload_folder = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'uploads')
-        
-        # Ensure upload folder exists
-        if not os.path.exists(upload_folder):
-            os.makedirs(upload_folder, exist_ok=True)
-            logger.info(f"Created debug frame directory: {upload_folder}")
-        
-        # Use a safer approach to write the frame
-        debug_frame_path = os.path.join(upload_folder, 'debug_frame.jpg')
-        temp_frame_path = os.path.join(upload_folder, f'debug_frame_temp_{os.getpid()}.jpg')
-        
-        # First encode the image in memory
-        encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), 95]  
-        _, buffer = cv2.imencode('.jpg', debug_frame, encode_params)
-        
-        # Write the buffer directly to a file
-        with open(temp_frame_path, 'wb') as f:
-            f.write(buffer)
-            f.flush()
-            os.fsync(f.fileno())  # Ensure file is written to disk
-            
-        # On Windows, we need to remove the destination file first
-        if os.name == 'nt' and os.path.exists(debug_frame_path):
+            # Calculate facial landmarks for EAR
+            face_landmarks = []
             try:
-                os.remove(debug_frame_path)
+                # Extract the face from the frame
+                face_img = frame[top:bottom, left:right]
+                if face_img.size > 0:  # Make sure the face image is valid
+                    # Get landmarks for this face
+                    landmarks = face_recognition.face_landmarks(face_img)
+                    if landmarks:
+                        # Convert relative coordinates to absolute
+                        for face_landmark in landmarks:
+                            for feature, points in face_landmark.items():
+                                for i, (x, y) in enumerate(points):
+                                    face_landmark[feature][i] = (x + left, y + top)
+                            face_landmarks.append(face_landmark)
+                            
+                        # Calculate EAR
+                        ear_values = detect_blink(face_landmarks, debug_frame)
+                        if ear_values:
+                            debug_data['ear_values'] = ear_values
             except Exception as e:
-                logger.warning(f"Failed to remove existing debug frame on Windows: {e}")
-                
-        # Rename the temporary file to the final filename
-        try:
-            os.rename(temp_frame_path, debug_frame_path)
-        except Exception as e:
-            logger.warning(f"Failed to rename debug frame: {e}")
-            # If rename fails (which can happen on Windows), try copy and delete
-            import shutil
-            try:
-                shutil.copy2(temp_frame_path, debug_frame_path)
-                os.remove(temp_frame_path)
-            except Exception as copy_err:
-                logger.error(f"Failed to copy debug frame: {copy_err}")
-                
+                logger.error(f"Error calculating EAR: {e}")
+        
+        # Save the frame with visualizations
+        if upload_folder:
+            debug_path = os.path.join(upload_folder, 'debug_frame.jpg')
+            cv2.imwrite(debug_path, debug_frame)
+            logger.info(f"Saved debug frame to {debug_path}")
+            
+            # Save the debug data as JSON
+            debug_data_path = os.path.join(upload_folder, 'debug_data.json')
+            with open(debug_data_path, 'w') as f:
+                json.dump(debug_data, f)
+            logger.info(f"Saved debug data to {debug_data_path}")
+    
     except Exception as e:
         logger.error(f"Error saving debug frame: {e}")
         logger.error(traceback.format_exc())
 
 def run_face_recognition(output_file, backend_url, max_attempts=100, confidence_threshold=60, upload_folder=None):
-    """Run the face recognition process"""
+    """
+    Main function to run face recognition with liveness detection
+    
+    Args:
+        output_file: Where to save the recognition results
+        backend_url: URL for the backend API
+        max_attempts: Maximum number of frames to process
+        confidence_threshold: Minimum confidence score (0-100) to consider a match valid
+        upload_folder: Folder to save debug frames and visualization
+        
+    Returns:
+        dict: Results of the face recognition process
+    """
+    logger.info("Starting face recognition process")
+    
+    # Set up camera
+    camera = None
     try:
-        # Try using the same camera source as the video_feed to avoid conflicts
-        if os.name == 'nt':  # Windows
-            camera = WebCamera(camera_id=0, resolution=(640, 480))
-        else:  # Linux/macOS
-            # On Linux/macOS, use a different API to avoid conflicts
-            camera = WebCamera(camera_id=0, resolution=(640, 480))
-            # Set some properties to improve compatibility
-            if camera.cap is not None:
-                camera.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc('M', 'J', 'P', 'G'))
-                
-        # Load known faces from backend
-        known_face_encodings, known_face_names, known_face_ids = load_known_face_encodings(backend_url)
+        camera = setup_camera()
+        logger.info("Camera setup completed")
         
-        if not known_face_encodings:
-            logger.warning("No known faces available from backend")
+        # Load known face encodings
+        logger.info(f"Loading known face encodings from backend: {backend_url}")
+        known_faces, known_names, known_ids = load_known_face_encodings(backend_url)
         
-        attempt_count = 0
-        recognition_results = []
-        last_liveness_check_time = time.time()
-        liveness_check_interval = 0.3  # Check liveness more frequently for better accuracy
+        if not known_faces:
+            logger.warning("No known faces loaded from backend")
+        else:
+            logger.info(f"Loaded {len(known_faces)} known faces")
         
-        # For tracking successful detections
-        consecutive_real_faces = 0
-        required_consecutive_detections = 3  # Require 3 consecutive real face detections for better accuracy
-        best_match_count = 0
-        best_match_index = -1
-        best_confidence = 0
+        matches = []  # List to store matches
+        attempts = 0  # Counter for attempts
+        positive_matches = {}  # Track consistent matches
+        best_detections = {}  # Track best detection scores per person
         
-        # For debugging - create a frame with instructions
-        if upload_folder:
-            instruction_frame = np.zeros((480, 640, 3), dtype=np.uint8)
-            cv2.putText(instruction_frame, "Face Recognition Active", (140, 200), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-            cv2.putText(instruction_frame, "Please look at the camera", (140, 240),
-                       cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-            save_debug_frame(instruction_frame, [], [], upload_folder=upload_folder)
+        # Variables for liveness check
+        liveness_checks_passed = 0
+        required_liveness_checks = 3
+        frame_count = 0
         
-        while attempt_count < max_attempts:
-            # Get frame from camera
-            frame = camera.get_frame()
+        # Initialize our robust blink detector
+        blink_detector = BlinkDetector(ear_threshold=0.25, consecutive_frames=2)
+        last_debug_data = None  # Store the last frame's debug data
+        
+        while attempts < max_attempts:
+            attempts += 1
+            frame_count += 1
             
+            # Get a frame from the camera
+            frame = camera.get_frame()
             if frame is None:
-                logger.warning("No frame captured, trying again...")
-                time.sleep(0.05)  # Shorter sleep for better responsiveness
+                logger.error("Failed to get frame from camera")
                 continue
             
-            # Always save a frame with current status to show progress
-            status_frame = frame.copy()
-            progress_percent = int((attempt_count/max_attempts)*100)
-            cv2.putText(status_frame, f"Processing: {progress_percent}%", (10, 30),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-            
-            # Convert the frame from BGR to RGB (required by face_recognition)
+            # Convert frame to RGB (face_recognition uses RGB)
             rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             
-            # Find faces in the frame
+            # Detect faces in the frame
             face_locations = face_recognition.face_locations(rgb_frame)
             
-            # No faces detected
             if not face_locations:
-                # Save frame with "No face detected" message
-                cv2.putText(status_frame, "No face detected", (10, 60),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-                save_debug_frame(status_frame, [], [], upload_folder=upload_folder)
-                time.sleep(0.05)
-                attempt_count += 1
-                consecutive_real_faces = 0  # Reset counter when no face is detected
+                logger.info(f"No faces detected in frame {attempts}")
+                # Save an empty debug frame to show the current view
+                save_debug_frame(frame, [], [], upload_folder=upload_folder)
                 continue
             
-            # Always show where faces are detected
-            liveness_results = []
+            # Extract face encodings
+            face_encodings = face_recognition.face_encodings(rgb_frame, face_locations)
             
-            # Get the current time for liveness check frequency
-            current_time = time.time()
+            # Get facial landmarks for blink detection
+            face_landmarks_list = face_recognition.face_landmarks(rgb_frame, face_locations)
             
-            # Only perform full liveness check periodically to improve framerate
-            perform_full_check = (current_time - last_liveness_check_time >= liveness_check_interval)
+            # Process EAR for blink detection
+            current_ear_values = None
+            if len(face_landmarks_list) > 0:
+                current_ear_values = detect_blink(face_landmarks_list, frame)
+                if current_ear_values:
+                    # Update the blink detector with the current EAR value
+                    avg_ear = current_ear_values.get('avg_ear', 0)
+                    blink_status = blink_detector.update(avg_ear)
+                    
+                    # Update the EAR values with blink status from our detector
+                    current_ear_values['blink_detected'] = blink_status['blink_count'] > 0
+                    current_ear_values['blink_count'] = blink_status['blink_count']
+                    current_ear_values['eye_state'] = blink_status['current_state']
+                    
+                    # Get text status for display
+                    status_info = blink_detector.get_status_text()
+                    current_ear_values['status_text'] = status_info['text']
+                    
+                    # Store for debug frame
+                    last_debug_data = {
+                        'face_locations': face_locations,
+                        'ear_values': current_ear_values,
+                        'blink_status': blink_status
+                    }
             
-            if perform_full_check:
-                # Perform liveness detection
-                liveness_results = perform_liveness_check(frame, face_locations)
-                last_liveness_check_time = current_time
+            # Perform liveness check on each face
+            liveness_results = perform_liveness_check(frame, face_locations)
+            
+            # Update the debug frame to show real-time processing
+            frame_matches = []  # For this frame only
+            
+            # Process each face in the current frame
+            for i, face_encoding in enumerate(face_encodings):
+                if i >= len(face_locations):
+                    continue  # Skip if index mismatch
                 
-                # Check if any face passes liveness check
-                real_faces = [result for result in liveness_results if result["is_real"]]
+                # Check if face passes liveness check
+                is_live = False
+                liveness_score = 0
+                if i < len(liveness_results):
+                    is_live, liveness_score, _ = liveness_results[i]
                 
-                # If no real faces, continue to next frame
-                if not real_faces:
-                    # Mark all faces as not real
-                    cv2.putText(status_frame, "Possible spoofing detected", (10, 60),
-                               cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-                    logger.info("No real faces detected, possible spoofing attempt")
-                    consecutive_real_faces = 0  # Reset counter
-                    save_debug_frame(status_frame, face_locations, liveness_results, upload_folder=upload_folder)
-                    time.sleep(0.05)
-                    attempt_count += 1
-                    continue
-                else:
-                    # Increment consecutive real face counter
-                    consecutive_real_faces += 1
-                    
-                    # Set status message
-                    cv2.putText(status_frame, f"Real face detected ({consecutive_real_faces}/{required_consecutive_detections})", 
-                               (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-                    
-                # Get face encodings for recognized faces
-                face_encodings = face_recognition.face_encodings(rgb_frame, face_locations)
+                # Consider face live if it passes texture analysis OR if blinking is detected
+                natural_blinking = blink_detector.is_natural_blinking()
+                is_live = is_live or natural_blinking
                 
-                # Initialize match results
-                match_names = [None] * len(face_locations)
+                # Only process matches for faces that pass liveness check
+                face_name = "Unknown"
+                confidence = 0
                 
-                # Check each face against known faces
-                for i, face_encoding in enumerate(face_encodings):
-                    # Skip if this face failed liveness
-                    if i >= len(liveness_results) or not liveness_results[i]["is_real"]:
-                        continue
-                    
-                    if known_face_encodings:
-                        # Compare face with known faces
-                        matches = face_recognition.compare_faces(known_face_encodings, face_encoding)
-                        distances = face_recognition.face_distance(known_face_encodings, face_encoding)
-                        
-                        if True in matches:
+                if is_live:
+                    # Compare with known faces
+                    if known_faces:
+                        # Calculate face similarity using face_distance
+                        face_distances = face_recognition.face_distance(known_faces, face_encoding)
+                        if len(face_distances) > 0:
                             # Find the best match
-                            match_index = np.argmin(distances)
+                            best_match_idx = np.argmin(face_distances)
+                            best_match_distance = face_distances[best_match_idx]
                             
-                            # Convert distance to confidence percentage (smaller distance = higher confidence)
-                            confidence = (1 - distances[match_index]) * 100
+                            # Convert distance to similarity score (0-100%)
+                            confidence = (1 - best_match_distance) * 100
                             
+                            # Check if confidence meets threshold
                             if confidence >= confidence_threshold:
-                                match_names[i] = known_face_names[match_index]
-                                matched_id = known_face_ids[match_index]
+                                face_name = known_names[best_match_idx]
+                                logger.info(f"Match found: {face_name}, confidence: {confidence:.2f}%")
                                 
-                                # Count matches for this person
-                                if match_index == best_match_index:
-                                    best_match_count += 1
-                                    if confidence > best_confidence:
-                                        best_confidence = confidence
-                                else:
-                                    # Track if this is a better match
-                                    if best_match_count < 1 or confidence > best_confidence:
-                                        best_match_index = match_index
-                                        best_match_count = 1
-                                        best_confidence = confidence
-                                
-                                # Add matching information to the frame
-                                cv2.putText(status_frame, f"Match: {known_face_names[match_index]}", (10, 90),
-                                          cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-                                cv2.putText(status_frame, f"Confidence: {confidence:.1f}%", (10, 120),
-                                          cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-                                
-                                logger.info(f"Match found: {known_face_names[match_index]} with {confidence:.2f}% confidence")
-                                
-                                # If we have enough consecutive real faces and matches, exit early with success
-                                if consecutive_real_faces >= required_consecutive_detections and best_match_count >= 2:
-                                    logger.info(f"Found reliable match after {attempt_count} attempts")
-                                    recognition_results.append({
-                                        "id": matched_id,
-                                        "name": known_face_names[match_index],
-                                        "confidence": float(confidence),
-                                        "timestamp": datetime.now().isoformat()
-                                    })
-                                    break
+                                # Add confidence to results
+                                frame_matches.append({
+                                    "name": face_name,
+                                    "confidence": confidence,
+                                    "is_live": is_live
+                                })
                 
-                # Save frame with detection results
-                save_debug_frame(status_frame, face_locations, liveness_results, match_names, upload_folder=upload_folder)
-            else:
-                # Even when not doing full check, still show face locations
-                placeholder_liveness = [{"is_real": True, "score": 0.5, "face_location": loc, "debug_info": {}} for loc in face_locations]
-                save_debug_frame(status_frame, face_locations, placeholder_liveness, upload_folder=upload_folder)
-            
-            # If we have a strong match, exit the loop
-            if consecutive_real_faces >= required_consecutive_detections and best_match_count >= 2:
-                if best_match_index >= 0:
-                    matched_id = known_face_ids[best_match_index]
-                    matched_name = known_face_names[best_match_index]
+                # Track best detection for each person
+                if face_name != "Unknown" and confidence >= confidence_threshold:
+                    if face_name not in best_detections or confidence > best_detections[face_name]["confidence"]:
+                        best_detections[face_name] = {
+                            "confidence": confidence,
+                            "encoding": face_encoding.tolist(),
+                            "frame": attempts
+                        }
                     
-                    if not any(result["id"] == matched_id for result in recognition_results):
-                        recognition_results.append({
-                            "id": matched_id,
-                            "name": matched_name,
-                            "confidence": float(best_confidence),
-                            "timestamp": datetime.now().isoformat()
+                    # Track consistent matches
+                    if face_name not in positive_matches:
+                        positive_matches[face_name] = 1
+                    else:
+                        positive_matches[face_name] += 1
+                    
+                    # Check if we have a reliable match (5+ consistent detections)
+                    if positive_matches[face_name] >= 5:
+                        matches.append({
+                            "name": face_name,
+                            "confidence": confidence,
+                            "is_live": is_live,
+                            "liveness_score": liveness_score
                         })
-                
-                # Show success screen before exiting
-                if upload_folder:
-                    success_frame = frame.copy()
-                    cv2.putText(success_frame, "Recognition Successful!", (120, 200),
-                              cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-                    if best_match_index >= 0:
-                        cv2.putText(success_frame, f"Welcome, {known_face_names[best_match_index]}", (120, 240),
-                                  cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-                    save_debug_frame(success_frame, [], [], upload_folder=upload_folder)
-                
-                break
+                        logger.info(f"Reliable match found after {attempts} attempts: {face_name}")
+                        
+                        # Return early if we have a good match with natural blinking
+                        if natural_blinking:
+                            logger.info("Face recognized with natural blinking pattern - early return")
+                            camera.release()
+                            
+                            # Save results to output file
+                            results = {
+                                "success": True,
+                                "face_detected": True,
+                                "is_live": True,
+                                "blink_detected": True,
+                                "blink_count": blink_detector.blink_count,
+                                "natural_blinking": natural_blinking,
+                                "results": matches,
+                                "attempts": attempts
+                            }
+                            
+                            # Add the best face encoding if available
+                            if face_name in best_detections:
+                                results["face_encodings"] = [best_detections[face_name]["encoding"]]
+                            
+                            with open(output_file, 'w') as f:
+                                json.dump(results, f)
+                            
+                            return results
             
-            time.sleep(0.05)  # Shorter sleep for better framerate
-            attempt_count += 1
+            # Update the debug visualization
+            all_match_names = [match.get("name", "Unknown") if i < len(frame_matches) else "Unknown" 
+                               for i, _ in enumerate(face_locations)]
+            
+            # Add blink status text to the frame
+            if current_ear_values and blink_detector.blink_count > 0:
+                status_info = blink_detector.get_status_text()
+                y_pos = 30  # Starting position
+                cv2.putText(frame, f"Blinks: {blink_detector.blink_count}", (10, y_pos), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, status_info['color'], 2)
+                y_pos += 30
+                cv2.putText(frame, status_info['text'], (10, y_pos), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, status_info['color'], 2)
+            
+            # Save the debug frame with all annotations
+            save_debug_frame(frame, face_locations, liveness_results, match_names=all_match_names, upload_folder=upload_folder)
+            
+            # Check if this frame passed liveness check
+            if any(result[0] for result in liveness_results):
+                liveness_checks_passed += 1
+                
+                # If we've passed enough liveness checks or have natural blinking, we can consider the detection valid
+                if liveness_checks_passed >= required_liveness_checks or natural_blinking:
+                    break
+            
+            # Slow down processing to avoid overloading the system
+            time.sleep(0.1)
         
-        # If we exited without a match, show a failure screen
-        if len(recognition_results) == 0 and upload_folder:
-            failure_frame = frame.copy() if frame is not None else np.zeros((480, 640, 3), dtype=np.uint8)
-            if consecutive_real_faces > 0:
-                cv2.putText(failure_frame, "Face detected but not recognized", (100, 200),
-                          cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
-            else:
-                cv2.putText(failure_frame, "No valid face detected", (140, 200),
-                          cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
-            cv2.putText(failure_frame, "Please try again", (180, 240),
-                      cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
-            save_debug_frame(failure_frame, [], [], upload_folder=upload_folder)
-        
-        # Clean up
+        # Process is complete - release camera
+        logger.info(f"Face recognition process completed after {attempts} attempts")
         camera.release()
         
-        # Write results to output file
+        # Log final blink detection stats
+        logger.info(f"Blink count: {blink_detector.blink_count}")
+        logger.info(f"Natural blinking detected: {blink_detector.is_natural_blinking()}")
+        
+        # Determine final result
+        face_detected = len(face_locations) > 0
+        is_live = liveness_checks_passed >= required_liveness_checks or blink_detector.blink_count > 0
+        natural_blinking = blink_detector.is_natural_blinking()
+        
+        # If no matches but we detected faces and liveness, save the face encoding
+        # for potential registration
+        if not matches and face_detected and is_live and len(face_encodings) > 0:
+            best_face_encoding = face_encodings[0].tolist()
+            
+            # Write results to output file
+            results = {
+                "success": True,
+                "face_detected": face_detected,
+                "is_live": is_live,
+                "blink_detected": blink_detector.blink_count > 0,
+                "blink_count": blink_detector.blink_count,
+                "natural_blinking": natural_blinking,
+                "results": [],  # No matches
+                "face_encodings": [best_face_encoding]  # Save the encoding for registration
+            }
+        else:
+            # Write results to output file
+            results = {
+                "success": True,
+                "face_detected": face_detected,
+                "is_live": is_live,
+                "blink_detected": blink_detector.blink_count > 0,
+                "blink_count": blink_detector.blink_count,
+                "natural_blinking": natural_blinking,
+                "results": matches,
+                "attempts": attempts
+            }
+            
+            # Add the best face encoding if available
+            best_encoding = None
+            if matches and matches[0]["name"] in best_detections:
+                best_encoding = best_detections[matches[0]["name"]]["encoding"]
+                results["face_encodings"] = [best_encoding]
+        
         with open(output_file, 'w') as f:
-            json.dump({
-                "success": len(recognition_results) > 0,
-                "results": recognition_results,
-                "attempts": attempt_count,
-                "face_detected": consecutive_real_faces > 0,
-                "is_live": consecutive_real_faces >= required_consecutive_detections
-            }, f)
-            
-        return len(recognition_results) > 0
-            
+            json.dump(results, f)
+        
+        return results
+        
     except Exception as e:
-        logger.error(f"Error in face recognition: {e}")
+        logger.error(f"Error during face recognition: {e}")
         logger.error(traceback.format_exc())
         
-        # Create error frame if possible
-        if 'upload_folder' in locals() and upload_folder:
-            try:
-                error_frame = np.zeros((480, 640, 3), dtype=np.uint8)
-                cv2.putText(error_frame, "Error during recognition", (140, 200),
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
-                cv2.putText(error_frame, str(e)[:40], (100, 240),
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
-                save_debug_frame(error_frame, [], [], upload_folder=upload_folder)
-            except Exception as e2:
-                logger.error(f"Error creating error frame: {e2}")
+        # Make sure we always have some result
+        results = {
+            "success": False,
+            "error": str(e),
+            "face_detected": False,
+            "is_live": False,
+            "blink_detected": False,
+            "blink_count": 0,
+            "natural_blinking": False,
+            "results": []
+        }
         
-        # Write error to output file
         with open(output_file, 'w') as f:
-            json.dump({
-                "success": False,
-                "error": str(e),
-                "attempts": attempt_count if 'attempt_count' in locals() else 0
-            }, f)
-            
-        return False
+            json.dump(results, f)
+        
+        return results
+        
+    finally:
+        # Clean up resources
+        if camera:
+            logger.info("Cleaning up camera resources")
+            camera.release()
+        
+        logger.info("Face recognition process finished")
 
 def main():
     """Main entry point for the face recognition process"""
@@ -721,6 +868,198 @@ def main():
     )
     
     return 0 if success else 1
+
+class BlinkDetector:
+    """Robust blink detector using state machine approach to track blink patterns"""
+    
+    def __init__(self, ear_threshold=0.25, consecutive_frames=2):
+        """
+        Initialize the blink detector
+        
+        Args:
+            ear_threshold: Threshold below which an eye is considered closed
+            consecutive_frames: Number of consecutive frames required to confirm state change
+        """
+        self.EAR_THRESHOLD = ear_threshold
+        self.CONSECUTIVE_FRAMES = consecutive_frames
+        
+        # Initialize state machine
+        self.current_state = "OPEN"  # OPEN, CLOSING, CLOSED, OPENING
+        self.consecutive_below_threshold = 0
+        self.consecutive_above_threshold = 0
+        self.blink_count = 0
+        self.ear_history = []
+        self.max_history = 30  # Store last 30 frames of EAR values
+        
+        # For tracking blink speed and patterns
+        self.last_blink_time = None
+        self.blink_intervals = []
+        
+        self.logger = logging.getLogger("BlinkDetector")
+    
+    def update(self, ear_value):
+        """
+        Update the blink detector with a new EAR value
+        
+        Args:
+            ear_value: Current frame's Eye Aspect Ratio
+            
+        Returns:
+            dict: Current blink detection state
+        """
+        # Add to history
+        self.ear_history.append(ear_value)
+        if len(self.ear_history) > self.max_history:
+            self.ear_history = self.ear_history[-self.max_history:]
+        
+        # Update state machine
+        if self.current_state == "OPEN":
+            if ear_value < self.EAR_THRESHOLD:
+                self.consecutive_below_threshold += 1
+                if self.consecutive_below_threshold >= self.CONSECUTIVE_FRAMES:
+                    self.current_state = "CLOSING"
+                    self.consecutive_below_threshold = 0
+                    self.logger.info("Eye state: CLOSING")
+            else:
+                self.consecutive_below_threshold = 0
+                
+        elif self.current_state == "CLOSING":
+            if ear_value < self.EAR_THRESHOLD:
+                self.consecutive_below_threshold += 1
+                if self.consecutive_below_threshold >= self.CONSECUTIVE_FRAMES:
+                    self.current_state = "CLOSED"
+                    self.consecutive_below_threshold = 0
+                    self.logger.info("Eye state: CLOSED")
+            else:
+                self.consecutive_below_threshold = 0
+                self.consecutive_above_threshold += 1
+                if self.consecutive_above_threshold >= self.CONSECUTIVE_FRAMES:
+                    # False alarm, eye didn't actually close
+                    self.current_state = "OPEN"
+                    self.consecutive_above_threshold = 0
+                    self.logger.info("Eye state: Back to OPEN (false alarm)")
+                
+        elif self.current_state == "CLOSED":
+            if ear_value >= self.EAR_THRESHOLD:
+                self.consecutive_above_threshold += 1
+                if self.consecutive_above_threshold >= self.CONSECUTIVE_FRAMES:
+                    self.current_state = "OPENING"
+                    self.consecutive_above_threshold = 0
+                    self.logger.info("Eye state: OPENING")
+            else:
+                self.consecutive_above_threshold = 0
+                
+        elif self.current_state == "OPENING":
+            if ear_value >= self.EAR_THRESHOLD:
+                self.consecutive_above_threshold += 1
+                if self.consecutive_above_threshold >= self.CONSECUTIVE_FRAMES:
+                    # Complete blink detected
+                    self.current_state = "OPEN"
+                    self.consecutive_above_threshold = 0
+                    self.blink_count += 1
+                    
+                    # Record blink timing
+                    current_time = time.time()
+                    if self.last_blink_time is not None:
+                        interval = current_time - self.last_blink_time
+                        self.blink_intervals.append(interval)
+                        # Keep only recent intervals
+                        if len(self.blink_intervals) > 5:
+                            self.blink_intervals = self.blink_intervals[-5:]
+                    
+                    self.last_blink_time = current_time
+                    self.logger.info(f"BLINK DETECTED! Count: {self.blink_count}")
+            else:
+                self.consecutive_above_threshold = 0
+                self.consecutive_below_threshold += 1
+                if self.consecutive_below_threshold >= self.CONSECUTIVE_FRAMES:
+                    # Eye closed again without completing the blink
+                    self.current_state = "CLOSED"
+                    self.consecutive_below_threshold = 0
+                    self.logger.info("Eye state: Back to CLOSED")
+        
+        # Calculate blink rate (blinks per minute)
+        blink_rate = 0
+        if self.blink_intervals:
+            # Calculate average interval
+            avg_interval = sum(self.blink_intervals) / len(self.blink_intervals)
+            if avg_interval > 0:
+                blink_rate = 60.0 / avg_interval
+        
+        # Prepare result
+        is_blinking = self.current_state in ["CLOSING", "CLOSED", "OPENING"]
+        
+        return {
+            "current_state": self.current_state,
+            "is_blinking": is_blinking,
+            "blink_count": self.blink_count,
+            "blink_rate": blink_rate,
+            "current_ear": ear_value
+        }
+    
+    def is_natural_blinking(self):
+        """
+        Check if the observed blinking pattern appears natural
+        
+        Returns:
+            bool: True if blinking pattern seems natural
+        """
+        # Need at least 2 blinks to analyze pattern
+        if self.blink_count < 2:
+            return False
+            
+        if not self.blink_intervals:
+            return False
+            
+        # Check for consistent but not too regular intervals
+        # Natural blinking is typically 2-5 seconds apart but varies
+        avg_interval = sum(self.blink_intervals) / len(self.blink_intervals)
+        
+        # Too fast or too slow is suspicious
+        if avg_interval < 1.0 or avg_interval > 8.0:
+            return False
+            
+        # Check for variation in blink intervals (standard deviation)
+        if len(self.blink_intervals) >= 3:
+            std_dev = np.std(self.blink_intervals)
+            variation = std_dev / avg_interval
+            
+            # Too regular is suspicious (robots blink at exact intervals)
+            if variation < 0.1:
+                return False
+                
+        # If we have multiple blinks with reasonable timing, it's probably natural
+        return self.blink_count >= 2
+    
+    def get_status_text(self):
+        """
+        Get status text for display
+        
+        Returns:
+            dict: Status text information
+        """
+        status = ""
+        color = (255, 255, 255)  # Default white
+        
+        if self.blink_count == 0:
+            status = "No blinks detected"
+            color = (0, 0, 255)  # Red
+        elif self.blink_count == 1:
+            status = "Blinked once"
+            color = (0, 255, 255)  # Yellow
+        elif self.is_natural_blinking():
+            status = f"Natural blinking ({self.blink_count})"
+            color = (0, 255, 0)  # Green
+        else:
+            status = f"Blinked {self.blink_count} times"
+            color = (255, 255, 0)  # Light blue
+            
+        return {
+            "text": status,
+            "color": color,
+            "blink_count": self.blink_count,
+            "is_natural": self.is_natural_blinking()
+        }
 
 if __name__ == "__main__":
     sys.exit(main()) 

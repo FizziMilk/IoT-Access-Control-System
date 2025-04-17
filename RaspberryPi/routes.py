@@ -275,7 +275,7 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
 
         # Show the phone entry form
         return render_template("door_entry.html")
-    
+
     @app.route('/face-recognition', methods=['GET'])
     def face_recognition():
         """Display the face recognition page"""
@@ -300,6 +300,61 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
         # Return the template
         return render_template("face_recognition.html", testing_mode=testing_mode)
     
+    def add_visualization_overlays(frame, face_locations, ear_values=None):
+        """
+        Add visualization overlays to the frame showing face boxes and EAR values
+        
+        Args:
+            frame: The video frame to add overlays to
+            face_locations: List of face location tuples (top, right, bottom, left)
+            ear_values: Optional dict with left_ear and right_ear values
+            
+        Returns:
+            The frame with overlays added
+        """
+        import cv2
+        
+        # Make a copy to avoid modifying the original
+        vis_frame = frame.copy()
+        
+        # Draw face detection boxes
+        if face_locations:
+            for (top, right, bottom, left) in face_locations:
+                # Draw face bounding box
+                cv2.rectangle(vis_frame, (left, top), (right, bottom), (0, 255, 0), 2)
+        
+        # Add EAR values if available
+        if ear_values and isinstance(ear_values, dict):
+            left_ear = ear_values.get('left_ear', 0)
+            right_ear = ear_values.get('right_ear', 0)
+            avg_ear = ear_values.get('avg_ear', 0)
+            blink_detected = ear_values.get('blink_detected', False)
+            
+            # Position for the EAR text (top-left corner)
+            ear_text_pos_y = 30
+            
+            # Add EAR values to the frame
+            cv2.putText(vis_frame, f"Left EAR: {left_ear:.2f}", 
+                       (10, ear_text_pos_y), cv2.FONT_HERSHEY_SIMPLEX, 
+                       0.6, (0, 255, 0), 2)
+            
+            cv2.putText(vis_frame, f"Right EAR: {right_ear:.2f}", 
+                       (10, ear_text_pos_y + 30), cv2.FONT_HERSHEY_SIMPLEX, 
+                       0.6, (0, 255, 0), 2)
+            
+            cv2.putText(vis_frame, f"Avg EAR: {avg_ear:.2f}", 
+                       (10, ear_text_pos_y + 60), cv2.FONT_HERSHEY_SIMPLEX, 
+                       0.6, (0, 255, 0), 2)
+            
+            # Show blink detection status
+            blink_color = (0, 255, 0) if blink_detected else (0, 0, 255)
+            blink_text = "BLINK DETECTED" if blink_detected else "NO BLINK"
+            cv2.putText(vis_frame, blink_text, 
+                       (10, ear_text_pos_y + 90), cv2.FONT_HERSHEY_SIMPLEX, 
+                       0.6, blink_color, 2)
+        
+        return vis_frame
+    
     @app.route('/face-recognition-feed')
     def face_recognition_feed():
         """Return the latest frame from the face recognition process with detection overlays"""
@@ -316,13 +371,38 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                 os.makedirs(upload_folder, exist_ok=True)
             
             debug_frame_path = os.path.join(upload_folder, 'debug_frame.jpg')
+            debug_data_path = os.path.join(upload_folder, 'debug_data.json')
             
             # If no debug frame exists yet, return a placeholder
             if not os.path.exists(debug_frame_path):
                 return send_placeholder_image()
             
-            # Return the latest frame
-            return send_file(debug_frame_path, mimetype='image/jpeg', max_age=0)
+            # Read the frame
+            frame = cv2.imread(debug_frame_path)
+            
+            # Check if there's debug data available
+            face_locations = []
+            ear_values = None
+            
+            if os.path.exists(debug_data_path):
+                try:
+                    with open(debug_data_path, 'r') as f:
+                        debug_data = json.load(f)
+                        face_locations = debug_data.get('face_locations', [])
+                        ear_values = debug_data.get('ear_values', None)
+                except Exception as e:
+                    logger.error(f"Error reading debug data: {e}")
+            
+            # Add visualization overlays
+            vis_frame = add_visualization_overlays(frame, face_locations, ear_values)
+            
+            # Convert to JPEG
+            _, buffer = cv2.imencode('.jpg', vis_frame)
+            io_buf = io.BytesIO(buffer)
+            io_buf.seek(0)
+            
+            # Return the frame with overlays
+            return send_file(io_buf, mimetype='image/jpeg', max_age=0)
         except Exception as e:
             app.logger.error(f"Error serving face recognition feed: {str(e)}")
             return send_placeholder_image()
@@ -347,305 +427,7 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
         io_buf.seek(0)
         
         return send_file(io_buf, mimetype='image/jpeg', max_age=0)
-        
-    @app.route('/video_feed')
-    def video_feed():
-        """Stream video directly from camera as multipart/x-mixed-replace content"""
-        
-        # Create shared objects to communicate between generator and outer scope
-        class SharedState:
-            def __init__(self):
-                self.camera = None
-                self.should_release = False
-                
-        shared_state = SharedState()
-            
-        def generate_frames():
-            # Create a camera capture object
-            camera = None
-            try:
-                camera = cv2.VideoCapture(0)  # Use default camera
-                if not camera.isOpened():
-                    raise Exception("Could not open camera")
-                    
-                # Store camera in shared state for potential release by other routes
-                shared_state.camera = camera
-                    
-                # Set resolution
-                camera.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-                camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-                # Set FPS to improve performance
-                camera.set(cv2.CAP_PROP_FPS, 30)
-                # Reduce buffer size to minimize latency
-                camera.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-                
-                # Load face and eye detection models
-                try:
-                    # Look for haarcascades in common locations
-                    cascade_paths = [
-                        cv2.data.haarcascades,  # OpenCV's built-in path
-                        '/usr/local/share/opencv4/haarcascades/',  # Common Linux path
-                        '/usr/share/opencv/haarcascades/',  # Another Linux path
-                        'C:/opencv/data/haarcascades/',  # Common Windows path
-                    ]
-                    
-                    # Try to find the face cascade file
-                    face_cascade_path = None
-                    for path in cascade_paths:
-                        test_path = os.path.join(path, 'haarcascade_frontalface_default.xml')
-                        if os.path.exists(test_path):
-                            face_cascade_path = test_path
-                            break
-                    
-                    if face_cascade_path is None:
-                        logger.warning("Couldn't find face cascade file, using default path")
-                        face_cascade_path = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
-                    
-                    # Try to find the eye cascade file
-                    eye_cascade_path = None
-                    for path in cascade_paths:
-                        test_path = os.path.join(path, 'haarcascade_eye.xml')
-                        if os.path.exists(test_path):
-                            eye_cascade_path = test_path
-                            break
-                    
-                    if eye_cascade_path is None:
-                        logger.warning("Couldn't find eye cascade file, using default path")
-                        eye_cascade_path = cv2.data.haarcascades + 'haarcascade_eye.xml'
-                    
-                    # Load the cascades
-                    face_cascade = cv2.CascadeClassifier(face_cascade_path)
-                    eye_cascade = cv2.CascadeClassifier(eye_cascade_path)
-                    
-                    # Check if the cascades loaded correctly
-                    if face_cascade.empty():
-                        logger.error(f"Failed to load face cascade from {face_cascade_path}")
-                        raise Exception("Failed to load face cascade")
-                    
-                    if eye_cascade.empty():
-                        logger.error(f"Failed to load eye cascade from {eye_cascade_path}")
-                        # Continue without eye detection if it fails
-                        logger.warning("Will continue without eye detection")
-                    
-                    logger.info("Camera and detection models initialized for video feed")
-                except Exception as e:
-                    logger.error(f"Error loading detection models: {e}")
-                    # Continue without detection if models fail to load
-                    face_cascade = None
-                    eye_cascade = None
-            except Exception as e:
-                logger.error(f"Error opening camera: {e}")
-                
-            # Create a placeholder for when camera isn't working
-            placeholder = np.zeros((480, 640, 3), dtype=np.uint8)
-            cv2.putText(placeholder, "Camera not available", (150, 240),
-                       cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
-            _, placeholder_buffer = cv2.imencode('.jpg', placeholder, [cv2.IMWRITE_JPEG_QUALITY, 90])
-            placeholder_bytes = placeholder_buffer.tobytes()
-            
-            # Processing flag
-            is_processing = False
-            
-            # For face detection performance
-            frame_counter = 0
-            detection_interval = 2  # Only detect faces every N frames
-            last_faces = []  # Store the last detected faces
-            last_eyes = []  # Store the last detected eyes with EAR values
-            
-            # Function to calculate EAR (Eye Aspect Ratio)
-            def calculate_ear(eye_rect):
-                """Calculate a simple approximation of EAR using rectangle dimensions"""
-                # Extract dimensions
-                x, y, w, h = eye_rect
-                # EAR approximation using height/width ratio
-                # A more accurate EAR would use actual landmarks, but this is a simpler version
-                ear = h / w if w > 0 else 0
-                return ear
-            
-            try:
-                while True:
-                    # Check if we should release the camera
-                    if shared_state.should_release:
-                        logger.info("Releasing camera as requested by another route")
-                        if camera is not None and camera.isOpened():
-                            camera.release()
-                            camera = None
-                            shared_state.camera = None
-                        shared_state.should_release = False
-                    
-                    if camera is None or not camera.isOpened():
-                        # Return placeholder if camera not available
-                        yield (b'--frame\r\n'
-                               b'Content-Type: image/jpeg\r\n\r\n' + placeholder_bytes + b'\r\n')
-                        # Try to reopen camera
-                        try:
-                            if camera is not None:
-                                camera.release()
-                            camera = cv2.VideoCapture(0)
-                            if camera.isOpened():
-                                shared_state.camera = camera
-                        except Exception as e:
-                            logger.error(f"Failed to reopen camera: {e}")
-                        time.sleep(0.5)
-                        continue
-                    
-                    # Read frame from camera
-                    ret, frame = camera.read()
-                    
-                    if not ret or frame is None or frame.size == 0:
-                        # Return placeholder if frame reading failed
-                        yield (b'--frame\r\n'
-                               b'Content-Type: image/jpeg\r\n\r\n' + placeholder_bytes + b'\r\n')
-                        time.sleep(0.1)
-                        continue
-                    
-                    frame_with_detections = frame.copy()
-                    
-                    # Perform face and eye detection every few frames for better performance
-                    if face_cascade is not None:
-                        frame_counter += 1
-                        if frame_counter % detection_interval == 0:
-                            # Convert to grayscale for detection
-                            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                            
-                            # Apply histogram equalization to improve detection in varying lighting
-                            gray = cv2.equalizeHist(gray)
-                            
-                            # Detect faces
-                            faces = face_cascade.detectMultiScale(
-                                gray,
-                                scaleFactor=1.1,
-                                minNeighbors=5,
-                                minSize=(30, 30),
-                                flags=cv2.CASCADE_SCALE_IMAGE
-                            )
-                            
-                            # Update last faces if we found any
-                            if len(faces) > 0:
-                                last_faces = faces
-                                
-                                # Only detect eyes if we found faces
-                                last_eyes = []
-                                if eye_cascade is not None:
-                                    for (x, y, w, h) in faces:
-                                        # Region of interest for eyes
-                                        roi_gray = gray[y:y+h, x:x+w]
-                                        
-                                        # Detect eyes within the face region
-                                        eyes = eye_cascade.detectMultiScale(
-                                            roi_gray,
-                                            scaleFactor=1.1,
-                                            minNeighbors=3,
-                                            minSize=(15, 15),
-                                            maxSize=(w//3, h//3)  # Eyes shouldn't be too large
-                                        )
-                                        
-                                        # Store the eyes with their face position and calculate EAR
-                                        for (ex, ey, ew, eh) in eyes:
-                                            eye_rect = (x+ex, y+ey, ew, eh)
-                                            ear = calculate_ear(eye_rect)
-                                            last_eyes.append((eye_rect, ear))
-                    
-                    # Draw the last detected faces on every frame
-                    for (x, y, w, h) in last_faces:
-                        # Draw face rectangle
-                        cv2.rectangle(frame_with_detections, (x, y), (x+w, y+h), (0, 255, 0), 2)
-                        
-                        # Add face label
-                        cv2.putText(frame_with_detections, "Face", (x, y-10),
-                                  cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
-                        
-                    # Draw eye visualization with EAR
-                    for (eye_rect, ear) in last_eyes:
-                        x, y, w, h = eye_rect
-                        
-                        # Draw the eye rectangle
-                        cv2.rectangle(frame_with_detections, (x, y), (x+w, y+h), (255, 0, 0), 1)
-                        
-                        # Create EAR visualization
-                        # Draw horizontal lines to represent the eye width
-                        cv2.line(frame_with_detections, (x, y+h//2), (x+w, y+h//2), (255, 0, 0), 1)
-                        
-                        # Draw vertical lines based on EAR (scaled for visualization)
-                        # These represent the eye height/opening
-                        mid_x = x + w//2
-                        h_visual = int(min(h, w * ear))  # Visual height based on EAR
-                        cv2.line(frame_with_detections, (mid_x, y + (h-h_visual)//2), 
-                                (mid_x, y + (h+h_visual)//2), (0, 0, 255), 2)
-                        
-                        # Add EAR text
-                        ear_text = f"EAR: {ear:.2f}"
-                        cv2.putText(frame_with_detections, ear_text, (x, y-5),
-                                  cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 0, 0), 1)
-                        
-                    # Add information about detected faces at the bottom of the frame
-                    if len(last_faces) > 0:
-                        cv2.putText(frame_with_detections, f"Faces: {len(last_faces)}, Eyes: {len(last_eyes)}", 
-                                  (10, frame.shape[0] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-                    
-                    # Check if facial recognition is in progress
-                    if 'UPLOAD_FOLDER' in app.config:
-                        debug_frame_path = os.path.join(app.config['UPLOAD_FOLDER'], 'debug_frame.jpg')
-                        
-                        # If debug frame exists and is fresh (modified in last 0.5 seconds), use it
-                        try:
-                            if (os.path.exists(debug_frame_path) and 
-                                time.time() - os.path.getmtime(debug_frame_path) < 0.5):
-                                
-                                is_processing = True
-                                # Use the debug frame instead of the camera frame
-                                with open(debug_frame_path, 'rb') as f:
-                                    frame_bytes = f.read()
-                                    yield (b'--frame\r\n'
-                                           b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
-                                    time.sleep(0.033)  # ~30fps
-                                    continue
-                        except Exception as e:
-                            # If there's an error reading the debug frame, continue with camera frame
-                            logger.error(f"Error reading debug frame: {e}")
-                            
-                    # If we get here, we'll use the camera frame directly
-                    if is_processing:
-                        # Add "Processing..." text if we were in processing mode
-                        cv2.putText(frame_with_detections, "Processing...", (10, 30),
-                                  cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-                        is_processing = False
-                    
-                    # Convert frame to JPEG
-                    try:
-                        _, buffer = cv2.imencode('.jpg', frame_with_detections, [cv2.IMWRITE_JPEG_QUALITY, 90])
-                        frame_bytes = buffer.tobytes()
-                        
-                        # Only yield if we got valid data
-                        if frame_bytes and len(frame_bytes) > 0:
-                            yield (b'--frame\r\n'
-                                   b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
-                        else:
-                            yield (b'--frame\r\n'
-                                   b'Content-Type: image/jpeg\r\n\r\n' + placeholder_bytes + b'\r\n')
-                    except Exception as e:
-                        logger.error(f"Error encoding frame: {e}")
-                        yield (b'--frame\r\n'
-                               b'Content-Type: image/jpeg\r\n\r\n' + placeholder_bytes + b'\r\n')
-                    
-                    # Small delay for frame rate control
-                    time.sleep(0.033)  # ~30fps
-            
-            except Exception as e:
-                logger.error(f"Error in video streaming: {e}")
-            finally:
-                # Clean up camera resources when done
-                if camera is not None and camera.isOpened():
-                    camera.release()
-                    if shared_state.camera == camera:
-                        shared_state.camera = None
-        
-        # Return the streaming response
-        return app.response_class(
-            generate_frames(),
-            mimetype='multipart/x-mixed-replace; boundary=frame'
-        )
-        
+    
     @app.route('/process-face', methods=['POST'])
     def process_face():
         """Process facial recognition using a separate process"""
@@ -656,27 +438,6 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
         logger.info(f"Backend API availability: {backend_is_available}")
         
         try:
-            # Release camera from video_feed if it's running
-            for rule in app.url_map.iter_rules():
-                if rule.endpoint == 'video_feed':
-                    # Find the generator for video_feed and access its shared_state
-                    for client in request.environ.get('werkzeug.server.shutdown', {}).get('clients', []):
-                        if hasattr(client, 'shared_state') and client.shared_state.camera is not None:
-                            logger.info("Requesting camera release from video_feed")
-                            client.shared_state.should_release = True
-                            # Give it a moment to release
-                            time.sleep(0.2)
-                            break
-            
-            # Make sure camera is released by direct system-level action
-            try:
-                import subprocess
-                subprocess.run('sudo fuser -k /dev/video0 2>/dev/null || true', 
-                               shell=True, timeout=2)
-                logger.info("Released camera at system level")
-            except Exception as e:
-                logger.warning(f"Could not force-release camera at system level: {e}")
-            
             # Check if UPLOAD_FOLDER is configured
             if 'UPLOAD_FOLDER' not in app.config:
                 logger.error("UPLOAD_FOLDER not configured in app settings")
@@ -872,7 +633,7 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
             except Exception as e:
                 logger.error(f"Error saving local face data: {e}")
                 flash("Error saving face data. Please try again later.", "danger")
-                return redirect(url_for("door_entry"))
+            return redirect(url_for("door_entry"))
             
         try:
             # Convert face encoding to base64 string
@@ -914,7 +675,7 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                 
             # Parse response with error handling
             try:
-                data = resp.json()
+            data = resp.json()
             except json.JSONDecodeError as json_err:
                 logger.error(f"Failed to decode JSON response from face registration: {json_err}")
                 logger.error(f"Response content: {resp.text}")
@@ -929,7 +690,7 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                 flash("Face registered successfully. Please wait for OTP or admin approval.", "success")
                 
                 # Skip OTP flow if backend is not fully functional
-                return redirect(url_for("door_entry"))
+                    return redirect(url_for("door_entry"))
             else:
                 flash(data.get("error", "Error registering face"), "danger")
         except Exception as e:
@@ -954,10 +715,277 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                 flash(data.get("error", "Error updating name"), "danger")
         except Exception as e:
             flash("Error connecting to backend.", "danger")
-        return redirect(url_for("door_entry"))
+        return redirect(url_for("door_entry")) 
 
     @app.route('/upload/<filename>')
     def uploaded_file(filename):
         return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
+
+    @app.route('/video_feed')
+    def video_feed():
+        """Stream video directly from camera as multipart/x-mixed-replace content"""
+        def generate_frames():
+            # Create a camera capture object
+            camera = None
+            try:
+                camera = cv2.VideoCapture(0)  # Use default camera
+                if not camera.isOpened():
+                    raise Exception("Could not open camera")
+                    
+                # Set resolution
+                camera.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+                camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+                # Set FPS to improve performance
+                camera.set(cv2.CAP_PROP_FPS, 30)
+                # Reduce buffer size to minimize latency
+                camera.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                
+                # Load face and eye detection models
+                try:
+                    # Look for haarcascades in common locations
+                    cascade_paths = [
+                        cv2.data.haarcascades,  # OpenCV's built-in path
+                        '/usr/local/share/opencv4/haarcascades/',  # Common Linux path
+                        '/usr/share/opencv/haarcascades/',  # Another Linux path
+                        'C:/opencv/data/haarcascades/',  # Common Windows path
+                    ]
+                    
+                    # Try to find the face cascade file
+                    face_cascade_path = None
+                    for path in cascade_paths:
+                        test_path = os.path.join(path, 'haarcascade_frontalface_default.xml')
+                        if os.path.exists(test_path):
+                            face_cascade_path = test_path
+                            break
+                    
+                    if face_cascade_path is None:
+                        logger.warning("Couldn't find face cascade file, using default path")
+                        face_cascade_path = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
+                    
+                    # Try to find the eye cascade file
+                    eye_cascade_path = None
+                    for path in cascade_paths:
+                        test_path = os.path.join(path, 'haarcascade_eye.xml')
+                        if os.path.exists(test_path):
+                            eye_cascade_path = test_path
+                            break
+                    
+                    if eye_cascade_path is None:
+                        logger.warning("Couldn't find eye cascade file, using default path")
+                        eye_cascade_path = cv2.data.haarcascades + 'haarcascade_eye.xml'
+                    
+                    # Load the cascades
+                    face_cascade = cv2.CascadeClassifier(face_cascade_path)
+                    eye_cascade = cv2.CascadeClassifier(eye_cascade_path)
+                    
+                    # Check if the cascades loaded correctly
+                    if face_cascade.empty():
+                        logger.error(f"Failed to load face cascade from {face_cascade_path}")
+                        raise Exception("Failed to load face cascade")
+                    
+                    if eye_cascade.empty():
+                        logger.error(f"Failed to load eye cascade from {eye_cascade_path}")
+                        # Continue without eye detection if it fails
+                        logger.warning("Will continue without eye detection")
+                    
+                    logger.info("Camera and detection models initialized for video feed")
+                except Exception as e:
+                    logger.error(f"Error loading detection models: {e}")
+                    # Continue without detection if models fail to load
+                    face_cascade = None
+                    eye_cascade = None
+            except Exception as e:
+                logger.error(f"Error opening camera: {e}")
+                
+            # Create a placeholder for when camera isn't working
+            placeholder = np.zeros((480, 640, 3), dtype=np.uint8)
+            cv2.putText(placeholder, "Camera not available", (150, 240),
+                       cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+            _, placeholder_buffer = cv2.imencode('.jpg', placeholder, [cv2.IMWRITE_JPEG_QUALITY, 90])
+            placeholder_bytes = placeholder_buffer.tobytes()
+            
+            # Processing flag
+            is_processing = False
+            
+            # For face detection performance
+            frame_counter = 0
+            detection_interval = 2  # Only detect faces every N frames
+            last_faces = []  # Store the last detected faces
+            last_eyes = []  # Store the last detected eyes
+            
+            try:
+                while True:
+                    if camera is None or not camera.isOpened():
+                        # Return placeholder if camera not available
+                        yield (b'--frame\r\n'
+                               b'Content-Type: image/jpeg\r\n\r\n' + placeholder_bytes + b'\r\n')
+                        # Try to reopen camera
+                        try:
+                            if camera is not None:
+                                camera.release()
+                            camera = cv2.VideoCapture(0)
+                        except Exception as e:
+                            logger.error(f"Failed to reopen camera: {e}")
+                        time.sleep(0.5)
+                        continue
+                    
+                    # Read frame from camera
+                    ret, frame = camera.read()
+                    
+                    if not ret or frame is None or frame.size == 0:
+                        # Return placeholder if frame reading failed
+                        yield (b'--frame\r\n'
+                               b'Content-Type: image/jpeg\r\n\r\n' + placeholder_bytes + b'\r\n')
+                        time.sleep(0.1)
+                        continue
+                    
+                    frame_with_detections = frame.copy()
+                    
+                    # Perform face and eye detection every few frames for better performance
+                    if face_cascade is not None:
+                        frame_counter += 1
+                        if frame_counter % detection_interval == 0:
+                            # Convert to grayscale for detection
+                            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                            
+                            # Apply histogram equalization to improve detection in varying lighting
+                            gray = cv2.equalizeHist(gray)
+                            
+                            # Detect faces
+                            faces = face_cascade.detectMultiScale(
+                                gray,
+                                scaleFactor=1.1,
+                                minNeighbors=5,
+                                minSize=(30, 30),
+                                flags=cv2.CASCADE_SCALE_IMAGE
+                            )
+                            
+                            # Update last faces if we found any
+                            if len(faces) > 0:
+                                last_faces = faces
+                                
+                                # Only detect eyes if we found faces
+                                last_eyes = []
+                                if eye_cascade is not None:
+                                    for (x, y, w, h) in faces:
+                                        # Region of interest for eyes
+                                        roi_gray = gray[y:y+h, x:x+w]
+                                        
+                                        # Detect eyes within the face region
+                                        eyes = eye_cascade.detectMultiScale(
+                                            roi_gray,
+                                            scaleFactor=1.1,
+                                            minNeighbors=3,
+                                            minSize=(15, 15),
+                                            maxSize=(w//3, h//3)  # Eyes shouldn't be too large
+                                        )
+                                        
+                                        # Store the eyes with their face position
+                                        for (ex, ey, ew, eh) in eyes:
+                                            last_eyes.append((x+ex, y+ey, ew, eh))
+                    
+                    # Draw the last detected faces on every frame
+                    for (x, y, w, h) in last_faces:
+                        # Draw face rectangle
+                        cv2.rectangle(frame_with_detections, (x, y), (x+w, y+h), (0, 255, 0), 2)
+                        
+                        # Add face label
+                        cv2.putText(frame_with_detections, "Face", (x, y-10),
+                                  cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+                        
+                    # Draw eye rectangles
+                    for (x, y, w, h) in last_eyes:
+                        cv2.rectangle(frame_with_detections, (x, y), (x+w, y+h), (255, 0, 0), 2)
+                        
+                    # Add information about detected faces at the bottom of the frame
+                    if len(last_faces) > 0:
+                        cv2.putText(frame_with_detections, f"Faces: {len(last_faces)}, Eyes: {len(last_eyes)}", 
+                                  (10, frame.shape[0] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+                    
+                    # Check if facial recognition is in progress
+                    if 'UPLOAD_FOLDER' in app.config:
+                        debug_frame_path = os.path.join(app.config['UPLOAD_FOLDER'], 'debug_frame.jpg')
+                        
+                        # If debug frame exists and is fresh (modified in last 0.5 seconds), use it
+                        try:
+                            if (os.path.exists(debug_frame_path) and 
+                                time.time() - os.path.getmtime(debug_frame_path) < 0.5):
+                                
+                                is_processing = True
+                                # Use the debug frame instead of the camera frame
+                                with open(debug_frame_path, 'rb') as f:
+                                    frame_bytes = f.read()
+                                    yield (b'--frame\r\n'
+                                           b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+                                    time.sleep(0.033)  # ~30fps
+                                    continue
+                        except Exception as e:
+                            # If there's an error reading the debug frame, continue with camera frame
+                            logger.error(f"Error reading debug frame: {e}")
+                            
+                    # If we get here, we'll use the camera frame directly
+                    if is_processing:
+                        # Add "Processing..." text if we were in processing mode
+                        cv2.putText(frame_with_detections, "Processing...", (10, 30),
+                                  cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                        is_processing = False
+                    
+                    # Convert frame to JPEG
+                    try:
+                        _, buffer = cv2.imencode('.jpg', frame_with_detections, [cv2.IMWRITE_JPEG_QUALITY, 90])
+                        frame_bytes = buffer.tobytes()
+                        
+                        # Only yield if we got valid data
+                        if frame_bytes and len(frame_bytes) > 0:
+                            yield (b'--frame\r\n'
+                                   b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+                        else:
+                            yield (b'--frame\r\n'
+                                   b'Content-Type: image/jpeg\r\n\r\n' + placeholder_bytes + b'\r\n')
+                    except Exception as e:
+                        logger.error(f"Error encoding frame: {e}")
+                        yield (b'--frame\r\n'
+                               b'Content-Type: image/jpeg\r\n\r\n' + placeholder_bytes + b'\r\n')
+                    
+                    # Small delay for frame rate control
+                    time.sleep(0.033)  # ~30fps
+            
+            except Exception as e:
+                logger.error(f"Error in video streaming: {e}")
+            finally:
+                # Clean up camera resources when done
+                if camera is not None and camera.isOpened():
+                    camera.release()
+        
+        # Return the streaming response
+        return app.response_class(
+            generate_frames(),
+            mimetype='multipart/x-mixed-replace; boundary=frame'
+        )
+
+    @app.route('/ear-data')
+    def ear_data():
+        """Provide EAR (Eye Aspect Ratio) data as JSON for the face recognition page"""
+        try:
+            # Check if upload folder exists
+            if 'UPLOAD_FOLDER' not in app.config:
+                return jsonify({"error": "Upload folder not configured"}), 500
+                
+            upload_folder = app.config['UPLOAD_FOLDER']
+            debug_data_path = os.path.join(upload_folder, 'debug_data.json')
+            
+            # Check if debug data file exists
+            if not os.path.exists(debug_data_path):
+                return jsonify({"error": "No EAR data available"}), 404
+                
+            # Read the debug data file
+            with open(debug_data_path, 'r') as f:
+                debug_data = json.load(f)
+                
+            # Return the data as JSON
+            return jsonify(debug_data)
+        except Exception as e:
+            logger.error(f"Error fetching EAR data: {e}")
+            return jsonify({"error": str(e)}), 500
 
     return app 
