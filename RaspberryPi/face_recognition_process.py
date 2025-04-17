@@ -422,8 +422,16 @@ def save_debug_frame(frame, face_locations, liveness_results, match_names=None, 
 def run_face_recognition(output_file, backend_url, max_attempts=100, confidence_threshold=60, upload_folder=None):
     """Run the face recognition process"""
     try:
-        camera = setup_camera()
-        
+        # Try using the same camera source as the video_feed to avoid conflicts
+        if os.name == 'nt':  # Windows
+            camera = WebCamera(camera_id=0, resolution=(640, 480))
+        else:  # Linux/macOS
+            # On Linux/macOS, use a different API to avoid conflicts
+            camera = WebCamera(camera_id=0, resolution=(640, 480))
+            # Set some properties to improve compatibility
+            if camera.cap is not None:
+                camera.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc('M', 'J', 'P', 'G'))
+                
         # Load known faces from backend
         known_face_encodings, known_face_names, known_face_ids = load_known_face_encodings(backend_url)
         
@@ -433,7 +441,7 @@ def run_face_recognition(output_file, backend_url, max_attempts=100, confidence_
         attempt_count = 0
         recognition_results = []
         last_liveness_check_time = time.time()
-        liveness_check_interval = 0.5  # Check liveness less frequently for better performance
+        liveness_check_interval = 0.3  # Check liveness more frequently for better accuracy
         
         # For tracking successful detections
         consecutive_real_faces = 0
@@ -441,6 +449,15 @@ def run_face_recognition(output_file, backend_url, max_attempts=100, confidence_
         best_match_count = 0
         best_match_index = -1
         best_confidence = 0
+        
+        # For debugging - create a frame with instructions
+        if upload_folder:
+            instruction_frame = np.zeros((480, 640, 3), dtype=np.uint8)
+            cv2.putText(instruction_frame, "Face Recognition Active", (140, 200), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+            cv2.putText(instruction_frame, "Please look at the camera", (140, 240),
+                       cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+            save_debug_frame(instruction_frame, [], [], upload_folder=upload_folder)
         
         while attempt_count < max_attempts:
             # Get frame from camera
@@ -453,9 +470,9 @@ def run_face_recognition(output_file, backend_url, max_attempts=100, confidence_
             
             # Always save a frame with current status to show progress
             status_frame = frame.copy()
-            cv2.putText(status_frame, f"Processing: {int((attempt_count/max_attempts)*100)}%", (10, 30),
+            progress_percent = int((attempt_count/max_attempts)*100)
+            cv2.putText(status_frame, f"Processing: {progress_percent}%", (10, 30),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-            save_debug_frame(status_frame, [], [], upload_folder=upload_folder)
             
             # Convert the frame from BGR to RGB (required by face_recognition)
             rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -465,9 +482,8 @@ def run_face_recognition(output_file, backend_url, max_attempts=100, confidence_
             
             # No faces detected
             if not face_locations:
-                logger.info("No faces detected in frame")
-                status_frame = frame.copy()
-                cv2.putText(status_frame, "No face detected", (10, 30),
+                # Save frame with "No face detected" message
+                cv2.putText(status_frame, "No face detected", (10, 60),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
                 save_debug_frame(status_frame, [], [], upload_folder=upload_folder)
                 time.sleep(0.05)
@@ -475,10 +491,16 @@ def run_face_recognition(output_file, backend_url, max_attempts=100, confidence_
                 consecutive_real_faces = 0  # Reset counter when no face is detected
                 continue
             
-            # Only perform liveness check periodically to improve framerate
-            current_time = time.time()
+            # Always show where faces are detected
             liveness_results = []
-            if current_time - last_liveness_check_time >= liveness_check_interval:
+            
+            # Get the current time for liveness check frequency
+            current_time = time.time()
+            
+            # Only perform full liveness check periodically to improve framerate
+            perform_full_check = (current_time - last_liveness_check_time >= liveness_check_interval)
+            
+            if perform_full_check:
                 # Perform liveness detection
                 liveness_results = perform_liveness_check(frame, face_locations)
                 last_liveness_check_time = current_time
@@ -488,15 +510,22 @@ def run_face_recognition(output_file, backend_url, max_attempts=100, confidence_
                 
                 # If no real faces, continue to next frame
                 if not real_faces:
+                    # Mark all faces as not real
+                    cv2.putText(status_frame, "Possible spoofing detected", (10, 60),
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
                     logger.info("No real faces detected, possible spoofing attempt")
                     consecutive_real_faces = 0  # Reset counter
-                    save_debug_frame(frame, face_locations, liveness_results, upload_folder=upload_folder)
+                    save_debug_frame(status_frame, face_locations, liveness_results, upload_folder=upload_folder)
                     time.sleep(0.05)
                     attempt_count += 1
                     continue
                 else:
                     # Increment consecutive real face counter
                     consecutive_real_faces += 1
+                    
+                    # Set status message
+                    cv2.putText(status_frame, f"Real face detected ({consecutive_real_faces}/{required_consecutive_detections})", 
+                               (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
                     
                 # Get face encodings for recognized faces
                 face_encodings = face_recognition.face_encodings(rgb_frame, face_locations)
@@ -538,6 +567,12 @@ def run_face_recognition(output_file, backend_url, max_attempts=100, confidence_
                                         best_match_count = 1
                                         best_confidence = confidence
                                 
+                                # Add matching information to the frame
+                                cv2.putText(status_frame, f"Match: {known_face_names[match_index]}", (10, 90),
+                                          cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                                cv2.putText(status_frame, f"Confidence: {confidence:.1f}%", (10, 120),
+                                          cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                                
                                 logger.info(f"Match found: {known_face_names[match_index]} with {confidence:.2f}% confidence")
                                 
                                 # If we have enough consecutive real faces and matches, exit early with success
@@ -552,11 +587,11 @@ def run_face_recognition(output_file, backend_url, max_attempts=100, confidence_
                                     break
                 
                 # Save frame with detection results
-                save_debug_frame(frame, face_locations, liveness_results, match_names, upload_folder=upload_folder)
+                save_debug_frame(status_frame, face_locations, liveness_results, match_names, upload_folder=upload_folder)
             else:
-                # If not doing liveness check, still save frame to show realtime feed
-                placeholder_liveness = [{"is_real": True, "score": 0.0, "face_location": loc, "debug_info": {}} for loc in face_locations]
-                save_debug_frame(frame, face_locations, placeholder_liveness, upload_folder=upload_folder)
+                # Even when not doing full check, still show face locations
+                placeholder_liveness = [{"is_real": True, "score": 0.5, "face_location": loc, "debug_info": {}} for loc in face_locations]
+                save_debug_frame(status_frame, face_locations, placeholder_liveness, upload_folder=upload_folder)
             
             # If we have a strong match, exit the loop
             if consecutive_real_faces >= required_consecutive_detections and best_match_count >= 2:
@@ -571,10 +606,34 @@ def run_face_recognition(output_file, backend_url, max_attempts=100, confidence_
                             "confidence": float(best_confidence),
                             "timestamp": datetime.now().isoformat()
                         })
+                
+                # Show success screen before exiting
+                if upload_folder:
+                    success_frame = frame.copy()
+                    cv2.putText(success_frame, "Recognition Successful!", (120, 200),
+                              cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+                    if best_match_index >= 0:
+                        cv2.putText(success_frame, f"Welcome, {known_face_names[best_match_index]}", (120, 240),
+                                  cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+                    save_debug_frame(success_frame, [], [], upload_folder=upload_folder)
+                
                 break
             
             time.sleep(0.05)  # Shorter sleep for better framerate
             attempt_count += 1
+        
+        # If we exited without a match, show a failure screen
+        if len(recognition_results) == 0 and upload_folder:
+            failure_frame = frame.copy() if frame is not None else np.zeros((480, 640, 3), dtype=np.uint8)
+            if consecutive_real_faces > 0:
+                cv2.putText(failure_frame, "Face detected but not recognized", (100, 200),
+                          cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+            else:
+                cv2.putText(failure_frame, "No valid face detected", (140, 200),
+                          cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+            cv2.putText(failure_frame, "Please try again", (180, 240),
+                      cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+            save_debug_frame(failure_frame, [], [], upload_folder=upload_folder)
         
         # Clean up
         camera.release()
@@ -595,12 +654,24 @@ def run_face_recognition(output_file, backend_url, max_attempts=100, confidence_
         logger.error(f"Error in face recognition: {e}")
         logger.error(traceback.format_exc())
         
+        # Create error frame if possible
+        if 'upload_folder' in locals() and upload_folder:
+            try:
+                error_frame = np.zeros((480, 640, 3), dtype=np.uint8)
+                cv2.putText(error_frame, "Error during recognition", (140, 200),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+                cv2.putText(error_frame, str(e)[:40], (100, 240),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+                save_debug_frame(error_frame, [], [], upload_folder=upload_folder)
+            except Exception as e2:
+                logger.error(f"Error creating error frame: {e2}")
+        
         # Write error to output file
         with open(output_file, 'w') as f:
             json.dump({
                 "success": False,
                 "error": str(e),
-                "attempts": attempt_count
+                "attempts": attempt_count if 'attempt_count' in locals() else 0
             }, f)
             
         return False

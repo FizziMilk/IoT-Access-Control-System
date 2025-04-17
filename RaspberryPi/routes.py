@@ -643,85 +643,115 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
 
     @app.route('/video_feed')
     def video_feed():
-        """Stream video as multipart/x-mixed-replace content"""
+        """Stream video directly from camera as multipart/x-mixed-replace content"""
         def generate_frames():
-            """Generator function to yield frames as they become available"""
-            last_modified_time = 0
-            
-            # Create a placeholder frame to use when no image is available
+            # Create a camera capture object
+            camera = None
+            try:
+                camera = cv2.VideoCapture(0)  # Use default camera
+                if not camera.isOpened():
+                    raise Exception("Could not open camera")
+                    
+                # Set resolution
+                camera.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+                camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+                # Set FPS to improve performance
+                camera.set(cv2.CAP_PROP_FPS, 30)
+                # Reduce buffer size to minimize latency
+                camera.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            except Exception as e:
+                logger.error(f"Error opening camera: {e}")
+                
+            # Create a placeholder for when camera isn't working
             placeholder = np.zeros((480, 640, 3), dtype=np.uint8)
-            cv2.putText(placeholder, "Waiting for camera...", (150, 240),
+            cv2.putText(placeholder, "Camera not available", (150, 240),
                        cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
             _, placeholder_buffer = cv2.imencode('.jpg', placeholder, [cv2.IMWRITE_JPEG_QUALITY, 90])
             placeholder_bytes = placeholder_buffer.tobytes()
             
-            while True:
-                try:
-                    # Check if UPLOAD_FOLDER exists
-                    if 'UPLOAD_FOLDER' not in app.config:
-                        # Return placeholder image
+            # Processing flag
+            is_processing = False
+            
+            try:
+                while True:
+                    if camera is None or not camera.isOpened():
+                        # Return placeholder if camera not available
                         yield (b'--frame\r\n'
                                b'Content-Type: image/jpeg\r\n\r\n' + placeholder_bytes + b'\r\n')
-                        time.sleep(0.05)  # Short delay before next frame
+                        # Try to reopen camera
+                        try:
+                            if camera is not None:
+                                camera.release()
+                            camera = cv2.VideoCapture(0)
+                        except Exception as e:
+                            logger.error(f"Failed to reopen camera: {e}")
+                        time.sleep(0.5)
                         continue
                     
-                    debug_frame_path = os.path.join(app.config['UPLOAD_FOLDER'], 'debug_frame.jpg')
+                    # Read frame from camera
+                    ret, frame = camera.read()
                     
-                    # Check if file exists and has been modified
-                    if os.path.exists(debug_frame_path):
+                    if not ret or frame is None or frame.size == 0:
+                        # Return placeholder if frame reading failed
+                        yield (b'--frame\r\n'
+                               b'Content-Type: image/jpeg\r\n\r\n' + placeholder_bytes + b'\r\n')
+                        time.sleep(0.1)
+                        continue
+                    
+                    # Check if facial recognition is in progress
+                    if 'UPLOAD_FOLDER' in app.config:
+                        debug_frame_path = os.path.join(app.config['UPLOAD_FOLDER'], 'debug_frame.jpg')
+                        
+                        # If debug frame exists and is fresh (modified in last 0.5 seconds), use it
                         try:
-                            # Get file size and modification time
-                            file_size = os.path.getsize(debug_frame_path)
-                            current_modified_time = os.path.getmtime(debug_frame_path)
-                            
-                            # Only read if the file has been modified since last read and has valid size
-                            if current_modified_time != last_modified_time and file_size > 0:
-                                # Read the image with file access protection
-                                try:
-                                    # Use a with statement to ensure file is properly closed
-                                    with open(debug_frame_path, 'rb') as f:
-                                        file_bytes = f.read()
-                                    
-                                    # Decode the image in memory instead of using imread
-                                    # This helps avoid file locking issues
-                                    nparr = np.frombuffer(file_bytes, np.uint8)
-                                    frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-                                    
-                                    if frame is not None and frame.size > 0:
-                                        # Update last modified time only if read was successful
-                                        last_modified_time = current_modified_time
-                                        
-                                        # Encode with specified quality to avoid corruption
-                                        _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 90])
-                                        frame_bytes = buffer.tobytes()
-                                        
-                                        # Only yield if we got valid data
-                                        if len(frame_bytes) > 0:
-                                            yield (b'--frame\r\n'
-                                                   b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
-                                            time.sleep(0.033)  # ~30fps
-                                            continue
-                                except Exception as e:
-                                    logger.error(f"Error reading image file: {e}")
-                                    # Fall through to placeholder
+                            if (os.path.exists(debug_frame_path) and 
+                                time.time() - os.path.getmtime(debug_frame_path) < 0.5):
+                                
+                                is_processing = True
+                                # Use the debug frame instead of the camera frame
+                                with open(debug_frame_path, 'rb') as f:
+                                    frame_bytes = f.read()
+                                    yield (b'--frame\r\n'
+                                           b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+                                    time.sleep(0.033)  # ~30fps
+                                    continue
                         except Exception as e:
-                            logger.error(f"File access error: {e}")
+                            # If there's an error reading the debug frame, continue with camera frame
+                            logger.error(f"Error reading debug frame: {e}")
+                            
+                    # If we get here, we'll use the camera frame directly
+                    if is_processing:
+                        # Add "Processing..." text if we were in processing mode
+                        cv2.putText(frame, "Processing...", (10, 30),
+                                  cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                        is_processing = False
                     
-                    # If we reached here, use the placeholder
-                    yield (b'--frame\r\n'
-                           b'Content-Type: image/jpeg\r\n\r\n' + placeholder_bytes + b'\r\n')
+                    # Convert frame to JPEG
+                    try:
+                        _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 90])
+                        frame_bytes = buffer.tobytes()
+                        
+                        # Only yield if we got valid data
+                        if frame_bytes and len(frame_bytes) > 0:
+                            yield (b'--frame\r\n'
+                                   b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+                        else:
+                            yield (b'--frame\r\n'
+                                   b'Content-Type: image/jpeg\r\n\r\n' + placeholder_bytes + b'\r\n')
+                    except Exception as e:
+                        logger.error(f"Error encoding frame: {e}")
+                        yield (b'--frame\r\n'
+                               b'Content-Type: image/jpeg\r\n\r\n' + placeholder_bytes + b'\r\n')
                     
-                    # Small delay to reduce CPU usage
-                    time.sleep(0.05)
-                    
-                except Exception as e:
-                    logger.error(f"Error in video streaming: {e}")
-                    time.sleep(0.1)
-                    
-                    # On error, yield the placeholder frame
-                    yield (b'--frame\r\n'
-                           b'Content-Type: image/jpeg\r\n\r\n' + placeholder_bytes + b'\r\n')
-                    continue
+                    # Small delay for frame rate control
+                    time.sleep(0.033)  # ~30fps
+            
+            except Exception as e:
+                logger.error(f"Error in video streaming: {e}")
+            finally:
+                # Clean up camera resources when done
+                if camera is not None and camera.isOpened():
+                    camera.release()
         
         # Return the streaming response
         return app.response_class(

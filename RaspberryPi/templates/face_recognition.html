@@ -50,10 +50,25 @@
             margin: 20px auto;
             border: 2px solid #ddd;
             border-radius: 5px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
         }
         #processingText {
             display: none;
             margin: 10px 0;
+            background-color: rgba(0,0,0,0.7);
+            color: white;
+            padding: 10px;
+            border-radius: 5px;
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 10;
+        }
+        .video-container {
+            position: relative;
+            margin: 20px auto;
+            max-width: 640px;
         }
     </style>
 </head>
@@ -71,7 +86,7 @@
         
         <div id="instructions">
             <p class="lead">Click the button below to start facial recognition.</p>
-            <p>Look directly at the camera and blink naturally when prompted.</p>
+            <p>Look directly at the camera and keep your face visible.</p>
             <p><strong>Important:</strong> Ensure your face is well-lit from the front.</p>
         </div>
         
@@ -79,17 +94,18 @@
             <i class="fas fa-camera"></i> Start Face Recognition
         </button>
         
-        <img id="videoFeed" src="{{ url_for('video_feed') }}" alt="Face Recognition Feed">
-        
-        <div id="processingText" class="mt-2">
-            <h4>Processing your face. Please keep still...</h4>
+        <div class="video-container">
+            <img id="videoFeed" src="{{ url_for('video_feed') }}" alt="Face Recognition Feed" onerror="handleVideoError(this)">
+            <div id="processingText" class="mt-2">
+                <h4>Processing your face. Please keep still...</h4>
+            </div>
         </div>
         
         <div class="spinner-container" id="loadingSpinner">
             <div class="spinner-border text-primary" role="status">
                 <span class="visually-hidden">Loading...</span>
             </div>
-            <p class="mt-2">Processing... Please look at the camera and blink naturally</p>
+            <p class="mt-2">Processing... Please look at the camera and keep still</p>
             <div class="progress mt-3" style="height: 20px;">
                 <div id="progressBar" class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar" style="width: 0%"></div>
             </div>
@@ -112,8 +128,8 @@
             <ul>
                 <li>Ensure good lighting on your face</li>
                 <li>Look directly at the camera</li>
-                <li>Blink normally when prompted</li>
                 <li>Hold still during the process</li>
+                <li>Make sure your face is completely visible</li>
             </ul>
             
             {% if testing_mode %}
@@ -194,6 +210,18 @@
             // Submit the form
             document.getElementById('faceForm').submit();
         });
+        
+        // Handle video error
+        function handleVideoError(img) {
+            // If video feed fails to load, try again after a short delay
+            setTimeout(function() {
+                if (img.src.includes('?')) {
+                    img.src = img.src.split('?')[0] + '?t=' + new Date().getTime();
+                } else {
+                    img.src = img.src + '?t=' + new Date().getTime();
+                }
+            }, 1000);
+        }
     </script>
 </body>
 </html> 
