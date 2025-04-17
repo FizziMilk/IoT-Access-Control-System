@@ -188,15 +188,16 @@ class WebFaceService:
                     logger.warning("Skipping entry with missing data")
                     continue
                     
-                # Decode the face encoding
+                # Decode the face encoding using our helper method
                 try:
-                    encoding_json = base64.b64decode(face_encoding_b64).decode('utf-8')
-                    encoding = json.loads(encoding_json)
-                    encodings.append(encoding)
-                    names.append(phone_number)
-                    logger.info(f"Decoded face encoding for {phone_number}")
+                    encoding = self.decode_face_data(face_encoding_b64)
+                    if encoding is not None:
+                        encodings.append(encoding)
+                        names.append(phone_number)
+                        logger.info(f"Decoded face encoding for {phone_number}")
                 except Exception as e:
-                    logger.error(f"Error decoding face encoding: {e}")
+                    logger.error(f"Error decoding face encoding for {phone_number}: {e}")
+                    logger.error(traceback.format_exc())
             
             # Load encodings into recognition system
             if encodings:
@@ -224,9 +225,33 @@ class WebFaceService:
             numpy.ndarray or None: Decoded face encoding
         """
         try:
+            # Check if face_encoding_b64 is already a list
+            if isinstance(face_encoding_b64, list):
+                return np.array(face_encoding_b64)
+                
+            # The encoding is first base64 encoded JSON string
+            # First decode from base64 to string
             encoding_json = base64.b64decode(face_encoding_b64).decode('utf-8')
+            
+            # Then parse the JSON string to get the list representation
             encoding_list = json.loads(encoding_json)
+            
+            # Convert to numpy array and return
             return np.array(encoding_list)
         except Exception as e:
             logger.error(f"Error decoding face data: {e}")
-            return None 
+            logger.error(traceback.format_exc())
+            return None
+    
+    def release_camera(self):
+        """
+        Release camera resources safely.
+        """
+        try:
+            logger.info("Releasing camera resources")
+            if hasattr(self, 'camera') and self.camera:
+                self.camera._release_camera()
+            logger.info("Camera resources released")
+        except Exception as e:
+            logger.error(f"Error releasing camera resources: {e}")
+            logger.error(traceback.format_exc()) 

@@ -6,6 +6,8 @@ from Web_Recognition.web_face_service import WebFaceService
 import cv2
 import logging
 import os
+import json
+import base64
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -287,6 +289,7 @@ def setup_routes(app, door_controller, mqtt_handler, session, backend_url):
                     if face_encoding:
                         # Store the encoding in the Flask session
                         from flask import session as flask_session
+                        # Convert to JSON serializable format (it's already a list from register_face)
                         flask_session['face_encoding'] = face_encoding
                             
                         flash("Face captured successfully. Please enter your phone number to register.", "info")
@@ -321,10 +324,17 @@ def setup_routes(app, door_controller, mqtt_handler, session, backend_url):
             return redirect(url_for("door_entry"))
             
         try:
+            # Convert face encoding to base64 string
+            # Convert face encoding list to JSON string
+            encoding_json = json.dumps(face_encoding)
+            
+            # Encode JSON string as base64
+            encoding_base64 = base64.b64encode(encoding_json.encode('utf-8')).decode('utf-8')
+            
             # Send the face encoding and phone number to the backend
             resp = session.post(f"{backend_url}/register-face", json={
                 "phone_number": phone_number,
-                "face_encoding": face_encoding
+                "face_encoding": encoding_base64
             })
             data = resp.json()
             

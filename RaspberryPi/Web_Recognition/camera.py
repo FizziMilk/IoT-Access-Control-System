@@ -348,6 +348,12 @@ class WebCamera:
             # Also set QT_DEBUG_PLUGINS=1 to help diagnose plugin issues
             os.environ["QT_DEBUG_PLUGINS"] = "1"
             
+            # Add to the _setup_qt_environment method in camera.py
+            os.environ["QT_PLUGIN_PATH"] = "/usr/lib/aarch64-linux-gnu/qt5/plugins"  # For Raspberry Pi
+            # If that doesn't work, try one of these paths based on your Qt installation:
+            # os.environ["QT_PLUGIN_PATH"] = "/usr/lib/qt5/plugins"
+            # os.environ["QT_PLUGIN_PATH"] = "/usr/lib/x86_64-linux-gnu/qt5/plugins"
+            
             logger.info("Qt environment configured")
         except Exception as e:
             logger.error(f"Error setting up Qt environment: {e}")
