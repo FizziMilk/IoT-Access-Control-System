@@ -675,7 +675,7 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                 
             # Parse response with error handling
             try:
-            data = resp.json()
+                data = resp.json()
             except json.JSONDecodeError as json_err:
                 logger.error(f"Failed to decode JSON response from face registration: {json_err}")
                 logger.error(f"Response content: {resp.text}")
@@ -690,7 +690,7 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                 flash("Face registered successfully. Please wait for OTP or admin approval.", "success")
                 
                 # Skip OTP flow if backend is not fully functional
-                    return redirect(url_for("door_entry"))
+                return redirect(url_for("door_entry"))
             else:
                 flash(data.get("error", "Error registering face"), "danger")
         except Exception as e:

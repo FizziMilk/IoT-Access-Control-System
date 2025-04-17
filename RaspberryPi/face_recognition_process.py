@@ -509,7 +509,7 @@ def save_debug_frame(frame, face_locations, liveness_results, match_names=None, 
             with open(debug_data_path, 'w') as f:
                 json.dump(debug_data, f)
             logger.info(f"Saved debug data to {debug_data_path}")
-    
+                
     except Exception as e:
         logger.error(f"Error saving debug frame: {e}")
         logger.error(traceback.format_exc())
@@ -758,8 +758,8 @@ def run_face_recognition(output_file, backend_url, max_attempts=100, confidence_
         # for potential registration
         if not matches and face_detected and is_live and len(face_encodings) > 0:
             best_face_encoding = face_encodings[0].tolist()
-            
-            # Write results to output file
+        
+        # Write results to output file
             results = {
                 "success": True,
                 "face_detected": face_detected,
@@ -793,15 +793,15 @@ def run_face_recognition(output_file, backend_url, max_attempts=100, confidence_
             json.dump(results, f)
         
         return results
-        
+            
     except Exception as e:
         logger.error(f"Error during face recognition: {e}")
         logger.error(traceback.format_exc())
         
         # Make sure we always have some result
         results = {
-            "success": False,
-            "error": str(e),
+                "success": False,
+                "error": str(e),
             "face_detected": False,
             "is_live": False,
             "blink_detected": False,
