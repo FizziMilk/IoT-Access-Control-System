@@ -79,7 +79,7 @@
             <i class="fas fa-camera"></i> Start Face Recognition
         </button>
         
-        <img id="videoFeed" src="{{ url_for('face_recognition_feed') }}" alt="Face Recognition Feed">
+        <img id="videoFeed" src="{{ url_for('video_feed') }}" alt="Face Recognition Feed">
         
         <div id="processingText" class="mt-2">
             <h4>Processing your face. Please keep still...</h4>
@@ -131,11 +131,6 @@
     </div>
     
     <script>
-        // Start refreshing the image when the page loads
-        document.addEventListener('DOMContentLoaded', function() {
-            startImageRefresh();
-        });
-        
         document.getElementById('startButton').addEventListener('click', function() {
             // Hide the instructions and button
             document.getElementById('instructions').style.display = 'none';
@@ -199,17 +194,6 @@
             // Submit the form
             document.getElementById('faceForm').submit();
         });
-        
-        function startImageRefresh() {
-            // Refresh the image every 200ms
-            setInterval(function() {
-                let videoFeed = document.getElementById('videoFeed');
-                if (videoFeed) {
-                    // Add a timestamp to prevent caching
-                    videoFeed.src = "{{ url_for('face_recognition_feed') }}?t=" + new Date().getTime();
-                }
-            }, 200);
-        }
     </script>
 </body>
 </html> 

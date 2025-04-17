@@ -392,6 +392,7 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                 '--debug-frames',
                 '--frames-dir', frames_dir,
                 '--upload-folder', upload_folder,
+                '--timeout', '45',  # Increased timeout for better recognition
             ]
             
             # Only add backend URL if backend is available
@@ -440,47 +441,47 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                 logger.warning(f"Could not remove output file: {e}")
             
             # Process the results
-            if results['success']:
-                if results['face_detected'] and 'face_encodings' in results and results['face_encodings']:
-                    # Check if face passed liveness detection
-                    if 'is_live' in results and not results['is_live']:
-                        logger.warning("Face failed liveness detection")
-                        liveness_metrics = results.get('liveness_metrics', {})
-                        logger.info(f"Liveness metrics: {json.dumps(liveness_metrics)}")
-                        flash("Could not verify that this is a real face. Please try again with better lighting.", "warning")
+            if results.get('success', False):
+                # Get the first match if there are any results
+                if results.get('results') and len(results['results']) > 0:
+                    # We have a direct match from the standalone process
+                    match = results['results'][0]
+                    phone_number = match['name']  # Name field actually contains phone number
+                    confidence = match['confidence']
+                    
+                    logger.info(f"Face directly matched with {phone_number}, confidence: {confidence:.2f}")
+                    
+                    # Directly unlock the door without backend check
+                    if unlock_door_direct(method="Facial Recognition", user=phone_number):
+                        flash("Face recognized! Door unlocked.", "success")
+                        return render_template("door_unlocked.html")
+                    else:
+                        flash("Face recognized but failed to unlock door.", "danger")
                         return redirect(url_for("door_entry"))
-                    
-                    # We captured a live face, check if it was directly matched
-                    if 'match' in results and results['match']:
-                        # We have a direct match from the standalone process
-                        match = results['match']
-                        phone_number = match['name']  # Name field actually contains phone number
-                        confidence = match['confidence']
+                
+                # We detected a live face, but no match was found
+                # Extract face encoding if available for potential registration
+                if results.get('face_detected') and results.get('is_live'):
+                    face_encodings = results.get('face_encodings')
+                    if face_encodings and len(face_encodings) > 0:
+                        # Store the face encoding for potential registration
+                        flask_session['face_encoding'] = face_encodings[0]
+                        flask_session['has_temp_face'] = True
                         
-                        logger.info(f"Face directly matched with {phone_number}, confidence: {confidence:.2f}")
+                        flash("Face not recognized. Please verify identity or register.", "warning")
+                        return render_template("verify_options.html", user_recognized=False,
+                                            face_recognized=False, has_face=True)
                         
-                        # Directly unlock the door without backend check
-                        if unlock_door_direct(method="Facial Recognition", user=phone_number):
-                            flash("Face recognized! Door unlocked.", "success")
-                            return render_template("door_unlocked.html")
-                        else:
-                            flash("Face recognized but failed to unlock door.", "danger")
-                            return redirect(url_for("door_entry"))
-                    
-                    # No direct match, but still have a face to potentially register
-                    face_encoding = results['face_encodings'][0]  # Use the first face if multiple detected
-                    
-                    # Store the face encoding for potential registration
-                    flask_session['face_encoding'] = face_encoding
-                    flask_session['has_temp_face'] = True
-                    
-                    flash("Face not recognized. Please verify identity or register.", "warning")
-                    return render_template("verify_options.html", user_recognized=False,
-                                        face_recognized=False, has_face=True)
-                    
+                    else:
+                        # No face encodings found but the face was detected
+                        flash("Face detected but couldn't be processed properly. Please try again.", "warning")
+                        return redirect(url_for("door_entry"))
                 else:
-                    # No face detected
-                    flash("No face detected. Please try again and ensure good lighting.", "warning")
+                    # Handle cases where face was detected but not live or couldn't be processed
+                    if results.get('face_detected') and not results.get('is_live'):
+                        flash("Could not verify that this is a real face. Please try again with better lighting.", "warning")
+                    else:
+                        flash("No face detected. Please try again and ensure good lighting.", "warning")
                     return redirect(url_for("door_entry"))
             else:
                 # Error during face recognition
@@ -642,12 +643,66 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
 
     @app.route('/video_feed')
     def video_feed():
-        """Serve the latest debug frame for streaming"""
-        latest_frame_path = os.path.join(app.config['UPLOAD_FOLDER'], 'latest_frame.jpg')
-        if os.path.exists(latest_frame_path):
-            return send_file(latest_frame_path, mimetype='image/jpeg')
-        else:
-            return send_file(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static', 'placeholder.jpg'), 
-                            mimetype='image/jpeg')
+        """Stream video as multipart/x-mixed-replace content"""
+        def generate_frames():
+            """Generator function to yield frames as they become available"""
+            last_modified_time = 0
+            while True:
+                try:
+                    # Check if UPLOAD_FOLDER exists
+                    if 'UPLOAD_FOLDER' not in app.config:
+                        # Return placeholder image
+                        img = np.zeros((480, 640, 3), dtype=np.uint8)
+                        cv2.putText(img, "Waiting for camera...", (150, 240),
+                                   cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+                        _, buffer = cv2.imencode('.jpg', img)
+                        frame = buffer.tobytes()
+                        yield (b'--frame\r\n'
+                               b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
+                        time.sleep(0.05)  # Short delay before next frame
+                        continue
+                    
+                    debug_frame_path = os.path.join(app.config['UPLOAD_FOLDER'], 'debug_frame.jpg')
+                    
+                    # Check if file exists and has been modified
+                    if os.path.exists(debug_frame_path):
+                        current_modified_time = os.path.getmtime(debug_frame_path)
+                        
+                        # Only read if the file has been modified since last read
+                        if current_modified_time != last_modified_time:
+                            # Read the image
+                            frame = cv2.imread(debug_frame_path)
+                            last_modified_time = current_modified_time
+                            
+                            if frame is not None:
+                                # Convert to JPEG
+                                _, buffer = cv2.imencode('.jpg', frame)
+                                frame = buffer.tobytes()
+                                yield (b'--frame\r\n'
+                                       b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
+                                continue
+                    
+                    # If file doesn't exist or we couldn't read it, send a placeholder
+                    img = np.zeros((480, 640, 3), dtype=np.uint8)
+                    cv2.putText(img, "Waiting for camera...", (150, 240),
+                               cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+                    _, buffer = cv2.imencode('.jpg', img)
+                    frame = buffer.tobytes()
+                    yield (b'--frame\r\n'
+                           b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
+                    
+                    # Small delay to reduce CPU usage
+                    time.sleep(0.05)
+                    
+                except Exception as e:
+                    logger.error(f"Error in video streaming: {e}")
+                    time.sleep(0.1)
+                    continue
+        
+        # Return the streaming response
+        return app.response_class(
+            generate_frames(),
+            mimetype='multipart/x-mixed-replace; boundary=frame'
+        )
 
     return app 

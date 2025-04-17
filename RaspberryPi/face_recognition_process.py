@@ -402,6 +402,15 @@ def run_face_recognition(output_file, backend_url, max_attempts=100, confidence_
         
         attempt_count = 0
         recognition_results = []
+        last_liveness_check_time = time.time()
+        liveness_check_interval = 0.5  # Check liveness less frequently for better performance
+        
+        # For tracking successful detections
+        consecutive_real_faces = 0
+        required_consecutive_detections = 3  # Require 3 consecutive real face detections for better accuracy
+        best_match_count = 0
+        best_match_index = -1
+        best_confidence = 0
         
         while attempt_count < max_attempts:
             # Get frame from camera
@@ -409,8 +418,14 @@ def run_face_recognition(output_file, backend_url, max_attempts=100, confidence_
             
             if frame is None:
                 logger.warning("No frame captured, trying again...")
-                time.sleep(0.1)
+                time.sleep(0.05)  # Shorter sleep for better responsiveness
                 continue
+            
+            # Always save a frame with current status to show progress
+            status_frame = frame.copy()
+            cv2.putText(status_frame, f"Processing: {int((attempt_count/max_attempts)*100)}%", (10, 30),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+            save_debug_frame(status_frame, [], [], upload_folder=upload_folder)
             
             # Convert the frame from BGR to RGB (required by face_recognition)
             rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -421,71 +436,114 @@ def run_face_recognition(output_file, backend_url, max_attempts=100, confidence_
             # No faces detected
             if not face_locations:
                 logger.info("No faces detected in frame")
-                save_debug_frame(frame, [], [], upload_folder=upload_folder)  # Save empty frame
-                time.sleep(0.1)
+                status_frame = frame.copy()
+                cv2.putText(status_frame, "No face detected", (10, 30),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                save_debug_frame(status_frame, [], [], upload_folder=upload_folder)
+                time.sleep(0.05)
                 attempt_count += 1
+                consecutive_real_faces = 0  # Reset counter when no face is detected
                 continue
             
-            # Perform liveness detection
-            liveness_results = perform_liveness_check(frame, face_locations)
-            
-            # Check if any face passes liveness check
-            real_faces = [result for result in liveness_results if result["is_real"]]
-            
-            # If no real faces, continue to next frame
-            if not real_faces:
-                logger.info("No real faces detected, possible spoofing attempt")
-                save_debug_frame(frame, face_locations, liveness_results, upload_folder=upload_folder)  # Save frame with fake faces
-                time.sleep(0.1)
-                attempt_count += 1
-                continue
-            
-            # Get face encodings for recognized faces
-            face_encodings = face_recognition.face_encodings(rgb_frame, face_locations)
-            
-            # Initialize match results
-            match_names = [None] * len(face_locations)
-            matched_ids = []
-            
-            # Check each face against known faces
-            for i, face_encoding in enumerate(face_encodings):
-                # Skip if this face failed liveness
-                if i >= len(liveness_results) or not liveness_results[i]["is_real"]:
-                    continue
+            # Only perform liveness check periodically to improve framerate
+            current_time = time.time()
+            liveness_results = []
+            if current_time - last_liveness_check_time >= liveness_check_interval:
+                # Perform liveness detection
+                liveness_results = perform_liveness_check(frame, face_locations)
+                last_liveness_check_time = current_time
                 
-                if known_face_encodings:
-                    # Compare face with known faces
-                    matches = face_recognition.compare_faces(known_face_encodings, face_encoding)
-                    distances = face_recognition.face_distance(known_face_encodings, face_encoding)
+                # Check if any face passes liveness check
+                real_faces = [result for result in liveness_results if result["is_real"]]
+                
+                # If no real faces, continue to next frame
+                if not real_faces:
+                    logger.info("No real faces detected, possible spoofing attempt")
+                    consecutive_real_faces = 0  # Reset counter
+                    save_debug_frame(frame, face_locations, liveness_results, upload_folder=upload_folder)
+                    time.sleep(0.05)
+                    attempt_count += 1
+                    continue
+                else:
+                    # Increment consecutive real face counter
+                    consecutive_real_faces += 1
                     
-                    if True in matches:
-                        # Find the best match
-                        best_match_index = np.argmin(distances)
+                # Get face encodings for recognized faces
+                face_encodings = face_recognition.face_encodings(rgb_frame, face_locations)
+                
+                # Initialize match results
+                match_names = [None] * len(face_locations)
+                
+                # Check each face against known faces
+                for i, face_encoding in enumerate(face_encodings):
+                    # Skip if this face failed liveness
+                    if i >= len(liveness_results) or not liveness_results[i]["is_real"]:
+                        continue
+                    
+                    if known_face_encodings:
+                        # Compare face with known faces
+                        matches = face_recognition.compare_faces(known_face_encodings, face_encoding)
+                        distances = face_recognition.face_distance(known_face_encodings, face_encoding)
                         
-                        # Convert distance to confidence percentage (smaller distance = higher confidence)
-                        confidence = (1 - distances[best_match_index]) * 100
-                        
-                        if confidence >= confidence_threshold:
-                            match_names[i] = known_face_names[best_match_index]
-                            matched_id = known_face_ids[best_match_index]
-                            matched_ids.append(matched_id)
+                        if True in matches:
+                            # Find the best match
+                            match_index = np.argmin(distances)
                             
-                            logger.info(f"Match found: {known_face_names[best_match_index]} with {confidence:.2f}% confidence")
-                            recognition_results.append({
-                                "id": matched_id,
-                                "name": known_face_names[best_match_index],
-                                "confidence": float(confidence),
-                                "timestamp": datetime.now().isoformat()
-                            })
+                            # Convert distance to confidence percentage (smaller distance = higher confidence)
+                            confidence = (1 - distances[match_index]) * 100
+                            
+                            if confidence >= confidence_threshold:
+                                match_names[i] = known_face_names[match_index]
+                                matched_id = known_face_ids[match_index]
+                                
+                                # Count matches for this person
+                                if match_index == best_match_index:
+                                    best_match_count += 1
+                                    if confidence > best_confidence:
+                                        best_confidence = confidence
+                                else:
+                                    # Track if this is a better match
+                                    if best_match_count < 1 or confidence > best_confidence:
+                                        best_match_index = match_index
+                                        best_match_count = 1
+                                        best_confidence = confidence
+                                
+                                logger.info(f"Match found: {known_face_names[match_index]} with {confidence:.2f}% confidence")
+                                
+                                # If we have enough consecutive real faces and matches, exit early with success
+                                if consecutive_real_faces >= required_consecutive_detections and best_match_count >= 2:
+                                    logger.info(f"Found reliable match after {attempt_count} attempts")
+                                    recognition_results.append({
+                                        "id": matched_id,
+                                        "name": known_face_names[match_index],
+                                        "confidence": float(confidence),
+                                        "timestamp": datetime.now().isoformat()
+                                    })
+                                    break
+                
+                # Save frame with detection results
+                save_debug_frame(frame, face_locations, liveness_results, match_names, upload_folder=upload_folder)
+            else:
+                # If not doing liveness check, still save frame to show realtime feed
+                placeholder_liveness = [{"is_real": True, "score": 0.0, "face_location": loc, "debug_info": {}} for loc in face_locations]
+                save_debug_frame(frame, face_locations, placeholder_liveness, upload_folder=upload_folder)
             
-            # Save frame with detection results
-            save_debug_frame(frame, face_locations, liveness_results, match_names, upload_folder=upload_folder)
-            
-            # If we found a match, exit the loop
-            if matched_ids:
+            # If we have a strong match, exit the loop
+            if consecutive_real_faces >= required_consecutive_detections and best_match_count >= 2:
+                if best_match_index >= 0:
+                    matched_id = known_face_ids[best_match_index]
+                    matched_name = known_face_names[best_match_index]
+                    
+                    if not any(result["id"] == matched_id for result in recognition_results):
+                        recognition_results.append({
+                            "id": matched_id,
+                            "name": matched_name,
+                            "confidence": float(best_confidence),
+                            "timestamp": datetime.now().isoformat()
+                        })
                 break
             
-            time.sleep(0.1)
+            time.sleep(0.05)  # Shorter sleep for better framerate
             attempt_count += 1
         
         # Clean up
@@ -496,12 +554,15 @@ def run_face_recognition(output_file, backend_url, max_attempts=100, confidence_
             json.dump({
                 "success": len(recognition_results) > 0,
                 "results": recognition_results,
-                "attempts": attempt_count
+                "attempts": attempt_count,
+                "face_detected": consecutive_real_faces > 0,
+                "is_live": consecutive_real_faces >= required_consecutive_detections
             }, f)
-        
-        return True
+            
+        return len(recognition_results) > 0
+            
     except Exception as e:
-        logger.error(f"Error in face recognition process: {e}")
+        logger.error(f"Error in face recognition: {e}")
         logger.error(traceback.format_exc())
         
         # Write error to output file
@@ -509,17 +570,10 @@ def run_face_recognition(output_file, backend_url, max_attempts=100, confidence_
             json.dump({
                 "success": False,
                 "error": str(e),
-                "attempts": 0
+                "attempts": attempt_count
             }, f)
-        
+            
         return False
-    finally:
-        # Make sure camera is released
-        try:
-            if 'camera' in locals():
-                camera.release()
-        except:
-            pass
 
 def main():
     """Main entry point for the face recognition process"""
