@@ -25,7 +25,7 @@ class WebFaceService:
     
     def __init__(self, backend_session=None, backend_url=None, headless=True):
         """
-        Initialize the service with optional backend connection.
+        Initialize the face recognition service.
         
         Args:
             backend_session: Optional requests session for backend API calls
@@ -39,7 +39,7 @@ class WebFaceService:
         self.backend_url = backend_url
         
         # Initialize components without claiming resources
-        self.camera = WebCamera(headless=headless)
+        self.camera = WebCamera(config={'headless': headless})
         self.recognition = WebRecognition()
         
         # Flag to track initialization status
@@ -309,7 +309,7 @@ class WebFaceService:
             # Recreate the camera instance with fresh state
             import os
             headless = getattr(self.camera, 'headless', True) if hasattr(self, 'camera') else True
-            self.camera = WebCamera(headless=headless)
+            self.camera = WebCamera(config={'headless': headless})
             
             # Allow time for resources to be fully released
             import time

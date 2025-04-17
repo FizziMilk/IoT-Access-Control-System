@@ -94,6 +94,12 @@ class WebCamera:
         # This flag will control visualization during texture analysis
         self.texture_visualization = False
         
+        # Get headless flag from config
+        self.headless = self.config.get('headless', True)
+        
+        # Set Eye Aspect Ratio threshold for blink detection
+        self.EAR_THRESHOLD = self.config.get('ear_threshold', 0.20)
+        
     @contextmanager
     def camera_session(self, resolution=None):
         """
