@@ -322,7 +322,7 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                 return send_placeholder_image()
             
             # Return the latest frame
-            return send_file(debug_frame_path, mimetype='image/jpeg', cache_timeout=0)
+            return send_file(debug_frame_path, mimetype='image/jpeg', max_age=0)
         except Exception as e:
             app.logger.error(f"Error serving face recognition feed: {str(e)}")
             return send_placeholder_image()
@@ -346,7 +346,7 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
         io_buf = io.BytesIO(buffer)
         io_buf.seek(0)
         
-        return send_file(io_buf, mimetype='image/jpeg')
+        return send_file(io_buf, mimetype='image/jpeg', max_age=0)
         
     @app.route('/process-face', methods=['POST'])
     def process_face():
