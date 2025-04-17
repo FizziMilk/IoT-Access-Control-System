@@ -11,6 +11,10 @@ import base64
 import threading
 import traceback
 import numpy as np
+import uuid
+import subprocess
+from .web_face_service import WebFaceService
+from .door_controller import DoorController
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -232,221 +236,208 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
         """Display the face recognition page"""
         logger.info("Face recognition page requested")
         
-        # Clean up any existing OpenCV windows
+        # Clean up any existing OpenCV windows and force camera release
         try:
             import cv2
             cv2.destroyAllWindows()
             cv2.waitKey(1)
+            
+            # Try to force release camera at OS level
+            import subprocess
+            subprocess.run('sudo fuser -k /dev/video0 2>/dev/null || true', 
+                           shell=True, timeout=2)
         except Exception as e:
-            logger.error(f"Error destroying windows: {e}")
+            logger.error(f"Error cleaning up resources: {e}")
         
-        # Set Qt environment
-        setup_qt_environment()
+        # Check if testing mode - pass this to the template
+        testing_mode = request.args.get('testing', 'false').lower() == 'true'
         
         # Return the template
-        return render_template("face_recognition.html")
+        return render_template("face_recognition.html", testing_mode=testing_mode)
     
     @app.route('/process-face', methods=['POST'])
     def process_face():
-        """Process facial recognition and redirect based on result"""
-        face_image = None
-        match = None
-        
-        # Add debugging to see what's happening with camera access
-        logger.info("Starting face recognition process")
-        
-        # Check camera device directly
-        import subprocess
-        import time  # Ensure time is imported
-        try:
-            # Check if camera is in use
-            result = subprocess.run(['lsof', '/dev/video0'], capture_output=True, text=True)
-            logger.info(f"Camera device status before processing: {'In use' if result.stdout else 'Available'}")
-            
-            if result.stdout:
-                # Camera appears to be in use, attempt to force-release
-                logger.warning("Camera appears to be in use, will attempt to release")
-                try:
-                    cv2.destroyAllWindows()
-                    # Add a longer wait to ensure full cleanup
-                    time.sleep(1)
-                except Exception as e:
-                    logger.error(f"Error in pre-cleanup: {e}")
-        except Exception as e:
-            logger.error(f"Could not check camera status: {e}")
-        
-        # Create a fresh service instance for each request
-        local_face_service = None
+        """Process facial recognition using a separate process"""
+        logger.info("Starting face recognition in separate process")
         
         try:
-            # Determine headless mode
-            headless_mode = os.environ.get('DISPLAY') is None
+            # Generate a unique output file
+            output_dir = '/tmp/face_recognition_results'
+            os.makedirs(output_dir, exist_ok=True)
+            output_file = os.path.join(output_dir, f"face_result_{uuid.uuid4()}.json")
             
-            # Create a fresh service instance for this request only
-            logger.info("Creating fresh WebFaceService instance for recognition")
-            local_face_service = WebFaceService(
-                backend_session=backend_session, 
-                backend_url=backend_url,
-                headless=headless_mode
-            )
+            # Check if we should skip liveness detection (for testing only)
+            skip_liveness = request.form.get('skip_liveness', 'false').lower() == 'true'
+            if skip_liveness:
+                logger.warning("Skipping liveness detection - TESTING MODE ONLY")
             
-            # Add timeout/retry for initialization
-            max_retries = 3
-            retry_count = 0
-            success = False
+            # Build the command
+            cmd = [
+                'python3', 
+                os.path.join(os.path.dirname(os.path.abspath(__file__)), 'face_recognition_process.py'),
+                '--output', output_file,
+                '--backend-url', backend_url,
+            ]
             
-            while retry_count < max_retries and not success:
-                try:
-                    # Initialize the service (load face data)
-                    success = local_face_service.initialize()
-                    if not success:
-                        logger.warning(f"Service initialization failed, attempt {retry_count+1}/{max_retries}")
-                        retry_count += 1
-                        import time
-                        time.sleep(1)  # Wait before retrying
-                    else:
-                        logger.info("Service initialized successfully")
-                except Exception as e:
-                    logger.error(f"Error during initialization: {e}")
-                    retry_count += 1
-                    import time
-                    time.sleep(1)  # Wait before retrying
+            # Add skip-liveness flag if needed
+            if skip_liveness:
+                cmd.append('--skip-liveness')
             
-            if not success:
-                flash("Error initializing face recognition. Please try again.", "danger")
+            logger.info(f"Executing: {' '.join(cmd)}")
+            
+            # Run the standalone script as a separate process
+            process = subprocess.run(cmd, 
+                                    timeout=45,  # Timeout to account for script execution
+                                    check=False,
+                                    capture_output=True)
+            
+            logger.info(f"Process returned with code {process.returncode}")
+            
+            if process.stderr:
+                logger.warning(f"Process stderr: {process.stderr.decode('utf-8', errors='replace')}")
+            
+            # Wait briefly to ensure the result file is written
+            time.sleep(0.5)
+            
+            # Check if the output file exists
+            if not os.path.exists(output_file):
+                logger.error("Output file not created")
+                flash("Face recognition failed. Please try again.", "danger")
                 return redirect(url_for("door_entry"))
             
-            # Capture face with liveness detection
-            logger.info("Starting face capture with liveness detection")
-            face_image = local_face_service.capture_face_with_liveness(timeout=30)
+            # Read the results
+            with open(output_file, 'r') as f:
+                results = json.load(f)
             
-            if face_image is None:
-                logger.warning("Face verification failed - no face detected or liveness check failed")
-                flash("Face verification failed. Please try again.", "danger")
-                return redirect(url_for("door_entry"))
+            # Clean up the output file
+            try:
+                os.remove(output_file)
+            except Exception as e:
+                logger.warning(f"Could not remove output file: {e}")
             
-            logger.info("Face captured successfully, attempting recognition")
-            # Try to identify the person from known faces
-            match = local_face_service.recognition.identify_face(face_image)
-            
-            # User recognized
-            if match:
-                logger.info(f"Face recognized as: {match.get('name')}")
-                # Get their phone number
-                phone_number = match['name']
-                
-                try:
-                    # Check if this user is allowed direct access
-                    resp = backend_session.get(f"{backend_url}/check-face-access/{phone_number}")
-                    data = resp.json()
+            # Process the results
+            if results['success']:
+                if results['face_detected'] and 'face_encodings' in results and results['face_encodings']:
+                    # Check if face passed liveness detection
+                    if 'is_live' in results and not results['is_live']:
+                        logger.warning("Face failed liveness detection")
+                        liveness_metrics = results.get('liveness_metrics', {})
+                        logger.info(f"Liveness metrics: {json.dumps(liveness_metrics)}")
+                        flash("Could not verify that this is a real face. Please try again with better lighting.", "warning")
+                        return redirect(url_for("door_entry"))
                     
-                    if data.get("status") == "approved":
-                        # Unlock door and log access
-                        door_controller.unlock_door()
+                    # We captured a live face, check if it was directly matched
+                    if 'match' in results and results['match']:
+                        # We have a direct match from the standalone process
+                        match = results['match']
+                        phone_number = match['name']  # Name field actually contains phone number
+                        confidence = match['confidence']
                         
-                        # Log door unlock via facial recognition
-                        try:
-                            backend_session.post(f"{backend_url}/log-door-access", json={
-                                "user": phone_number,
-                                "method": "Facial Recognition",
-                                "status": "Unlocked",
-                                "details": f"Door unlocked via facial recognition, confidence: {match.get('confidence', 'N/A')}"
-                            })
-                        except Exception as e:
-                            print(f"[DEBUG] Error logging door access: {e}")
+                        logger.info(f"Face directly matched with {phone_number}, confidence: {confidence:.2f}")
+                        
+                        # Check if this user is allowed direct access
+                        resp = backend_session.get(f"{backend_url}/check-face-access/{phone_number}")
+                        access_data = resp.json()
+                        
+                        if access_data.get("status") == "approved":
+                            # Unlock door and log access
+                            door_controller.unlock_door()
                             
-                        flash("Face recognized! Door unlocked.", "success")
-                        return render_template("door_unlocked.html")
-                    else:
-                        # No direct access - provide options
-                        flash("Face recognized but additional verification needed.", "warning")
-                        return render_template("verify_options.html", phone_number=phone_number,
-                                              user_recognized=True, face_recognized=True)
-                except Exception as e:
-                    logger.error(f"Error checking face access: {e}")
-                    
-                    # Default to requiring additional verification
-                    flash("Face recognized but verification needed. Please use OTP.", "warning")
-                    return render_template("verify_options.html", phone_number=phone_number,
-                                         user_recognized=True, face_recognized=True)
-            else:
-                # Not recognized - allow registration or other verification
-                # Generate face encoding for potential registration
-                encoding = local_face_service.recognition.process_face_encoding(face_image)
-                
-                if encoding is not None:
-                    # Store encoding in session for potential registration
-                    # Check if it's a numpy array or already a list
-                    try:
-                        if isinstance(encoding, np.ndarray):
-                            flask_session['face_encoding'] = encoding.tolist()
+                            # Log door unlock via facial recognition
+                            try:
+                                backend_session.post(f"{backend_url}/log-door-access", json={
+                                    "user": phone_number,
+                                    "method": "Facial Recognition",
+                                    "status": "Unlocked",
+                                    "details": f"Door unlocked via facial recognition, confidence: {confidence:.2f}"
+                                })
+                            except Exception as e:
+                                logger.error(f"Error logging door access: {e}")
+                                
+                            flash("Face recognized! Door unlocked.", "success")
+                            return render_template("door_unlocked.html")
                         else:
-                            # Already a list, store directly
-                            flask_session['face_encoding'] = encoding
-                    except Exception as e:
-                        logger.error(f"Error storing face encoding: {e}")
-                        # Try direct assignment as fallback
-                        flask_session['face_encoding'] = encoding
+                            # No direct access - provide options
+                            flash("Face recognized but additional verification needed.", "warning")
+                            return render_template("verify_options.html", phone_number=phone_number,
+                                                user_recognized=True, face_recognized=True)
                     
-                    flask_session['has_temp_face'] = True
-                    flash("Face not recognized. Please verify identity or register.", "warning")
-                    return render_template("verify_options.html", user_recognized=False,
-                                         face_recognized=False, has_face=True)
+                    # No direct match, try to identify using backend
+                    face_encoding = results['face_encodings'][0]  # Use the first face if multiple detected
+                    
+                    try:
+                        # Send the face encoding to backend for identification
+                        encoding_json = json.dumps(face_encoding)
+                        encoding_base64 = base64.b64encode(encoding_json.encode('utf-8')).decode('utf-8')
+                        
+                        resp = backend_session.post(f"{backend_url}/identify-face", json={
+                            "face_encoding": encoding_base64
+                        })
+                        data = resp.json()
+                        
+                        if data.get("identified") and data.get("user"):
+                            # User recognized
+                            phone_number = data.get("user").get("phone_number")
+                            confidence = data.get("confidence", "N/A")
+                            
+                            # Check if this user is allowed direct access
+                            resp = backend_session.get(f"{backend_url}/check-face-access/{phone_number}")
+                            access_data = resp.json()
+                            
+                            if access_data.get("status") == "approved":
+                                # Unlock door and log access
+                                door_controller.unlock_door()
+                                
+                                # Log door unlock via facial recognition
+                                try:
+                                    backend_session.post(f"{backend_url}/log-door-access", json={
+                                        "user": phone_number,
+                                        "method": "Facial Recognition",
+                                        "status": "Unlocked",
+                                        "details": f"Door unlocked via facial recognition, confidence: {confidence}"
+                                    })
+                                except Exception as e:
+                                    logger.error(f"Error logging door access: {e}")
+                                    
+                                flash("Face recognized! Door unlocked.", "success")
+                                return render_template("door_unlocked.html")
+                            else:
+                                # No direct access - provide options
+                                flash("Face recognized but additional verification needed.", "warning")
+                                return render_template("verify_options.html", phone_number=phone_number,
+                                                    user_recognized=True, face_recognized=True)
+                        else:
+                            # Face not recognized, allow registration
+                            flask_session['face_encoding'] = face_encoding
+                            flask_session['has_temp_face'] = True
+                            
+                            flash("Face not recognized. Please verify identity or register.", "warning")
+                            return render_template("verify_options.html", user_recognized=False,
+                                                face_recognized=False, has_face=True)
+                    
+                    except Exception as e:
+                        logger.error(f"Error identifying face: {e}")
+                        logger.error(traceback.format_exc())
+                        flash("Error identifying face. Please try again.", "danger")
+                        return redirect(url_for("door_entry"))
                 else:
-                    flash("Could not process face features. Please try again.", "danger")
+                    # No face detected
+                    flash("No face detected. Please try again and ensure good lighting.", "warning")
                     return redirect(url_for("door_entry"))
+            else:
+                # Error during face recognition
+                flash(results.get('error', "Face recognition failed. Please try again."), "danger")
+                return redirect(url_for("door_entry"))
                 
+        except subprocess.TimeoutExpired:
+            logger.error("Face recognition process timed out")
+            flash("Face recognition took too long. Please try again.", "danger")
+            return redirect(url_for("door_entry"))
         except Exception as e:
-            logger.error(f"Error in face recognition: {e}")
+            logger.error(f"Error processing face recognition: {e}")
             logger.error(traceback.format_exc())
             flash("An error occurred during face recognition.", "danger")
             return redirect(url_for("door_entry"))
-        finally:
-            # Always clean up resources in the local service instance
-            if local_face_service:
-                try:
-                    local_face_service.release_camera()
-                except Exception as e:
-                    logger.error(f"Error releasing camera resources: {e}")
-                
-                # Force cleanup of OpenCV windows
-                try:
-                    import cv2
-                    cv2.destroyAllWindows()
-                    cv2.waitKey(1)
-                except Exception:
-                    pass
-                
-                # RPI OS-specific: Try resetting the camera device directly
-                try:
-                    # Check if we're on Linux (RPI OS)
-                    if os.path.exists('/dev/video0'):
-                        logger.info("Attempting direct camera device reset")
-                        
-                        # Try killing any processes that might have the camera open
-                        try:
-                            import subprocess
-                            import time  # Make sure time is imported here
-                            # This is safer than pkill - it only affects video0 processes
-                            subprocess.run('sudo fuser -k /dev/video0 2>/dev/null || true', 
-                                          shell=True, timeout=2)
-                            time.sleep(0.5)
-                        except Exception as e:
-                            logger.error(f"Error resetting camera device: {e}")
-                except Exception as e:
-                    logger.error(f"Error in OS-specific cleanup: {e}")
-            
-            # Add final check to see if camera was properly released
-            try:
-                import subprocess
-                import time  # Ensure time is imported
-                result = subprocess.run(['lsof', '/dev/video0'], capture_output=True, text=True)
-                logger.info(f"Camera device status after cleanup: {'Still in use' if result.stdout else 'Released'}")
-                
-                # Add a small delay to let the system finish any processes
-                time.sleep(0.1)
-            except Exception as e:
-                logger.error(f"Error in final camera check: {e}")
     
     @app.route('/register-face', methods=['POST'])
     def register_face():
