@@ -425,14 +425,42 @@ def write_results(output_file, results):
         # Ensure directory exists
         os.makedirs(os.path.dirname(os.path.abspath(output_file)), exist_ok=True)
         
-        # Write to output file
+        # Make sure all values are JSON serializable
+        def convert_to_serializable(obj):
+            if isinstance(obj, np.ndarray):
+                return obj.tolist()
+            elif isinstance(obj, np.generic):
+                return obj.item()  # Convert numpy scalars to Python types
+            elif isinstance(obj, (bool, int, float, str, list, dict, tuple, type(None))):
+                return obj
+            else:
+                return str(obj)  # Convert any other types to strings
+        
+        # Convert all values in the results dict
+        serializable_results = {}
+        for key, value in results.items():
+            if isinstance(value, dict):
+                # Handle nested dictionaries
+                serializable_results[key] = {k: convert_to_serializable(v) for k, v in value.items()}
+            else:
+                serializable_results[key] = convert_to_serializable(value)
+        
+        # Write to output file using the serializable results
         with open(output_file, 'w') as f:
-            json.dump(results, f)
+            json.dump(serializable_results, f)
         
         logger.info(f"Results written to {output_file}")
     except Exception as e:
         logger.error(f"Error writing results: {e}")
         logger.error(traceback.format_exc())
+        
+        # Emergency fallback - write a simple valid JSON with the error
+        try:
+            with open(output_file, 'w') as f:
+                json.dump({"success": False, "error": f"JSON serialization error: {str(e)}"}, f)
+            logger.info(f"Fallback results written to {output_file}")
+        except Exception as e2:
+            logger.error(f"Fallback writing also failed: {e2}")
 
 if __name__ == "__main__":
     sys.exit(main()) 
