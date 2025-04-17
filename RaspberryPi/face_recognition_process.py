@@ -16,6 +16,7 @@ import face_recognition
 import base64
 import requests
 from datetime import datetime
+import threading
 
 # Configure logging
 logging.basicConfig(
@@ -261,8 +262,10 @@ class WebCamera:
         self.cap.set(cv2.CAP_PROP_FPS, 30)             # Set target FPS
         self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)       # Minimize buffer to reduce latency
         self.cap.set(cv2.CAP_PROP_AUTOFOCUS, 1)        # Enable autofocus if available
-        self.cap.set(cv2.CAP_PROP_BRIGHTNESS, 0.5)     # Set medium brightness
-        self.cap.set(cv2.CAP_PROP_CONTRAST, 0.5)       # Set medium contrast
+        self.cap.set(cv2.CAP_PROP_BRIGHTNESS, 0.7)     # Increase brightness (0.5 -> 0.7)
+        self.cap.set(cv2.CAP_PROP_CONTRAST, 0.65)      # Increase contrast slightly (0.5 -> 0.65)
+        self.cap.set(cv2.CAP_PROP_SATURATION, 0.6)     # Add saturation setting
+        self.cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.75) # Adjust auto exposure
         
         self.is_running = True
         self.logger.info("Camera started successfully")
@@ -506,12 +509,43 @@ def save_debug_frame(frame, face_locations, liveness_results, match_names=None, 
         # Create a copy for visualization
         debug_frame = frame.copy()
         
-        # Debug data to save as JSON
+        # Debug data to save as JSON - ensure all values are JSON serializable
         debug_data = {
-            'face_locations': face_locations,
-            'liveness_results': liveness_results,
+            'face_locations': [[int(val) for val in loc] for loc in face_locations],
+            'liveness_results': [],
             'match_names': match_names or []
         }
+        
+        # Convert liveness_results to JSON serializable format
+        for result in liveness_results:
+            # Convert each result to a serializable dict
+            serializable_result = {}
+            for key, value in result.items():
+                if key == 'face_location':
+                    serializable_result[key] = [int(val) for val in value]
+                elif key == 'debug_info':
+                    # Convert debug_info to serializable format
+                    serializable_debug = {}
+                    for k, v in value.items():
+                        if isinstance(v, (bool, np.bool_)):
+                            serializable_debug[k] = bool(v)  # Convert numpy bool to Python bool
+                        elif isinstance(v, (int, float, np.number)):
+                            serializable_debug[k] = float(v) if isinstance(v, float) else int(v)
+                        elif isinstance(v, str):
+                            serializable_debug[k] = v
+                        else:
+                            serializable_debug[k] = str(v)  # Fallback to string for unknown types
+                    serializable_result[key] = serializable_debug
+                elif isinstance(value, (bool, np.bool_)):
+                    serializable_result[key] = bool(value)  # Convert numpy bool to Python bool
+                elif isinstance(value, (int, float, np.number)):
+                    serializable_result[key] = float(value) if isinstance(value, float) else int(value)
+                elif isinstance(value, str):
+                    serializable_result[key] = value
+                else:
+                    serializable_result[key] = str(value)  # Fallback to string for unknown types
+            
+            debug_data['liveness_results'].append(serializable_result)
         
         ear_values = None
         
@@ -563,7 +597,20 @@ def save_debug_frame(frame, face_locations, liveness_results, match_names=None, 
                         # Calculate EAR
                         ear_values = detect_blink(face_landmarks, debug_frame)
                         if ear_values:
-                            debug_data['ear_values'] = ear_values
+                            # Ensure the ear_values are JSON serializable
+                            serializable_ear = {}
+                            for key, value in ear_values.items():
+                                if isinstance(value, bool):
+                                    serializable_ear[key] = bool(value)
+                                elif isinstance(value, (int, float)):
+                                    serializable_ear[key] = value
+                                elif isinstance(value, list):
+                                    # Handle lists of coordinates
+                                    serializable_ear[key] = [[float(x), float(y)] for x, y in value]
+                                else:
+                                    serializable_ear[key] = str(value)
+                                    
+                            debug_data['ear_values'] = serializable_ear
             except Exception as e:
                 logger.error(f"Error calculating EAR: {e}")
         
