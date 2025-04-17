@@ -2,7 +2,6 @@ from flask import render_template, request, redirect, url_for, flash, session as
 from datetime import datetime
 import time
 from utils import verify_otp_rest
-from Web_Recognition.web_face_service import WebFaceService
 import cv2
 import logging
 import os
