@@ -226,6 +226,20 @@ class WebCamera:
         
         # Initialize the camera
         self.start()
+        
+        # Take a few initial frames to "warm up" the camera and activate the light
+        self._warm_up_camera()
+    
+    def _warm_up_camera(self):
+        """Warm up the camera by taking a few frames to ensure it's fully active"""
+        if not self.is_running:
+            return
+            
+        self.logger.info("Warming up camera...")
+        for _ in range(10):  # Take 10 frames to warm up
+            ret, frame = self.cap.read()
+            time.sleep(0.05)  # Small delay between frames
+        self.logger.info("Camera warm-up completed")
     
     def start(self):
         """Start the camera."""
@@ -243,6 +257,13 @@ class WebCamera:
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
         
+        # Additional camera settings to ensure consistent performance
+        self.cap.set(cv2.CAP_PROP_FPS, 30)             # Set target FPS
+        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)       # Minimize buffer to reduce latency
+        self.cap.set(cv2.CAP_PROP_AUTOFOCUS, 1)        # Enable autofocus if available
+        self.cap.set(cv2.CAP_PROP_BRIGHTNESS, 0.5)     # Set medium brightness
+        self.cap.set(cv2.CAP_PROP_CONTRAST, 0.5)       # Set medium contrast
+        
         self.is_running = True
         self.logger.info("Camera started successfully")
     
@@ -251,6 +272,11 @@ class WebCamera:
         if not self.is_running:
             self.start()
             
+        # Read multiple frames to ensure we get the latest (clear buffered frames)
+        for _ in range(3):
+            ret, frame = self.cap.read()
+            
+        # Final frame read for actual use
         ret, frame = self.cap.read()
         if not ret:
             self.logger.warning("Failed to capture frame")
@@ -263,17 +289,57 @@ class WebCamera:
         if self.cap and self.is_running:
             self.logger.info("Releasing camera resources")
             self.cap.release()
+            cv2.destroyAllWindows()  # Close any OpenCV windows
             self.is_running = False
+            self.logger.info("Camera resources released")
 
 
 def setup_camera():
-    """Setup and initialize camera"""
-    try:
-        camera = WebCamera()
-        return camera
-    except Exception as e:
-        logger.error(f"Error setting up camera: {e}")
-        raise
+    """Setup and initialize camera with multiple attempts to ensure it's active"""
+    max_attempts = 3
+    for attempt in range(max_attempts):
+        try:
+            logger.info(f"Camera setup attempt {attempt+1}/{max_attempts}")
+            
+            # Force release of any existing camera resources
+            try:
+                # Release any previously opened camera
+                cap = cv2.VideoCapture(0)
+                if cap.isOpened():
+                    cap.release()
+                    logger.info("Released existing camera")
+                    time.sleep(0.5)  # Give some time for the camera to reset
+                
+                # On Linux, try to reset the camera at system level
+                if os.name == 'posix':
+                    try:
+                        os.system('sudo modprobe -r uvcvideo')
+                        time.sleep(1)
+                        os.system('sudo modprobe uvcvideo')
+                        time.sleep(1)
+                        logger.info("Reset camera driver")
+                    except Exception as e:
+                        logger.warning(f"Failed to reset camera driver: {e}")
+            except Exception as e:
+                logger.warning(f"Error during camera cleanup: {e}")
+            
+            # Create a new camera instance
+            camera = WebCamera()
+            
+            # Take a test frame to ensure the camera is working
+            test_frame = camera.get_frame()
+            if test_frame is None or test_frame.size == 0:
+                raise RuntimeError("Camera returned invalid frame")
+                
+            logger.info("Camera setup successful!")
+            return camera
+            
+        except Exception as e:
+            logger.error(f"Error setting up camera (attempt {attempt+1}): {e}")
+            time.sleep(1)  # Wait before retrying
+    
+    # If we got here, we couldn't set up the camera after all attempts
+    raise RuntimeError("Failed to set up camera after multiple attempts")
 
 def perform_liveness_check(frame, face_locations):
     """Perform liveness detection check"""
@@ -456,7 +522,7 @@ def save_debug_frame(frame, face_locations, liveness_results, match_names=None, 
             
             # Get liveness result for this face (if available)
             if i < len(liveness_results):
-                is_live, score, _ = liveness_results[i]
+                is_live = liveness_results[i].get("is_real", False)
                 if not is_live:
                     face_color = (0, 0, 255)  # Red (fake face)
             
@@ -465,9 +531,9 @@ def save_debug_frame(frame, face_locations, liveness_results, match_names=None, 
             
             # Show liveness score if available
             if i < len(liveness_results):
-                is_live, score, _ = liveness_results[i]
+                is_live = liveness_results[i].get("is_real", False)
                 status = "Live" if is_live else "Fake"
-                cv2.putText(debug_frame, f"{status}: {score:.2f}", 
+                cv2.putText(debug_frame, f"{status}: {liveness_results[i].get('score', 0):.2f}", 
                            (left, top - 10), cv2.FONT_HERSHEY_SIMPLEX, 
                            0.5, face_color, 2)
             
@@ -630,7 +696,10 @@ def run_face_recognition(output_file, backend_url, max_attempts=100, confidence_
                 is_live = False
                 liveness_score = 0
                 if i < len(liveness_results):
-                    is_live, liveness_score, _ = liveness_results[i]
+                    # Fix: unpack as dictionary instead of tuple
+                    result = liveness_results[i]
+                    is_live = result.get("is_real", False)
+                    liveness_score = result.get("score", 0)
                 
                 # Consider face live if it passes texture analysis OR if blinking is detected
                 natural_blinking = blink_detector.is_natural_blinking()
@@ -734,7 +803,7 @@ def run_face_recognition(output_file, backend_url, max_attempts=100, confidence_
             save_debug_frame(frame, face_locations, liveness_results, match_names=all_match_names, upload_folder=upload_folder)
             
             # Check if this frame passed liveness check
-            if any(result[0] for result in liveness_results):
+            if any(result.get("is_real", False) for result in liveness_results):
                 liveness_checks_passed += 1
                 
                 # If we've passed enough liveness checks or have natural blinking, we can consider the detection valid
