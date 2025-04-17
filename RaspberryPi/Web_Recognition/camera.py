@@ -14,9 +14,14 @@ from skimage import feature as skimage_feature
 import threading
 import queue
 
-# Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+# Set up logging once at the module level
 logger = logging.getLogger("WebCamera")
+if not logger.handlers:
+    handler = logging.StreamHandler()
+    formatter = logging.Formatter('[%(asctime)s] [%(name)s] [%(levelname)s] %(message)s')
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
 
 class WebCamera:
     """Camera handling optimized for web applications."""
@@ -86,16 +91,6 @@ class WebCamera:
         # Frame buffers
         self.latest_frame = None
         self.frame_queue = queue.Queue(maxsize=2)  # Small queue to avoid memory issues
-        
-        # Initialize logs
-        global logger
-        logger = logging.getLogger("WebCamera")
-        if not logger.handlers:
-            handler = logging.StreamHandler()
-            formatter = logging.Formatter('[%(asctime)s] [%(name)s] [%(levelname)s] %(message)s')
-            handler.setFormatter(formatter)
-            logger.addHandler(handler)
-            logger.setLevel(logging.INFO)
         
         # This flag will control visualization during texture analysis
         self.texture_visualization = False

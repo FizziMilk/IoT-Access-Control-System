@@ -1,4 +1,4 @@
-from flask import render_template, request, redirect, url_for, flash, session
+from flask import render_template, request, redirect, url_for, flash, session, jsonify
 from datetime import datetime
 import time
 from utils import verify_otp_rest
@@ -8,6 +8,8 @@ import logging
 import os
 import json
 import base64
+import threading
+import traceback
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -76,6 +78,9 @@ def setup_routes(app, door_controller, mqtt_handler, session, backend_url):
     # Initialize facial recognition service
     # Replace old service with new optimized service
     from Web_Recognition.web_face_service import WebFaceService
+    
+    # Create a lock for thread safety with face service operations
+    face_service_lock = threading.RLock()
     
     # Determine if we're running in a headless environment
     # Use interactive mode if the DISPLAY environment variable is set
@@ -243,18 +248,20 @@ def setup_routes(app, door_controller, mqtt_handler, session, backend_url):
         """Display the face recognition page"""
         logger.info("Face recognition page requested")
         
-        try:
-            # Single comprehensive cleanup call instead of multiple cleanup operations
-            face_service.release_camera()
-            
-            # Set Qt environment
-            setup_qt_environment()
-            
-            # Force service to reinitialize on next use
-            face_service.initialized = False
-            
-        except Exception as e:
-            logger.error(f"Error setting up for face recognition: {e}")
+        # Use the lock for thread safety
+        with face_service_lock:
+            try:
+                # Single comprehensive cleanup call instead of multiple cleanup operations
+                face_service.release_camera()
+                
+                # Set Qt environment
+                setup_qt_environment()
+                
+                # Force service to reinitialize on next use
+                face_service.initialized = False
+                
+            except Exception as e:
+                logger.error(f"Error setting up for face recognition: {e}")
         
         # Return the template
         return render_template("face_recognition.html")
@@ -263,62 +270,80 @@ def setup_routes(app, door_controller, mqtt_handler, session, backend_url):
     def process_face():
         """Process facial recognition and redirect based on result"""
         try:
-            # First capture a face with liveness detection
-            face_image = face_service.capture_face_with_liveness(timeout=30)
-            
-            if face_image is None:
-                flash("Face verification failed. Please try again.", "danger")
-                return redirect(url_for("door_entry"))
-            
-            # First try to identify the user
-            user_match = []
-            if face_service.recognition.known_face_encodings:
-                # Only attempt recognition if we have known faces
+            # Use the lock for thread safety
+            with face_service_lock:
+                # First capture a face with liveness detection
+                face_image = face_service.capture_face_with_liveness(timeout=30)
+                
+                if face_image is None:
+                    flash("Face verification failed. Please try again.", "danger")
+                    return redirect(url_for("door_entry"))
+                
+                # Try to identify the person from known faces
                 match = face_service.recognition.identify_face(face_image)
-                if match:
-                    user_match = [match]  # Keep format consistent with previous code
+                
+                # Cleanup automatically after face processing
+                face_service.release_camera()
             
-            if user_match:
-                # User recognized, get their phone number
-                phone_number = user_match[0]['name']  # Access the first element of the list
+            # User recognized
+            if match:
+                # Get their phone number
+                phone_number = match['name']
                 
                 try:
-                    # Send OTP directly since user is recognized
-                    resp = session.post(f"{backend_url}/door-entry", json={"phone_number": phone_number})
+                    # Check if this user is allowed direct access
+                    resp = session.get(f"{backend_url}/check-face-access/{phone_number}")
                     data = resp.json()
                     
-                    if data.get("status") == "OTP sent":
-                        flash("Face recognized! OTP sent to your phone.", "success")
-                        return render_template("otp.html", phone_number=phone_number)
-                    elif data.get("status") == "pending":
-                        flash(data.get("message", "Access pending."), "warning")
-                        return render_template("pending.html", phone_number=phone_number)
-                    else:
-                        flash(data.get("error", "An error occurred."), "danger")
-                        return redirect(url_for("door_entry"))
+                    if data.get("status") == "approved":
+                        # Unlock door and log access
+                        door_controller.unlock_door()
                         
+                        # Log door unlock via facial recognition
+                        try:
+                            session.post(f"{backend_url}/log-door-access", json={
+                                "user": phone_number,
+                                "method": "Facial Recognition",
+                                "status": "Unlocked",
+                                "details": f"Door unlocked via facial recognition, confidence: {match.get('confidence', 'N/A')}"
+                            })
+                        except Exception as e:
+                            print(f"[DEBUG] Error logging door access: {e}")
+                            
+                        flash("Face recognized! Door unlocked.", "success")
+                        return render_template("door_unlocked.html")
+                    else:
+                        # No direct access - provide options
+                        flash("Face recognized but additional verification needed.", "warning")
+                        return render_template("verify_options.html", phone_number=phone_number,
+                                              user_recognized=True, face_recognized=True)
                 except Exception as e:
-                    flash("Error connecting to backend.", "danger")
-                    print(f"[DEBUG] Error connecting to backend: {e}")
-                    return redirect(url_for("door_entry"))
-            else:
-                # User not recognized, register the face (we already have the face image)
-                face_encoding = face_service.register_face(face_image)
-                if face_encoding:
-                    # Store the encoding in the Flask session
-                    from flask import session as flask_session
-                    # Convert to JSON serializable format (it's already a list from register_face)
-                    flask_session['face_encoding'] = face_encoding
+                    logger.error(f"Error checking face access: {e}")
                     
-                    flash("Face captured successfully. Please enter your phone number to register.", "info")
-                    return render_template("register_face.html")
+                    # Default to requiring additional verification
+                    flash("Face recognized but verification needed. Please use OTP.", "warning")
+                    return render_template("verify_options.html", phone_number=phone_number,
+                                         user_recognized=True, face_recognized=True)
+            else:
+                # Not recognized - allow registration or other verification
+                # Generate face encoding for potential registration
+                encoding = face_service.recognition.process_face_encoding(face_image)
                 
-                flash("Face recognition failed. Please try again or use phone number.", "danger")
-                return redirect(url_for("door_entry"))
+                if encoding is not None:
+                    # Store encoding in session for potential registration
+                    session['face_encoding'] = encoding.tolist()
+                    session['has_temp_face'] = True
+                    flash("Face not recognized. Please verify identity or register.", "warning")
+                    return render_template("verify_options.html", user_recognized=False,
+                                         face_recognized=False, has_face=True)
+                else:
+                    flash("Could not process face features. Please try again.", "danger")
+                    return redirect(url_for("door_entry"))
                 
         except Exception as e:
-            flash(f"Error during face recognition: {str(e)}", "danger")
-            print(f"[DEBUG] Face recognition error: {e}")
+            logger.error(f"Error in face recognition: {e}")
+            logger.error(traceback.format_exc())
+            flash("An error occurred during face recognition.", "danger")
             return redirect(url_for("door_entry"))
     
     @app.route('/register-face', methods=['POST'])
