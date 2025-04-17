@@ -293,24 +293,12 @@ class WebCamera:
         """
         logger.info(f"Initializing camera with ID={self.camera_id}")
         
-        # First release any existing camera
-        self._release_camera()
+        # First release any existing camera - but only if not already done
+        if self.camera is not None:
+            self._release_camera()
         
         # Try to open camera
         try:
-            # Wait a moment to ensure previous camera sessions are fully closed
-            time.sleep(1.0)
-            
-            # Force destroy any lingering windows
-            cv2.destroyAllWindows()
-            
-            # Clear any pre-existing OpenCV state 
-            for i in range(5):
-                cap = cv2.VideoCapture(self.camera_id)
-                if cap is not None and cap.isOpened():
-                    cap.release()
-                    time.sleep(0.2)
-            
             logger.info(f"Opening camera with index {self.camera_id}")
             cap = cv2.VideoCapture(self.camera_id)
             
@@ -327,7 +315,7 @@ class WebCamera:
                 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, resolution[1])
             
             # Wait for camera to initialize
-            time.sleep(0.5)
+            time.sleep(0.2)  # Reduced from 0.5 to speed up initialization
             
             return cap
             
@@ -338,7 +326,7 @@ class WebCamera:
     
     def _release_camera(self):
         """
-        Release camera resources safely.
+        Release camera resources efficiently.
         """
         if self.camera is not None:
             try:
@@ -346,11 +334,12 @@ class WebCamera:
                 self.camera.release()
                 self.camera = None
                 
-                # Ensure all OpenCV windows are destroyed
-                cv2.destroyAllWindows()
+                # Destroy windows in non-headless mode
+                if not self.headless:
+                    cv2.destroyAllWindows()
                 
-                # Wait to ensure resources are released
-                time.sleep(0.5)
+                # Brief wait to ensure resources are released
+                time.sleep(0.1)
                 logger.info("Camera resources released")
             except Exception as e:
                 logger.error(f"Error releasing camera: {e}")
@@ -370,20 +359,14 @@ class WebCamera:
             # Use xcb on Linux
             os.environ["QT_QPA_PLATFORM"] = "xcb"
             
-            # Debug mode for plugins
-            os.environ["QT_DEBUG_PLUGINS"] = "1"
+            # Debug mode for plugins (only when needed for troubleshooting)
+            # os.environ["QT_DEBUG_PLUGINS"] = "1"
             
             # Set plugin path
             os.environ["QT_PLUGIN_PATH"] = "/usr/lib/aarch64-linux-gnu/qt5/plugins"
             
             # Force synchronous operations
             os.environ["QT_NO_GLIB"] = "1"
-            
-            # Reset any lingering OpenCV state
-            cv2.destroyAllWindows()
-            
-            # Allow time for any Qt operations to complete
-            time.sleep(0.5)
             
             logger.info("Qt environment configured")
         except Exception as e:

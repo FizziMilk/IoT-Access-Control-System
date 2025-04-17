@@ -53,9 +53,7 @@ class WebFaceService:
             bool: True if successful, False otherwise
         """
         try:
-            # First, release any existing resources
-            self.release_camera()
-            
+            # Only release resources if already initialized
             if self.initialized:
                 logger.info("Service already initialized")
                 return True
@@ -122,15 +120,18 @@ class WebFaceService:
             logger.error(traceback.format_exc())
             return []
     
-    def capture_face_with_liveness(self):
+    def capture_face_with_liveness(self, timeout=30):
         """
         Capture a face with liveness checks.
+        
+        Args:
+            timeout: Maximum seconds to wait for liveness detection
         
         Returns:
             numpy.ndarray or None: Face image if successful
         """
         try:
-            return self.camera.capture_face_with_liveness()
+            return self.camera.capture_face_with_liveness(timeout=timeout)
         except Exception as e:
             logger.error(f"Error during face capture: {e}")
             logger.error(traceback.format_exc())
@@ -280,12 +281,13 @@ class WebFaceService:
     
     def release_camera(self):
         """
-        Release camera resources safely and reset service state.
+        Comprehensive camera resource cleanup and service reset.
+        This is the central method for ensuring all resources are properly released.
         """
         try:
-            logger.info("Releasing camera resources")
+            logger.info("Performing comprehensive camera cleanup")
             
-            # Release camera resources
+            # First close camera if it exists
             if hasattr(self, 'camera') and self.camera:
                 self.camera._release_camera()
             
@@ -293,18 +295,26 @@ class WebFaceService:
             import cv2
             cv2.destroyAllWindows()
             
+            # Kill any stray OpenCV processes
+            try:
+                import subprocess
+                subprocess.run("pkill -f cv2", shell=True, timeout=1)
+            except:
+                pass
+            
             # Reset service state
             self.initialized = False
             
-            # Recreate the camera instance to ensure clean state
+            # Recreate the camera instance with fresh state
+            import os
             headless = getattr(self.camera, 'headless', True) if hasattr(self, 'camera') else True
             self.camera = WebCamera(headless=headless)
             
             # Allow time for resources to be fully released
             import time
-            time.sleep(1.0)
+            time.sleep(0.5)  # Reduced from 1.0 to 0.5 to speed up transitions
             
-            logger.info("Camera resources released successfully and service reset")
+            logger.info("Camera resources fully released and service reset")
         except Exception as e:
-            logger.error(f"Error releasing camera resources: {e}")
+            logger.error(f"Error during comprehensive camera cleanup: {e}")
             logger.error(traceback.format_exc()) 

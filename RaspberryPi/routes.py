@@ -96,27 +96,17 @@ def setup_routes(app, door_controller, mqtt_handler, session, backend_url):
     @app.route('/')
     def index():
         """
-        Root route that also ensures any running camera resources are cleaned up
+        Root route that ensures proper cleanup when returning from face recognition
         """
-        try:
-            # Clean up any OpenCV windows
-            cv2.destroyAllWindows()
-            
-            # Release camera resources 
-            face_service.release_camera()
-            
-            # Extra cleanup to ensure no stray processes
-            import os
-            import signal
-            import subprocess
-            
-            # Kill any stray OpenCV processes that might be hanging
+        # Check if we're coming from face recognition by checking the referrer
+        referrer = request.referrer or ""
+        
+        if 'face-recognition' in referrer or 'process-face' in referrer:
             try:
-                subprocess.run("pkill -f cv2", shell=True)
-            except:
-                pass
-        except Exception as e:
-            logger.error(f"Error cleaning up resources: {e}")
+                # Only clean up if coming from face recognition
+                face_service.release_camera()
+            except Exception as e:
+                logger.error(f"Error cleaning up resources: {e}")
         
         return render_template('entry_options.html')
 
@@ -251,35 +241,17 @@ def setup_routes(app, door_controller, mqtt_handler, session, backend_url):
     @app.route('/face-recognition', methods=['GET'])
     def face_recognition():
         """Display the face recognition page"""
-        # Simpler cleanup with the new service - no need for manual camera management
         logger.info("Face recognition page requested")
         
         try:
-            # Kill any stray OpenCV processes first to ensure a clean slate
-            import subprocess
-            try:
-                subprocess.run("pkill -f cv2", shell=True, timeout=1)
-            except:
-                pass
-            
-            # Wait a moment for processes to terminate
-            time.sleep(0.5)
-            
-            # First, ensure the camera is properly released from previous sessions
+            # Single comprehensive cleanup call instead of multiple cleanup operations
             face_service.release_camera()
-            
-            # Close any potential OpenCV windows
-            cv2.destroyAllWindows()
             
             # Set Qt environment
             setup_qt_environment()
             
-            # Force service to reinitialize completely on next use
+            # Force service to reinitialize on next use
             face_service.initialized = False
-            
-            # Recreate camera object with fresh state
-            headless_mode = os.environ.get('DISPLAY') is None
-            face_service.camera = WebCamera(headless=headless_mode)
             
         except Exception as e:
             logger.error(f"Error setting up for face recognition: {e}")
@@ -291,15 +263,11 @@ def setup_routes(app, door_controller, mqtt_handler, session, backend_url):
     def process_face():
         """Process facial recognition and redirect based on result"""
         try:
-            # Ensure any previous camera session is properly closed
-            cv2.destroyAllWindows()
-            
             # First capture a face with liveness detection
             face_image = face_service.capture_face_with_liveness(timeout=30)
             
             if face_image is None:
                 flash("Face verification failed. Please try again.", "danger")
-                face_service.release_camera()
                 return redirect(url_for("door_entry"))
             
             # First try to identify the user
@@ -327,15 +295,11 @@ def setup_routes(app, door_controller, mqtt_handler, session, backend_url):
                         return render_template("pending.html", phone_number=phone_number)
                     else:
                         flash(data.get("error", "An error occurred."), "danger")
-                        # Always clean up before redirecting
-                        face_service.release_camera()
                         return redirect(url_for("door_entry"))
                         
                 except Exception as e:
                     flash("Error connecting to backend.", "danger")
                     print(f"[DEBUG] Error connecting to backend: {e}")
-                    # Always clean up before redirecting
-                    face_service.release_camera()
                     return redirect(url_for("door_entry"))
             else:
                 # User not recognized, register the face (we already have the face image)
@@ -350,18 +314,11 @@ def setup_routes(app, door_controller, mqtt_handler, session, backend_url):
                     return render_template("register_face.html")
                 
                 flash("Face recognition failed. Please try again or use phone number.", "danger")
-                # Always clean up before redirecting
-                face_service.release_camera()
                 return redirect(url_for("door_entry"))
                 
         except Exception as e:
             flash(f"Error during face recognition: {str(e)}", "danger")
             print(f"[DEBUG] Face recognition error: {e}")
-            # Always clean up on exception
-            try:
-                face_service.release_camera()
-            except:
-                pass
             return redirect(url_for("door_entry"))
     
     @app.route('/register-face', methods=['POST'])
