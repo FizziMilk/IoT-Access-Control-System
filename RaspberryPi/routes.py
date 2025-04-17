@@ -1,4 +1,4 @@
-from flask import render_template, request, redirect, url_for, flash, session as flask_session, jsonify, send_file, send_from_directory, Response
+from flask import render_template, request, redirect, url_for, flash, session as flask_session, jsonify, send_file, send_from_directory
 from datetime import datetime
 import time
 from utils import verify_otp_rest
@@ -14,7 +14,6 @@ import numpy as np
 import uuid
 import subprocess
 import io
-import requests
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -94,33 +93,6 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
     
     # Set up Qt environment once at startup
     setup_qt_environment()
-    
-    # Function to prepare shared camera frames directory
-    def prepare_frame_sharing():
-        """Set up shared frame directory for face recognition process"""
-        frame_share_dir = '/tmp/camera_frames'
-        os.makedirs(frame_share_dir, exist_ok=True)
-        
-        # Make sure the directory is clean
-        shared_frame_path = os.path.join(frame_share_dir, 'current_frame.jpg')
-        if os.path.exists(shared_frame_path):
-            try:
-                # Write a test frame to check if we can write to the directory
-                test_frame = np.zeros((480, 640, 3), dtype=np.uint8)
-                cv2.putText(test_frame, "Camera initializing", (150, 240),
-                           cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
-                _, buffer = cv2.imencode('.jpg', test_frame, [cv2.IMWRITE_JPEG_QUALITY, 95])
-                with open(shared_frame_path, 'wb') as f:
-                    f.write(buffer)
-                logger.info("Frame sharing initialized successfully")
-                return True
-            except Exception as e:
-                logger.error(f"Error initializing frame sharing: {e}")
-                return False
-        return True
-    
-    # Set up shared camera frames directory
-    prepare_frame_sharing()
     
     # Flag to track if backend connectivity has been verified
     backend_available = False
@@ -304,97 +276,29 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
         # Show the phone entry form
         return render_template("door_entry.html")
     
-    @app.route('/face-recognition', methods=['GET', 'POST'])
+    @app.route('/face-recognition', methods=['GET'])
     def face_recognition():
-        """Handle face recognition page and process"""
-        # Initialize variables
-        message = ""
-        status = ""
-        show_debug_image = False
+        """Display the face recognition page"""
+        logger.info("Face recognition page requested")
         
-        # Check the upload directory exists
-        if not os.path.exists(app.config['UPLOAD_FOLDER']):
-            os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+        # Clean up any existing OpenCV windows and force camera release
+        try:
+            import cv2
+            cv2.destroyAllWindows()
+            cv2.waitKey(1)
+            
+            # Try to force release camera at OS level
+            import subprocess
+            subprocess.run('sudo fuser -k /dev/video0 2>/dev/null || true', 
+                           shell=True, timeout=2)
+        except Exception as e:
+            logger.error(f"Error cleaning up resources: {e}")
         
-        if request.method == 'POST':
-            try:
-                from face_recognition_process import run_face_recognition
-                
-                # Start the face recognition process
-                logger.info("Starting face recognition process")
-                # Generate a temporary output file for the results
-                output_file = os.path.join('/tmp', f"face_result_{uuid.uuid4()}.json")
-                result = run_face_recognition(output_file, backend_url, upload_folder=app.config['UPLOAD_FOLDER'])
-                
-                logger.info(f"Face recognition result: {result}")
-                
-                if result.get('status') == 'success':
-                    # A face was recognized
-                    recognized_name = result.get('name', 'Unknown')
-                    
-                    if recognized_name != 'Unknown':
-                        # Unlock the door for recognized person
-                        door_controller.unlock_door()
-                        message = f"Welcome, {recognized_name}!"
-                        status = "success"
-                        
-                        # Log successful access
-                        if backend_session and backend_url:
-                            try:
-                                backend_session.post(f"{backend_url}/log-door-access", json={
-                                    "user": recognized_name,
-                                    "method": "Face Recognition",
-                                    "status": "Unlocked",
-                                    "details": "Face recognized successfully"
-                                })
-                            except Exception as e:
-                                logger.error(f"Error logging access: {e}")
-                    else:
-                        message = "Face not recognized."
-                        status = "error"
-                        
-                        # Log failed access attempt
-                        if backend_session and backend_url:
-                            try:
-                                backend_session.post(f"{backend_url}/log-door-access", json={
-                                    "user": "Unknown",
-                                    "method": "Face Recognition",
-                                    "status": "Denied",
-                                    "details": "Face not recognized"
-                                })
-                            except Exception as e:
-                                logger.error(f"Error logging access: {e}")
-                else:
-                    # Handle failure
-                    message = result.get('message', 'Face recognition failed')
-                    status = "error"
-                    
-                    # Log failed attempt with reason
-                    if backend_session and backend_url:
-                        try:
-                            backend_session.post(f"{backend_url}/log-door-access", json={
-                                "user": "Unknown",
-                                "method": "Face Recognition",
-                                "status": "Denied",
-                                "details": message
-                            })
-                        except Exception as e:
-                            logger.error(f"Error logging access: {e}")
-            except Exception as e:
-                logger.error(f"Error in face recognition: {e}")
-                traceback.print_exc()
-                message = f"Error: {str(e)}"
-                status = "error"
+        # Check if testing mode - pass this to the template
+        testing_mode = request.args.get('testing', 'false').lower() == 'true'
         
-        # Check if debug image was saved
-        debug_img_path = os.path.join(app.config['UPLOAD_FOLDER'], 'debug_frame.jpg')
-        if os.path.exists(debug_img_path):
-            show_debug_image = True
-        
-        return render_template('face_recognition.html', 
-                              message=message, 
-                              status=status,
-                              show_debug_image=show_debug_image)
+        # Return the template
+        return render_template("face_recognition.html", testing_mode=testing_mode)
     
     @app.route('/face-recognition-feed')
     def face_recognition_feed():
@@ -755,7 +659,61 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                 camera.set(cv2.CAP_PROP_FPS, 30)
                 # Reduce buffer size to minimize latency
                 camera.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-                logger.info("Camera initialized successfully")
+                
+                # Load face and eye detection models
+                try:
+                    # Look for haarcascades in common locations
+                    cascade_paths = [
+                        cv2.data.haarcascades,  # OpenCV's built-in path
+                        '/usr/local/share/opencv4/haarcascades/',  # Common Linux path
+                        '/usr/share/opencv/haarcascades/',  # Another Linux path
+                        'C:/opencv/data/haarcascades/',  # Common Windows path
+                    ]
+                    
+                    # Try to find the face cascade file
+                    face_cascade_path = None
+                    for path in cascade_paths:
+                        test_path = os.path.join(path, 'haarcascade_frontalface_default.xml')
+                        if os.path.exists(test_path):
+                            face_cascade_path = test_path
+                            break
+                    
+                    if face_cascade_path is None:
+                        logger.warning("Couldn't find face cascade file, using default path")
+                        face_cascade_path = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
+                    
+                    # Try to find the eye cascade file
+                    eye_cascade_path = None
+                    for path in cascade_paths:
+                        test_path = os.path.join(path, 'haarcascade_eye.xml')
+                        if os.path.exists(test_path):
+                            eye_cascade_path = test_path
+                            break
+                    
+                    if eye_cascade_path is None:
+                        logger.warning("Couldn't find eye cascade file, using default path")
+                        eye_cascade_path = cv2.data.haarcascades + 'haarcascade_eye.xml'
+                    
+                    # Load the cascades
+                    face_cascade = cv2.CascadeClassifier(face_cascade_path)
+                    eye_cascade = cv2.CascadeClassifier(eye_cascade_path)
+                    
+                    # Check if the cascades loaded correctly
+                    if face_cascade.empty():
+                        logger.error(f"Failed to load face cascade from {face_cascade_path}")
+                        raise Exception("Failed to load face cascade")
+                    
+                    if eye_cascade.empty():
+                        logger.error(f"Failed to load eye cascade from {eye_cascade_path}")
+                        # Continue without eye detection if it fails
+                        logger.warning("Will continue without eye detection")
+                    
+                    logger.info("Camera and detection models initialized for video feed")
+                except Exception as e:
+                    logger.error(f"Error loading detection models: {e}")
+                    # Continue without detection if models fail to load
+                    face_cascade = None
+                    eye_cascade = None
             except Exception as e:
                 logger.error(f"Error opening camera: {e}")
                 
@@ -766,21 +724,14 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
             _, placeholder_buffer = cv2.imencode('.jpg', placeholder, [cv2.IMWRITE_JPEG_QUALITY, 90])
             placeholder_bytes = placeholder_buffer.tobytes()
             
-            # Set up shared frame directory for face recognition process
-            frame_share_dir = '/tmp/camera_frames'
-            os.makedirs(frame_share_dir, exist_ok=True)
-            shared_frame_path = os.path.join(frame_share_dir, 'current_frame.jpg')
-            
-            # Save placeholder initially
-            try:
-                with open(shared_frame_path, 'wb') as f:
-                    f.write(placeholder_buffer)
-                logger.info(f"Saved initial placeholder to {shared_frame_path}")
-            except Exception as e:
-                logger.error(f"Error saving initial placeholder: {e}")
-            
             # Processing flag
             is_processing = False
+            
+            # For face detection performance
+            frame_counter = 0
+            detection_interval = 2  # Only detect faces every N frames
+            last_faces = []  # Store the last detected faces
+            last_eyes = []  # Store the last detected eyes
             
             try:
                 while True:
@@ -808,15 +759,68 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                         time.sleep(0.1)
                         continue
                     
-                    # Save the frame for face recognition process to use
-                    try:
-                        # Encode the frame with high quality
-                        _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 95])
-                        # Save to shared location
-                        with open(shared_frame_path, 'wb') as f:
-                            f.write(buffer)
-                    except Exception as e:
-                        logger.warning(f"Error saving shared frame: {e}")
+                    frame_with_detections = frame.copy()
+                    
+                    # Perform face and eye detection every few frames for better performance
+                    if face_cascade is not None:
+                        frame_counter += 1
+                        if frame_counter % detection_interval == 0:
+                            # Convert to grayscale for detection
+                            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                            
+                            # Apply histogram equalization to improve detection in varying lighting
+                            gray = cv2.equalizeHist(gray)
+                            
+                            # Detect faces
+                            faces = face_cascade.detectMultiScale(
+                                gray,
+                                scaleFactor=1.1,
+                                minNeighbors=5,
+                                minSize=(30, 30),
+                                flags=cv2.CASCADE_SCALE_IMAGE
+                            )
+                            
+                            # Update last faces if we found any
+                            if len(faces) > 0:
+                                last_faces = faces
+                                
+                                # Only detect eyes if we found faces
+                                last_eyes = []
+                                if eye_cascade is not None:
+                                    for (x, y, w, h) in faces:
+                                        # Region of interest for eyes
+                                        roi_gray = gray[y:y+h, x:x+w]
+                                        
+                                        # Detect eyes within the face region
+                                        eyes = eye_cascade.detectMultiScale(
+                                            roi_gray,
+                                            scaleFactor=1.1,
+                                            minNeighbors=3,
+                                            minSize=(15, 15),
+                                            maxSize=(w//3, h//3)  # Eyes shouldn't be too large
+                                        )
+                                        
+                                        # Store the eyes with their face position
+                                        for (ex, ey, ew, eh) in eyes:
+                                            last_eyes.append((x+ex, y+ey, ew, eh))
+                    
+                    # Draw the last detected faces on every frame
+                    for (x, y, w, h) in last_faces:
+                        # Draw face rectangle
+                        cv2.rectangle(frame_with_detections, (x, y), (x+w, y+h), (0, 255, 0), 2)
+                        
+                        # Add face label
+                        cv2.putText(frame_with_detections, "Face", (x, y-10),
+                                  cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+                        
+                    # Draw eye rectangles
+                    for (x, y, w, h) in last_eyes:
+                        cv2.rectangle(frame_with_detections, (x, y), (x+w, y+h), (255, 0, 0), 2)
+                        
+                    # Add information about detected faces at the bottom of the frame
+                    if len(last_faces) > 0:
+                        cv2.putText(frame_with_detections, f"Faces: {len(last_faces)}, Eyes: {len(last_eyes)}", 
+                                  (10, frame.shape[0] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
                     
                     # Check if facial recognition is in progress
                     if 'UPLOAD_FOLDER' in app.config:
@@ -842,13 +846,13 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                     # If we get here, we'll use the camera frame directly
                     if is_processing:
                         # Add "Processing..." text if we were in processing mode
-                        cv2.putText(frame, "Processing...", (10, 30),
+                        cv2.putText(frame_with_detections, "Processing...", (10, 30),
                                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
                         is_processing = False
                     
                     # Convert frame to JPEG
                     try:
-                        _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 90])
+                        _, buffer = cv2.imencode('.jpg', frame_with_detections, [cv2.IMWRITE_JPEG_QUALITY, 90])
                         frame_bytes = buffer.tobytes()
                         
                         # Only yield if we got valid data
@@ -878,9 +882,5 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
             generate_frames(),
             mimetype='multipart/x-mixed-replace; boundary=frame'
         )
-
-    @app.context_processor
-    def utility_processor():
-        return dict(time=time.time)
 
     return app 
