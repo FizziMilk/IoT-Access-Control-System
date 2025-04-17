@@ -314,19 +314,13 @@ class WebFaceService:
             # Reset service state
             self.initialized = False
             
-            # Recreate the camera instance with fresh state
-            if hasattr(self, 'camera'):
-                headless = getattr(self.camera, 'headless', True)
-            else:
-                headless = True
-                
-            self.camera = WebCamera(config={'headless': headless})
-            
-            # Allow time for resources to be fully released
+            # Sleep a bit to ensure OS resources are properly released
             import time
-            time.sleep(0.5)
+            time.sleep(0.3)
             
             logger.info("Camera resources fully released and service reset")
+            return True
         except Exception as e:
             logger.error(f"Error during comprehensive camera cleanup: {e}")
-            logger.error(traceback.format_exc()) 
+            logger.error(traceback.format_exc())
+            return False 

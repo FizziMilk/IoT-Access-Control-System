@@ -108,8 +108,9 @@ def setup_routes(app, door_controller, mqtt_handler, session, backend_url):
         
         if 'face-recognition' in referrer or 'process-face' in referrer:
             try:
-                # Only clean up if coming from face recognition
-                face_service.release_camera()
+                with face_service_lock:
+                    # Only clean up if coming from face recognition
+                    face_service.release_camera()
             except Exception as e:
                 logger.error(f"Error cleaning up resources: {e}")
         
@@ -251,17 +252,37 @@ def setup_routes(app, door_controller, mqtt_handler, session, backend_url):
         # Use the lock for thread safety
         with face_service_lock:
             try:
-                # Single comprehensive cleanup call instead of multiple cleanup operations
-                face_service.release_camera()
+                # More aggressive cleanup - fully recreate service
+                global face_service
+                
+                # First release existing resources
+                if face_service:
+                    try:
+                        face_service.release_camera()
+                    except Exception as e:
+                        logger.error(f"Error releasing camera resources: {e}")
+                
+                # Determine headless mode
+                headless_mode = os.environ.get('DISPLAY') is None
+                
+                # Create a brand new service instance
+                logger.info("Creating new WebFaceService instance")
+                face_service = WebFaceService(
+                    backend_session=session, 
+                    backend_url=backend_url,
+                    headless=headless_mode
+                )
                 
                 # Set Qt environment
                 setup_qt_environment()
                 
-                # Force service to reinitialize on next use
-                face_service.initialized = False
+                # Initialize the service (load face data)
+                success = face_service.initialize()
+                logger.info(f"New service initialization: {'Success' if success else 'Failed'}")
                 
             except Exception as e:
-                logger.error(f"Error setting up for face recognition: {e}")
+                logger.error(f"Error recreating face recognition service: {e}")
+                logger.error(traceback.format_exc())
         
         # Return the template
         return render_template("face_recognition.html")
@@ -269,21 +290,28 @@ def setup_routes(app, door_controller, mqtt_handler, session, backend_url):
     @app.route('/process-face', methods=['POST'])
     def process_face():
         """Process facial recognition and redirect based on result"""
+        face_image = None
+        match = None
+        
         try:
             # Use the lock for thread safety
             with face_service_lock:
-                # First capture a face with liveness detection
-                face_image = face_service.capture_face_with_liveness(timeout=30)
-                
-                if face_image is None:
-                    flash("Face verification failed. Please try again.", "danger")
-                    return redirect(url_for("door_entry"))
-                
-                # Try to identify the person from known faces
-                match = face_service.recognition.identify_face(face_image)
-                
-                # Cleanup automatically after face processing
-                face_service.release_camera()
+                try:
+                    # First capture a face with liveness detection
+                    face_image = face_service.capture_face_with_liveness(timeout=30)
+                    
+                    if face_image is None:
+                        flash("Face verification failed. Please try again.", "danger")
+                        return redirect(url_for("door_entry"))
+                    
+                    # Try to identify the person from known faces
+                    match = face_service.recognition.identify_face(face_image)
+                finally:
+                    # Always clean up camera resources, regardless of success/failure
+                    try:
+                        face_service.release_camera()
+                    except Exception as e:
+                        logger.error(f"Error releasing camera in process-face: {e}")
             
             # User recognized
             if match:
