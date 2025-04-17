@@ -319,7 +319,9 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                 
                 # Start the face recognition process
                 logger.info("Starting face recognition process")
-                result = run_face_recognition(app.config['UPLOAD_FOLDER'])
+                # Generate a temporary output file for the results
+                output_file = os.path.join('/tmp', f"face_result_{uuid.uuid4()}.json")
+                result = run_face_recognition(output_file, backend_url, upload_folder=app.config['UPLOAD_FOLDER'])
                 
                 logger.info(f"Face recognition result: {result}")
                 
