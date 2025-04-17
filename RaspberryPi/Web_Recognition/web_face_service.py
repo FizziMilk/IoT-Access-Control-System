@@ -287,13 +287,14 @@ class WebFaceService:
         try:
             logger.info("Performing comprehensive camera cleanup")
             
+            # Explicitly destroy any OpenCV windows first
+            import cv2
+            cv2.destroyAllWindows()
+            cv2.waitKey(1)  # Process window destruction
+            
             # First close camera if it exists
             if hasattr(self, 'camera') and self.camera:
                 self.camera._release_camera()
-            
-            # Explicitly destroy any OpenCV windows
-            import cv2
-            cv2.destroyAllWindows()
             
             # Kill any stray OpenCV processes
             try:
@@ -312,7 +313,7 @@ class WebFaceService:
             
             # Allow time for resources to be fully released
             import time
-            time.sleep(0.5)  # Reduced from 1.0 to 0.5 to speed up transitions
+            time.sleep(0.5)
             
             logger.info("Camera resources fully released and service reset")
         except Exception as e:

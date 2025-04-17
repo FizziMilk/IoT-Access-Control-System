@@ -130,87 +130,97 @@ class WebCamera:
         """
         logger.info(f"Starting blink detection with timeout={timeout}s")
         
-        with self.camera_session(self.liveness_resolution):
-            start_time = time.time()
-            blink_counter = 0
-            ear_values = []
-            
-            # Continue until timeout or sufficient blinks detected
-            while (time.time() - start_time) < timeout and blink_counter < 2:
-                ret, frame = self.camera.read()
-                if not ret:
-                    logger.warning("Failed to capture frame")
-                    continue
+        try:
+            with self.camera_session(self.liveness_resolution):
+                start_time = time.time()
+                blink_counter = 0
+                ear_values = []
                 
-                # Convert frame for face_recognition
-                small_frame = cv2.resize(frame, (0, 0), fx=0.5, fy=0.5)
-                rgb_small_frame = cv2.cvtColor(small_frame, cv2.COLOR_BGR2RGB)
-                
-                # Detect faces
-                face_locations = face_recognition.face_locations(rgb_small_frame)
-                if not face_locations:
-                    continue
+                # Continue until timeout or sufficient blinks detected
+                while (time.time() - start_time) < timeout and blink_counter < 2:
+                    ret, frame = self.camera.read()
+                    if not ret:
+                        logger.warning("Failed to capture frame")
+                        continue
                     
-                # Get face landmarks
-                landmarks = face_recognition.face_landmarks(rgb_small_frame, face_locations)
-                if not landmarks:
-                    continue
-                
-                # Scale landmarks back to original size
-                scaled_landmarks = {}
-                for feature, points in landmarks[0].items():
-                    scaled_landmarks[feature] = [(p[0]*2, p[1]*2) for p in points]
-                
-                # Get eye landmarks
-                left_eye = scaled_landmarks.get('left_eye')
-                right_eye = scaled_landmarks.get('right_eye')
-                
-                if not left_eye or not right_eye:
-                    continue
-                
-                # Calculate EAR
-                left_ear = self._eye_aspect_ratio(left_eye)
-                right_ear = self._eye_aspect_ratio(right_eye)
-                ear = (left_ear + right_ear) / 2.0
-                ear_values.append(ear)
-                
-                # Check for blink - use a moving average approach for robustness
-                if len(ear_values) > 3:
-                    # Current EAR compared to recent average
-                    recent_avg = sum(ear_values[-4:-1]) / 3
+                    # Convert frame for face_recognition
+                    small_frame = cv2.resize(frame, (0, 0), fx=0.5, fy=0.5)
+                    rgb_small_frame = cv2.cvtColor(small_frame, cv2.COLOR_BGR2RGB)
                     
-                    if ear < self.EAR_THRESHOLD and recent_avg > (self.EAR_THRESHOLD + 0.05):
-                        # This is likely a blink (sudden drop in EAR)
-                        blink_counter += 1
-                        logger.info(f"Blink detected! EAR: {ear:.3f}, Threshold: {self.EAR_THRESHOLD:.3f}")
+                    # Detect faces
+                    face_locations = face_recognition.face_locations(rgb_small_frame)
+                    if not face_locations:
+                        continue
+                        
+                    # Get face landmarks
+                    landmarks = face_recognition.face_landmarks(rgb_small_frame, face_locations)
+                    if not landmarks:
+                        continue
+                    
+                    # Scale landmarks back to original size
+                    scaled_landmarks = {}
+                    for feature, points in landmarks[0].items():
+                        scaled_landmarks[feature] = [(p[0]*2, p[1]*2) for p in points]
+                    
+                    # Get eye landmarks
+                    left_eye = scaled_landmarks.get('left_eye')
+                    right_eye = scaled_landmarks.get('right_eye')
+                    
+                    if not left_eye or not right_eye:
+                        continue
+                    
+                    # Calculate EAR
+                    left_ear = self._eye_aspect_ratio(left_eye)
+                    right_ear = self._eye_aspect_ratio(right_eye)
+                    ear = (left_ear + right_ear) / 2.0
+                    ear_values.append(ear)
+                    
+                    # Check for blink - use a moving average approach for robustness
+                    if len(ear_values) > 3:
+                        # Current EAR compared to recent average
+                        recent_avg = sum(ear_values[-4:-1]) / 3
+                        
+                        if ear < self.EAR_THRESHOLD and recent_avg > (self.EAR_THRESHOLD + 0.05):
+                            # This is likely a blink (sudden drop in EAR)
+                            blink_counter += 1
+                            logger.info(f"Blink detected! EAR: {ear:.3f}, Threshold: {self.EAR_THRESHOLD:.3f}")
+                    
+                    # Only show windows in non-headless mode
+                    if not self.headless:
+                        # Display blink count and EAR on frame
+                        cv2.putText(frame, f"Blinks: {blink_counter}", (10, 30),
+                                  cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                        cv2.putText(frame, f"EAR: {ear:.3f}", (10, frame.shape[0] - 20),
+                                  cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                        
+                        # Draw eye contours for visual feedback
+                        self._draw_eyes(frame, left_eye, right_eye)
+                        
+                        # Show frame with feedback
+                        cv2.imshow("Blink Detection", frame)
+                        key = cv2.waitKey(1) & 0xFF
+                        
+                        # Allow manual exit
+                        if key == 27:  # ESC key
+                            break
                 
-                # Only show windows in non-headless mode
+                # Clean up windows
                 if not self.headless:
-                    # Display blink count and EAR on frame
-                    cv2.putText(frame, f"Blinks: {blink_counter}", (10, 30),
-                              cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-                    cv2.putText(frame, f"EAR: {ear:.3f}", (10, frame.shape[0] - 20),
-                              cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-                    
-                    # Draw eye contours for visual feedback
-                    self._draw_eyes(frame, left_eye, right_eye)
-                    
-                    # Show frame with feedback
-                    cv2.imshow("Blink Detection", frame)
-                    key = cv2.waitKey(1) & 0xFF
-                    
-                    # Allow manual exit
-                    if key == 27:  # ESC key
-                        break
-            
-            # Clean up windows
+                    cv2.destroyWindow("Blink Detection")
+                    cv2.waitKey(1)  # Process window destruction
+                
+                # Result
+                result = blink_counter >= 2
+                logger.info(f"Blink detection result: {result} ({blink_counter} blinks)")
+                return result
+                
+        except Exception as e:
+            logger.error(f"Error in blink detection: {e}")
+            logger.error(traceback.format_exc())
+            # Clean up any windows on error
             if not self.headless:
                 cv2.destroyAllWindows()
-            
-            # Result
-            result = blink_counter >= 2
-            logger.info(f"Blink detection result: {result} ({blink_counter} blinks)")
-            return result
+            return False
 
     def capture_face_with_liveness(self, timeout=30):
         """
@@ -477,12 +487,19 @@ class WebCamera:
                     )
                 except Exception as e:
                     logger.error(f"Error creating texture visualization: {e}")
+                finally:
+                    # Make sure windows are closed even if an exception occurs
+                    cv2.destroyWindow("Texture Analysis")
+                    cv2.waitKey(1)  # Process window destruction
             
             return is_real_texture
             
         except Exception as e:
             logger.error(f"Error in texture analysis: {e}")
             logger.error(traceback.format_exc())
+            # Clean up any lingering windows
+            if not self.headless:
+                cv2.destroyAllWindows()
             # Be lenient in case of errors
             return True
     
@@ -548,4 +565,7 @@ class WebCamera:
         
         # Display the visualization
         cv2.imshow("Texture Analysis", visualization)
-        cv2.waitKey(100)  # Brief display 
+        cv2.waitKey(100)  # Brief display
+        
+        # Explicitly destroy window after display
+        cv2.destroyWindow("Texture Analysis") 
