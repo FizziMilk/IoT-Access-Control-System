@@ -167,22 +167,51 @@ class WebRecognition:
 
 def setup_camera():
     """Initialize the camera and return the camera object"""
-    try:
-        camera = cv2.VideoCapture(0)
-        if not camera.isOpened():
-            logger.error("Failed to open camera")
-            return None
+    # Try multiple camera indices
+    camera_indices = [0, 1, 2]  # Try these indices in order
+    
+    for idx in camera_indices:
+        try:
+            logger.info(f"Attempting to open camera at index {idx}")
             
-        # Set camera properties if needed
-        camera.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-        camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-        
-        # Give camera time to adjust
-        time.sleep(0.3)
-        return camera
-    except Exception as e:
-        logger.error(f"Error setting up camera: {str(e)}")
-        return None
+            # First check if camera is already in use by trying to release it
+            try:
+                temp_cam = cv2.VideoCapture(idx)
+                if temp_cam.isOpened():
+                    temp_cam.release()
+                    time.sleep(0.5)  # Give OS time to fully release resources
+            except Exception as e:
+                logger.warning(f"Error checking camera {idx} status: {e}")
+            
+            # Now try to open it for real
+            camera = cv2.VideoCapture(idx)
+            
+            # Give camera more time to initialize (increased from 0.3 to 1.0 seconds)
+            time.sleep(1.0)
+            
+            # Check if camera opened successfully
+            if camera.isOpened():
+                # Set camera properties
+                camera.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+                camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+                camera.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Minimize latency
+                
+                # Read a test frame to confirm camera is working
+                ret, test_frame = camera.read()
+                if not ret or test_frame is None:
+                    logger.warning(f"Camera {idx} opened but failed to provide frame, trying next index")
+                    camera.release()
+                    continue
+                
+                logger.info(f"Successfully opened camera at index {idx}")
+                return camera
+            else:
+                logger.warning(f"Failed to open camera {idx}, trying next index")
+        except Exception as e:
+            logger.error(f"Error initializing camera at index {idx}: {str(e)}")
+    
+    logger.error("Failed to open any camera")
+    return None
 
 def perform_liveness_check(frame):
     """
@@ -545,8 +574,24 @@ def main():
     finally:
         # Clean up
         if camera:
-            camera.release()
-        cv2.destroyAllWindows()
+            try:
+                logger.info("Releasing camera resources")
+                # Try to read any remaining frames to clear buffer
+                for _ in range(5):
+                    camera.read()
+                camera.release()
+                logger.info("Camera released successfully")
+            except Exception as e:
+                logger.error(f"Error releasing camera: {str(e)}")
+                
+        # Explicitly destroy all OpenCV windows
+        try:
+            cv2.destroyAllWindows()
+            # Force window cleanup with multiple waitKey calls
+            for _ in range(5):
+                cv2.waitKey(1)
+        except Exception as e:
+            logger.error(f"Error destroying windows: {str(e)}")
         
         # Save results
         write_results(args.output, result)

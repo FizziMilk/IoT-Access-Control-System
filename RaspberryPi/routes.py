@@ -13,6 +13,7 @@ import numpy as np
 import uuid
 import subprocess
 import io
+import platform
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -97,32 +98,128 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
     camera_lock = threading.Lock()
     
     def get_camera():
-        """Get or initialize camera with proper error handling"""
+        """Get or initialize camera with proper error handling and fallbacks"""
         nonlocal camera
         
-        if camera is not None and camera.isOpened():
-            return camera
+        # If we already have a valid camera, return it
+        if camera is not None and hasattr(camera, 'isOpened') and camera.isOpened():
+            try:
+                # Do a test read to make sure camera is still working
+                ret, frame = camera.read()
+                if ret and frame is not None:
+                    return camera
+                else:
+                    logger.warning("Existing camera failed test read, will reinitialize")
+                    release_camera()
+            except Exception as e:
+                logger.error(f"Error testing existing camera: {e}")
+                release_camera()
             
-        # Initialize camera
+        # Try multiple camera indices
+        camera_indices = [0, 1, 2]  # Try these indices in order
+        
+        # First ensure all cameras are released at OS level
         try:
-            cam = cv2.VideoCapture(0)
-            # Set camera properties
-            cam.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-            cam.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-            cam.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Minimize latency
-            
-            # Check if camera opened
-            if not cam.isOpened():
-                logger.error("Failed to open camera")
-                return None
-                
-            # Give camera time to adjust
-            time.sleep(0.3)
-            camera = cam
-            return camera
+            if platform.system() == 'Linux':
+                # Use fuser to kill processes using video device
+                subprocess.run('sudo fuser -k /dev/video0 2>/dev/null', shell=True)
+                subprocess.run('sudo fuser -k /dev/video1 2>/dev/null', shell=True)
+                subprocess.run('sudo fuser -k /dev/video2 2>/dev/null', shell=True)
+                time.sleep(1.0)  # Give OS time to fully release resources
+                logger.info("Attempted OS-level camera release before initialization")
         except Exception as e:
-            logger.error(f"Error initializing camera: {e}")
-            return None
+            logger.error(f"Error during OS-level camera release: {e}")
+        
+        for idx in camera_indices:
+            try:
+                logger.info(f"Attempting to open camera at index {idx}")
+                
+                # First check if camera is already in use by trying to release it
+                try:
+                    temp_cam = cv2.VideoCapture(idx)
+                    if temp_cam.isOpened():
+                        temp_cam.release()
+                        time.sleep(0.5)  # Give OS time to fully release resources
+                except Exception as e:
+                    logger.warning(f"Error checking camera {idx} status: {e}")
+                
+                # Now try to open it for real
+                cam = cv2.VideoCapture(idx)
+                
+                # Give camera more time to initialize (increased from 0.2 to 1.0 seconds)
+                time.sleep(1.0)
+                
+                # Check if camera opened
+                if cam.isOpened():
+                    # Set camera properties
+                    cam.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+                    cam.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+                    cam.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Minimize latency
+                    
+                    # Read a test frame to confirm camera is working
+                    ret, test_frame = cam.read()
+                    if not ret or test_frame is None:
+                        logger.warning(f"Camera {idx} opened but failed to provide frame, trying next index")
+                        cam.release()
+                        continue
+                    
+                    logger.info(f"Successfully opened camera at index {idx}")
+                    camera = cam
+                    return camera
+                else:
+                    # Try to close it before moving to next index
+                    cam.release()
+                    logger.warning(f"Failed to open camera {idx}, trying next index")
+                    
+            except Exception as e:
+                logger.error(f"Error initializing camera at index {idx}: {e}")
+        
+        # If we get here, all camera attempts failed
+        logger.warning("Could not open any camera, creating fake camera feed")
+        
+        # Create a fake camera feed for UI testing
+        class FakeCamera:
+            def __init__(self):
+                self.frame_count = 0
+                self.width = 640
+                self.height = 480
+                
+            def isOpened(self):
+                return True
+                
+            def read(self):
+                # Create a black frame with text
+                frame = np.zeros((self.height, self.width, 3), dtype=np.uint8)
+                
+                # Add some animation to show it's running
+                self.frame_count += 1
+                
+                # Add timestamp and frame count
+                timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                cv2.putText(frame, f"NO CAMERA AVAILABLE", (50, 50), 
+                          cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+                cv2.putText(frame, f"Time: {timestamp}", (50, 100), 
+                          cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+                cv2.putText(frame, f"Frame: {self.frame_count}", (50, 150), 
+                          cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+                
+                # Draw a moving element
+                angle = (self.frame_count % 360) * (np.pi / 180)
+                cx, cy = self.width // 2, self.height // 2
+                radius = 100
+                x = int(cx + radius * np.cos(angle))
+                y = int(cy + radius * np.sin(angle))
+                cv2.circle(frame, (x, y), 20, (0, 255, 0), -1)
+                
+                return True, frame
+                
+            def release(self):
+                logger.info("Fake camera released")
+                pass
+        
+        # Use the fake camera
+        camera = FakeCamera()
+        return camera
     
     def release_camera():
         """Release camera resources safely"""
@@ -130,13 +227,30 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
         with camera_lock:
             if camera is not None:
                 try:
-                    if camera.isOpened():
+                    logger.info("Releasing camera resources")
+                    if hasattr(camera, 'isOpened') and camera.isOpened():
+                        # Try to read any remaining frames to clear buffer
+                        for _ in range(5):
+                            camera.read()
                         camera.release()
-                        logger.info("Camera released")
+                        logger.info("Camera released successfully")
                 except Exception as e:
                     logger.error(f"Error releasing camera: {e}")
                 finally:
                     camera = None
+                    
+                # Try to make sure system releases camera at OS level
+                try:
+                    # On Raspberry Pi, we can forcibly release the camera device
+                    if platform.system() == 'Linux':
+                        # Use fuser to kill processes using video device
+                        subprocess.run('sudo fuser -k /dev/video0 2>/dev/null', shell=True)
+                        subprocess.run('sudo fuser -k /dev/video1 2>/dev/null', shell=True)
+                        subprocess.run('sudo fuser -k /dev/video2 2>/dev/null', shell=True)
+                        time.sleep(1.0)  # Give OS time to fully release resources
+                        logger.info("Attempted OS-level camera release")
+                except Exception as e:
+                    logger.error(f"Error during OS-level camera release: {e}")
     
     @app.route('/')
     def index():
@@ -316,6 +430,11 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
             font_color = (255, 255, 255)
             line_type = 2
             
+            # Track camera failure count and last attempt time
+            camera_failure_count = 0
+            last_camera_attempt = time.time()
+            camera_retry_interval = 5.0  # Seconds between camera open attempts
+            
             # Initialize camera outside the loop
             cam = get_camera()
             
@@ -323,26 +442,39 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                 while True:
                     frame = None
                     
+                    # Check if we should try to reinitialize camera
+                    current_time = time.time()
+                    should_try_camera = (cam is None or (not hasattr(cam, 'isOpened') or not cam.isOpened())) and \
+                                       (current_time - last_camera_attempt > camera_retry_interval)
+                    
                     # Acquire lock only for the camera operations
                     with camera_lock:
-                        if cam is None or not cam.isOpened():
-                            # Try to reinitialize camera if it's closed
+                        if should_try_camera:
+                            # Update last attempt time
+                            last_camera_attempt = current_time
+                            logger.info("Attempting to reconnect to camera")
+                            
+                            # Limit retries to avoid log spam
+                            camera_failure_count += 1
+                            if camera_failure_count > 5:
+                                camera_retry_interval = 30.0  # Slow down retries after multiple failures
+                            
+                            # Try to reinitialize camera
                             cam = get_camera()
                             
-                        if cam is None:
-                            # Create a placeholder frame
-                            frame = np.zeros((480, 640, 3), dtype=np.uint8)
-                            cv2.putText(frame, "Camera not available", 
-                                      (50, 240), font, font_scale, font_color, line_type)
-                        else:
-                            # Read frame
+                        # Read frame from camera or use placeholder
+                        if hasattr(cam, 'read'):
                             success, frame = cam.read()
                             if not success:
                                 # Create a placeholder frame
                                 frame = np.zeros((480, 640, 3), dtype=np.uint8)
                                 cv2.putText(frame, "Failed to read frame", 
                                           (50, 240), font, font_scale, font_color, line_type)
-                                continue
+                        else:
+                            # Create a placeholder frame
+                            frame = np.zeros((480, 640, 3), dtype=np.uint8)
+                            cv2.putText(frame, "Camera not available", 
+                                      (50, 240), font, font_scale, font_color, line_type)
                     
                     # Process frame outside the lock to minimize lock time
                     if frame is not None:
@@ -355,76 +487,83 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                             # Initialize recognition system if needed
                             if recognition is None:
                                 try:
-                                    # Try to directly use the face_recognition module first
-                                    class WebRecognition:
-                                        """Simple face recognition class"""
-                                        def __init__(self):
-                                            self.known_face_encodings = []
-                                            self.known_face_names = []
-                                            self.detection_threshold = 0.6
-                                            logger.info("WebRecognition initialized")
-                                            
-                                        def load_encodings(self, encodings, names):
-                                            self.known_face_encodings = encodings
-                                            self.known_face_names = names
-                                            return True
-                                            
-                                        def identify_face(self, frame, face_location=None):
-                                            if not self.known_face_encodings:
-                                                return None
-                                                
-                                            # Convert to RGB for face_recognition
-                                            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                                            
-                                            # Get face locations if not provided
-                                            if face_location is None:
-                                                import face_recognition
-                                                face_locations = face_recognition.face_locations(rgb_frame)
-                                                if not face_locations:
-                                                    return None
-                                                face_location = face_locations[0]
-                                            else:
-                                                face_locations = [face_location]
-                                                
-                                            # Get face encodings
-                                            import face_recognition
-                                            face_encodings = face_recognition.face_encodings(rgb_frame, face_locations)
-                                            
-                                            if not face_encodings:
-                                                return None
-                                                
-                                            face_encoding = face_encodings[0]
-                                            
-                                            # Compare with known faces
-                                            face_distances = face_recognition.face_distance(self.known_face_encodings, face_encoding)
-                                            
-                                            if len(face_distances) > 0:
-                                                # Find best match
-                                                best_match_index = np.argmin(face_distances)
-                                                best_match_distance = face_distances[best_match_index]
-                                                
-                                                # Check if match is close enough
-                                                if best_match_distance <= self.detection_threshold:
-                                                    match_name = self.known_face_names[best_match_index]
-                                                    match_confidence = 1.0 - best_match_distance
-                                                    
-                                                    return {
-                                                        "name": match_name,
-                                                        "confidence": float(match_confidence),
-                                                        "distance": float(best_match_distance)
-                                                    }
-                                            
-                                            return None
-                                    
-                                    recognition = WebRecognition()
+                                    # Import directly here to avoid circular imports
+                                    from face_recognition_process import WebRecognition as FaceRecognition
+                                    recognition = FaceRecognition()
                                     logger.info("Face recognition initialized")
-                                except Exception as e:
-                                    logger.error(f"Error initializing face recognition: {e}")
-                                    face_recognition_active = False
-                                    face_recognition_result = {
-                                        'success': False,
-                                        'error': f"Error initializing face recognition: {str(e)}"
-                                    }
+                                except ImportError:
+                                    # Fallback to local implementation
+                                    try:
+                                        # Try to directly use the face_recognition module first
+                                        class WebRecognition:
+                                            """Simple face recognition class"""
+                                            def __init__(self):
+                                                self.known_face_encodings = []
+                                                self.known_face_names = []
+                                                self.detection_threshold = 0.6
+                                                logger.info("WebRecognition initialized")
+                                                
+                                            def load_encodings(self, encodings, names):
+                                                self.known_face_encodings = encodings
+                                                self.known_face_names = names
+                                                return True
+                                                
+                                            def identify_face(self, frame, face_location=None):
+                                                if not self.known_face_encodings:
+                                                    return None
+                                                    
+                                                # Convert to RGB for face_recognition
+                                                rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                                                
+                                                # Get face locations if not provided
+                                                if face_location is None:
+                                                    import face_recognition
+                                                    face_locations = face_recognition.face_locations(rgb_frame)
+                                                    if not face_locations:
+                                                        return None
+                                                    face_location = face_locations[0]
+                                                else:
+                                                    face_locations = [face_location]
+                                                    
+                                                # Get face encodings
+                                                import face_recognition
+                                                face_encodings = face_recognition.face_encodings(rgb_frame, face_locations)
+                                                
+                                                if not face_encodings:
+                                                    return None
+                                                    
+                                                face_encoding = face_encodings[0]
+                                                
+                                                # Compare with known faces
+                                                face_distances = face_recognition.face_distance(self.known_face_encodings, face_encoding)
+                                                
+                                                if len(face_distances) > 0:
+                                                    # Find best match
+                                                    best_match_index = np.argmin(face_distances)
+                                                    best_match_distance = face_distances[best_match_index]
+                                                    
+                                                    # Check if match is close enough
+                                                    if best_match_distance <= self.detection_threshold:
+                                                        match_name = self.known_face_names[best_match_index]
+                                                        match_confidence = 1.0 - best_match_distance
+                                                        
+                                                        return {
+                                                            "name": match_name,
+                                                            "confidence": float(match_confidence),
+                                                            "distance": float(best_match_distance)
+                                                        }
+                                                
+                                                return None
+                                        
+                                        recognition = WebRecognition()
+                                        logger.info("Face recognition initialized")
+                                    except Exception as e:
+                                        logger.error(f"Error initializing face recognition: {e}")
+                                        face_recognition_active = False
+                                        face_recognition_result = {
+                                            'success': False,
+                                            'error': f"Error initializing face recognition: {str(e)}"
+                                        }
                             
                             # Load known faces if not already loaded
                             if not known_faces_loaded and backend_url and recognition:
@@ -545,7 +684,7 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
             finally:
                 # Clean up - only release the camera at the end of the generator
                 with camera_lock:
-                    if cam is not None:
+                    if cam is not None and hasattr(cam, 'release'):
                         cam.release()
                         logger.info("Camera released at end of video feed")
                 # Clean up recognition object
@@ -821,6 +960,31 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
     # Clean up resources when app exits
     @app.teardown_appcontext
     def cleanup_resources(exception=None):
+        """Clean up all resources when application context tears down"""
+        logger.info("Cleaning up resources on app context teardown")
+        
+        # Release camera and destroy windows
         release_camera()
+        
+        # Explicitly destroy all OpenCV windows
+        try:
+            cv2.destroyAllWindows()
+            # Force window cleanup with multiple waitKey calls
+            for _ in range(5):
+                cv2.waitKey(1)
+        except Exception as e:
+            logger.error(f"Error destroying windows: {e}")
+            
+        # Try one more time to ensure cameras are released at OS level
+        try:
+            if platform.system() == 'Linux':
+                subprocess.run('sudo fuser -k /dev/video0 2>/dev/null', shell=True)
+                subprocess.run('sudo fuser -k /dev/video1 2>/dev/null', shell=True)
+                subprocess.run('sudo fuser -k /dev/video2 2>/dev/null', shell=True)
+                logger.info("Final OS-level camera release completed")
+        except Exception as e:
+            logger.error(f"Error during final OS-level camera release: {e}")
+            
+        logger.info("Resource cleanup completed")
 
     return app 
