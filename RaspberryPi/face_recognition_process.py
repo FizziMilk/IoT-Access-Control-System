@@ -167,26 +167,26 @@ class WebRecognition:
 
 def setup_camera():
     """Initialize the camera and return the camera object"""
+    # Import the camera index from config
+    try:
+        from camera_config import CAMERA_INDEX
+    except ImportError:
+        CAMERA_INDEX = 0  # Default to 0 if import fails
+        
     # Try multiple camera indices
-    camera_indices = [0, 1, 2]  # Try these indices in order
+    camera_indices = [CAMERA_INDEX, 0, 1, 2]  # Try these indices in order
+    
+    # Make each index unique to avoid duplicates
+    camera_indices = list(dict.fromkeys(camera_indices))
     
     for idx in camera_indices:
         try:
             logger.info(f"Attempting to open camera at index {idx}")
             
-            # First check if camera is already in use by trying to release it
-            try:
-                temp_cam = cv2.VideoCapture(idx)
-                if temp_cam.isOpened():
-                    temp_cam.release()
-                    time.sleep(0.5)  # Give OS time to fully release resources
-            except Exception as e:
-                logger.warning(f"Error checking camera {idx} status: {e}")
-            
-            # Now try to open it for real
+            # Try to initialize camera
             camera = cv2.VideoCapture(idx)
             
-            # Give camera more time to initialize (increased from 0.3 to 1.0 seconds)
+            # Give camera more time to initialize
             time.sleep(1.0)
             
             # Check if camera opened successfully
@@ -207,6 +207,11 @@ def setup_camera():
                 return camera
             else:
                 logger.warning(f"Failed to open camera {idx}, trying next index")
+                # Make sure to release even if open failed
+                try:
+                    camera.release()
+                except:
+                    pass
         except Exception as e:
             logger.error(f"Error initializing camera at index {idx}: {str(e)}")
     
