@@ -17,6 +17,7 @@ import platform
 import copy
 import requests
 import face_recognition
+from recognition_state import recognition_state
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -96,8 +97,6 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
     
     # Add integrated video feed with face recognition
     camera = None
-    face_recognition_active = False
-    face_recognition_result = None
     camera_lock = threading.Lock()
     
     # Flag to track if cleanup is needed
@@ -446,13 +445,13 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
     @app.route('/face-recognition', methods=['GET'])
     def face_recognition():
         """Display the face recognition page"""
-        nonlocal camera, camera_needs_cleanup, face_recognition_active, face_recognition_result
+        nonlocal camera, camera_needs_cleanup
         
         logger.info("Face recognition page requested")
         
         # Reset recognition state
-        face_recognition_active = False
-        face_recognition_result = None
+        recognition_state.face_recognition_active = False
+        recognition_state.face_recognition_result = None
         
         # Set the cleanup flag since we're initializing camera resources
         camera_needs_cleanup = True
@@ -476,7 +475,7 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
         Video streaming route for face recognition.
         """
         def generate_frames():
-            nonlocal camera, camera_lock, face_recognition_active, camera_needs_cleanup
+            nonlocal camera, camera_lock
             
             # Initialize camera if needed, but don't set cleanup flag
             # as the video feed will manage its own resources
@@ -500,7 +499,7 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                     current_time = time.time()
                     
                     # If face recognition is active, don't try to use the camera
-                    if face_recognition_active:
+                    if recognition_state.face_recognition_active:
                         # Create a placeholder frame showing face recognition is in progress
                         frame = np.zeros((480, 640, 3), dtype=np.uint8)
                         cv2.putText(frame, "Face Recognition in Progress...", (50, 240), 
@@ -581,17 +580,17 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
     
     @app.route('/start-face-recognition', methods=['POST'])
     def start_face_recognition():
-        global camera, latest_frame, face_recognition_active, recognition_running, recognition_thread
-        
+        nonlocal camera
+
         # Don't start if already running
-        if recognition_running:
+        if recognition_state.recognition_running:
             return jsonify({
                 "status": "error",
                 "message": "Recognition process already running"
             })
         
-        recognition_running = True
-        face_recognition_active = True
+        recognition_state.recognition_running = True
+        recognition_state.face_recognition_active = True
         
         # Define how many frames to capture
         num_frames = 4  # Using 4 frames for better face encodings
@@ -609,12 +608,12 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                     time.sleep(0.5)  # Wait a bit before retrying
             
             # Start recognition in background thread
-            recognition_thread = threading.Thread(
+            recognition_state.recognition_thread = threading.Thread(
                 target=run_recognition_background, 
                 args=(frames,)
             )
-            recognition_thread.daemon = True
-            recognition_thread.start()
+            recognition_state.recognition_thread.daemon = True
+            recognition_state.recognition_thread.start()
             
             return jsonify({
                 "status": "success", 
@@ -622,8 +621,8 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
             })
         except Exception as e:
             logger.error(f"Error starting face recognition: {e}")
-            recognition_running = False
-            face_recognition_active = False
+            recognition_state.recognition_running = False
+            recognition_state.face_recognition_active = False
             return jsonify({
                 "status": "error",
                 "message": f"Error starting face recognition: {e}"
@@ -632,11 +631,10 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
     @app.route('/check-face-recognition-status')
     def check_face_recognition_status():
         """Check the status of face recognition process"""
-        nonlocal face_recognition_active, face_recognition_result
         
-        if face_recognition_result:
+        if recognition_state.face_recognition_result:
             # If we have a result, return it and clear for next time
-            result = face_recognition_result.copy()
+            result = recognition_state.face_recognition_result.copy()
             
             # Check if face was detected but not recognized, and passed liveness
             if (result.get("face_detected", False) and 
@@ -657,12 +655,12 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
             if "error" in result:
                 flask_session["error_message"] = result["error"]
             
-            face_recognition_result = None
-            face_recognition_active = False
+            recognition_state.face_recognition_result = None
+            recognition_state.face_recognition_active = False
             return jsonify(result)
         
         # If recognition is still active but no result yet
-        if face_recognition_active:
+        if recognition_state.face_recognition_active:
             return jsonify({
                 "status": "processing", 
                 "message": "Face recognition in progress..."
@@ -678,7 +676,7 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
     def process_face(face_id):
         """Process a detected face and check access rights"""
         try:
-            nonlocal face_recognition_result, camera_needs_cleanup
+            nonlocal camera_needs_cleanup
             
             if not face_id:
                 logger.warning("No face ID provided")
@@ -694,35 +692,35 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                 # Store in session for display in results
                 flask_session['debug_frame'] = debug_frame
             
-            if not face_recognition_result:
+            if not recognition_state.face_recognition_result:
                 logger.warning("No face recognition results available")
                 flash('No face recognition results available', 'error')
                 return redirect(url_for('face_recognition'))
             
             try:
                 # Check if face was detected
-                if not face_recognition_result.get('face_detected', False):
+                if not recognition_state.face_recognition_result.get('face_detected', False):
                     logger.warning("No face detected in result")
                     flash('No face was detected. Please try again.', 'error')
                     return redirect(url_for('face_recognition'))
                 
                 # Check if face encodings are available
-                if 'face_encodings' not in face_recognition_result or not face_recognition_result['face_encodings']:
+                if 'face_encodings' not in recognition_state.face_recognition_result or not recognition_state.face_recognition_result['face_encodings']:
                     logger.warning("No face encodings found in result")
                     flash('No face encodings available', 'error')
                     return redirect(url_for('face_recognition'))
                 
                 # Store all the collected encodings in the session
                 # We'll use these for registration if needed
-                face_encodings = face_recognition_result['face_encodings']
+                face_encodings = recognition_state.face_recognition_result['face_encodings']
                 flask_session['face_encodings'] = face_encodings
                 
                 # Also store the primary encoding
                 flask_session['face_encoding'] = face_encodings[0] if face_encodings else None
                 
                 # Check if the face was recognized
-                if face_recognition_result.get('face_recognized', False) and face_recognition_result.get('match'):
-                    match = face_recognition_result['match']
+                if recognition_state.face_recognition_result.get('face_recognized', False) and recognition_state.face_recognition_result.get('match'):
+                    match = recognition_state.face_recognition_result['match']
                     matched_phone = match.get('name')
                     confidence = match.get('confidence', 0)
                     
@@ -860,14 +858,14 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
         """
         Endpoint to force reset camera resources - useful when camera gets stuck
         """
-        nonlocal camera, camera_needs_cleanup, face_recognition_active, face_recognition_result
+        nonlocal camera, camera_needs_cleanup
         
         try:
             logger.info("Manually resetting camera resources")
             
             # Reset recognition state
-            face_recognition_active = False
-            face_recognition_result = None
+            recognition_state.face_recognition_active = False
+            recognition_state.face_recognition_result = None
             
             # Set cleanup flag
             camera_needs_cleanup = True
@@ -1069,382 +1067,381 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                 
         logger.info("Resource cleanup completed")
 
-    return app 
-
-def run_recognition_background(frames):
-    global recognition_running, face_recognition_active, face_recognition_result
-    
-    try:
-        # Set up debug directory for frame saving
-        debug_dir = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'static', 'debug_frames')
-        os.makedirs(debug_dir, exist_ok=True)
-        
-        # Import camera config values
-        from camera_config import MIN_FACE_WIDTH, MIN_FACE_HEIGHT
-        
-        # Timestamp for debugging
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        
-        # Import face recognition modules
-        from face_recognition_process import WebRecognition, load_known_faces, save_debug_frame
-        import face_recognition
-        import numpy as np
-        
-        # Initialize recognition system and load known faces
-        recognition = WebRecognition()
-        encodings, names = load_known_faces()
-        if encodings and names:
-            recognition.load_encodings(encodings, names)
-        else:
-            logger.warning("No face encodings loaded from backend")
-        
-        # Skip liveness check flag (for testing)
-        skip_liveness = False
-        
-        # Process each frame to find the best one for recognition
-        best_frame_index = -1
-        best_face_width = 0
-        best_face_height = 0
-        
-        # Find the best frame with the largest face
+    # Define the run_recognition_background function inside setup_routes
+    def run_recognition_background(frames):
         try:
-            for i, frame in enumerate(frames):
-                # Get face locations for this specific frame
-                face_locations = face_recognition.face_locations(frame, number_of_times_to_upsample=2)
-                
-                # Skip if no faces found in this frame
-                if not face_locations:
-                    continue
-                    
-                # Use the first (largest) face in the frame
-                face_location = face_locations[0]
-                
-                # Extract coordinates (top, right, bottom, left)
-                top, right, bottom, left = face_location
-                
-                # Calculate face dimensions
-                face_width = right - left
-                face_height = bottom - top
-                
-                # Handle potential array types
-                if isinstance(face_width, np.ndarray):
-                    face_width = float(face_width.item()) if face_width.size == 1 else float(face_width.mean())
-                if isinstance(face_height, np.ndarray):
-                    face_height = float(face_height.item()) if face_height.size == 1 else float(face_height.mean())
-                
-                # Compare as scalars - find the largest face
-                if float(face_width) > float(best_face_width) or float(face_height) > float(best_face_height):
-                    best_frame_index = i
-                    best_face_width = face_width
-                    best_face_height = face_height
-                    
-                logger.info(f"Frame {i}: Face dimensions {face_width}x{face_height}")
-        except Exception as e:
-            logger.error(f"Error finding best frame: {e}")
-            import traceback
-            logger.error(f"Best frame selection traceback: {traceback.format_exc()}")
-        
-        logger.info(f"Best frame index: {best_frame_index}")
-        logger.info(f"Best face dimensions: {best_face_width}x{best_face_height} pixels")
-        
-        # Check if we found any usable faces
-        if best_frame_index == -1:
-            logger.warning("No faces detected in any frame")
-            face_recognition_result = {
-                "success": False,
-                "face_detected": False,
-                "error": "No face detected"
-            }
-            recognition_running = False
-            face_recognition_active = False
-            return
-        
-        # Check if the face is too small for reliable recognition
-        if best_face_width < MIN_FACE_WIDTH or best_face_height < MIN_FACE_HEIGHT:
-            logger.warning(f"Face too small for reliable recognition: {best_face_width}x{best_face_height}")
-            result = {
-                "success": False,
-                "face_detected": True,
-                "face_recognized": False,
-                "face_too_small": True,
-                "error": "Face is too small for reliable recognition"
-            }
+            # Set up debug directory for frame saving
+            debug_dir = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'static', 'debug_frames')
+            os.makedirs(debug_dir, exist_ok=True)
             
-            # Add distance feedback
-            if best_face_width < MIN_FACE_WIDTH * 0.5 or best_face_height < MIN_FACE_HEIGHT * 0.5:
-                result["distance_feedback"] = "much_too_far"
+            # Import camera config values
+            from camera_config import MIN_FACE_WIDTH, MIN_FACE_HEIGHT
+            
+            # Timestamp for debugging
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            
+            # Import face recognition modules
+            from face_recognition_process import WebRecognition, load_known_faces, save_debug_frame
+            import face_recognition
+            import numpy as np
+            
+            # Initialize recognition system and load known faces
+            recognition = WebRecognition()
+            encodings, names = load_known_faces()
+            if encodings and names:
+                recognition.load_encodings(encodings, names)
             else:
-                result["distance_feedback"] = "too_far"
+                logger.warning("No face encodings loaded from backend")
             
-            # Save debug frame
-            frame_filename = f"{debug_dir}/frame_face_too_small_{timestamp}.jpg"
-            best_frame = frames[best_frame_index]
-            face_loc = face_recognition.face_locations(best_frame, number_of_times_to_upsample=2)[0]
-            cv2.rectangle(best_frame, (face_loc[3], face_loc[0]), 
-                          (face_loc[1], face_loc[2]), (0, 255, 255), 2)
-            cv2.putText(best_frame, "Face too small - Please move closer", 
-                        (face_loc[3], face_loc[0] - 10),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-            cv2.imwrite(frame_filename, best_frame)
+            # Skip liveness check flag (for testing)
+            skip_liveness = False
             
-            face_recognition_result = result
-            recognition_running = False
-            face_recognition_active = False
-            return
-        
-        # Get the best frame and face location
-        best_frame = frames[best_frame_index]
-        all_face_locations = face_recognition.face_locations(best_frame, number_of_times_to_upsample=2)
-        best_face_location = all_face_locations[0] if all_face_locations else None
-        
-        # Extract face encoding from the best frame
-        face_encodings = []
-        if best_face_location:
-            best_face_encoding = face_recognition.face_encodings(best_frame, [best_face_location])
-            if best_face_encoding:
-                face_encodings.append(best_face_encoding[0])
-        
-        # Helper function to sanitize values from arrays
-        def sanitize_value(value):
-            if isinstance(value, np.ndarray):
-                if value.size == 1:
-                    return value.item()
-                else:
-                    return float(value.mean())
-            return value
-        
-        # Perform liveness check on ONLY 2 frames for speed
-        liveness_results = []
-        frame_liveness_results = []
-        
-        try:
-            if not skip_liveness:
-                logger.info("Performing liveness detection on 2 of 4 frames")
-                
-                # Select only 2 frames for liveness - first and last for maximum time difference
-                liveness_frames = [frames[0], frames[-1]]
-                frame_indices = [0, len(frames)-1]
-                
-                # Process the selected frames
-                for idx, i in enumerate(frame_indices):
-                    frame = frames[i]
-                    try:
-                        if frame is not None:
-                            face_locs = face_recognition.face_locations(frame, number_of_times_to_upsample=2)
-                            if face_locs:
-                                face_loc = face_locs[0]
-                                # Check liveness for this frame
-                                try:
-                                    liveness_result = recognition.liveness_detector.check_face_liveness(frame, face_loc)
-                                    logger.info(f"Frame {i+1} liveness result: {liveness_result}")
-                                    
-                                    # Ensure is_live is a scalar boolean
-                                    is_live = liveness_result.get("is_live", False)
-                                    if isinstance(is_live, np.ndarray):
-                                        is_live = is_live.any()  # Use .any() explicitly for array evaluation
-                                    
-                                    # Store the result with scalar values
-                                    frame_liveness_results.append({
-                                        "frame_index": i,
-                                        "is_live": bool(is_live),
-                                        "confidence": float(sanitize_value(liveness_result.get("confidence", 0))),
-                                        "texture_score": float(sanitize_value(liveness_result.get("texture_score", 0)))
-                                    })
-                                    
-                                    # For debug frame visualization
-                                    liveness_results.append({
-                                        "is_live": bool(is_live),
-                                        "confidence": float(sanitize_value(liveness_result.get("confidence", 0))),
-                                        "texture_score": float(sanitize_value(liveness_result.get("texture_score", 0)))
-                                    })
-                                except Exception as e:
-                                    logger.error(f"Error in liveness detection for frame {i+1}: {e}")
-                                    import traceback
-                                    logger.error(f"Liveness detection traceback: {traceback.format_exc()}")
-                    except Exception as e:
-                        logger.error(f"Error processing frame {i+1}: {e}")
-                        logger.error(f"Frame processing traceback: {traceback.format_exc()}")
-                
-                # Determine overall liveness using a voting system
-                live_votes = sum(1 for result in frame_liveness_results if bool(result.get("is_live", False)))
-                total_votes = len(frame_liveness_results)
-                
-                logger.info(f"Liveness votes: {live_votes}/{total_votes}")
-                
-                # Calculate average confidence
-                avg_confidence = 0
-                if total_votes > 0:
-                    confidence_sum = 0
-                    for result in frame_liveness_results:
-                        confidence = sanitize_value(result.get("confidence", 0))
-                        confidence_sum += confidence
-                    avg_confidence = confidence_sum / total_votes
-                
-                # Need majority of frames to show liveness
-                is_live = (live_votes > total_votes / 2) if total_votes > 0 else False
-                
-                logger.info(f"Overall liveness result: {live_votes}/{total_votes} frames live, avg confidence {avg_confidence:.2f}")
-                
-                # Create combined liveness result
-                combined_liveness_result = {
-                    "is_live": bool(is_live),
-                    "confidence": float(avg_confidence),
-                    "live_frame_count": int(live_votes),
-                    "total_frame_count": int(total_votes),
-                    "frame_results": frame_liveness_results
-                }
-            else:
-                logger.info("Skipping liveness detection")
-                # Create a dummy result for skipped liveness
-                combined_liveness_result = {
-                    "is_live": True,
-                    "confidence": 1.0,
-                    "skipped": True,
-                    "live_frame_count": 1,  # Count all faces as live
-                    "total_frame_count": 1
-                }
-        except Exception as e:
-            logger.error(f"Error in liveness check processing: {e}")
-            import traceback
-            logger.error(f"Liveness processing traceback: {traceback.format_exc()}")
-            # Provide a fallback liveness result
-            combined_liveness_result = {
-                "is_live": True,  # Default to True to avoid blocking recognition
-                "confidence": 0.5,
-                "error": str(e),
-                "skipped": True
-            }
-        
-        # Process all 4 frames for face encodings to get better recognition
-        # Extract face encodings from all frames where a face is detected
-        all_face_encodings = []
-        for i, frame in enumerate(frames):
+            # Process each frame to find the best one for recognition
+            best_frame_index = -1
+            best_face_width = 0
+            best_face_height = 0
+            
+            # Find the best frame with the largest face
             try:
-                frame_face_locations = face_recognition.face_locations(frame, number_of_times_to_upsample=2)
-                if frame_face_locations:
-                    frame_face_encodings = face_recognition.face_encodings(frame, [frame_face_locations[0]])
-                    if frame_face_encodings:
-                        all_face_encodings.append(frame_face_encodings[0])
-                        logger.info(f"Added face encoding from frame {i+1}")
-            except Exception as e:
-                logger.error(f"Error extracting face encoding from frame {i+1}: {e}")
-        
-        # Use all encodings for improved recognition accuracy
-        match_results = []
-        for face_encoding in all_face_encodings:
-            try:
-                match_result = recognition.identify_face(face_encoding=face_encoding)
-                
-                # Ensure all values in match are scalars
-                if match_result and match_result.get("match"):
-                    match_data = match_result["match"]
-                    scalar_match = {
-                        "name": str(match_data.get("name", "")),
-                        "confidence": float(sanitize_value(match_data.get("confidence", 0))),
-                        "distance": float(sanitize_value(match_data.get("distance", 1.0)))
-                    }
+                for i, frame in enumerate(frames):
+                    # Get face locations for this specific frame
+                    face_locations = face_recognition.face_locations(frame, number_of_times_to_upsample=2)
                     
-                    # Add other fields if present
-                    if "best_single_confidence" in match_data:
-                        scalar_match["best_single_confidence"] = float(sanitize_value(match_data.get("best_single_confidence", 0)))
-                    if "num_encodings" in match_data:
-                        scalar_match["num_encodings"] = int(match_data.get("num_encodings", 1))
+                    # Skip if no faces found in this frame
+                    if not face_locations:
+                        continue
                         
-                    match_result["match"] = scalar_match
+                    # Use the first (largest) face in the frame
+                    face_location = face_locations[0]
                     
-                match_results.append(match_result)
+                    # Extract coordinates (top, right, bottom, left)
+                    top, right, bottom, left = face_location
+                    
+                    # Calculate face dimensions
+                    face_width = right - left
+                    face_height = bottom - top
+                    
+                    # Handle potential array types
+                    if isinstance(face_width, np.ndarray):
+                        face_width = float(face_width.item()) if face_width.size == 1 else float(face_width.mean())
+                    if isinstance(face_height, np.ndarray):
+                        face_height = float(face_height.item()) if face_height.size == 1 else float(face_height.mean())
+                    
+                    # Compare as scalars - find the largest face
+                    if float(face_width) > float(best_face_width) or float(face_height) > float(best_face_height):
+                        best_frame_index = i
+                        best_face_width = face_width
+                        best_face_height = face_height
+                        
+                    logger.info(f"Frame {i}: Face dimensions {face_width}x{face_height}")
             except Exception as e:
-                logger.error(f"Error during face identification: {e}")
-                match_results.append(None)
-        
-        # Find the best match
-        best_match = None
-        best_confidence = 0
-        for match in match_results:
-            # Make sure we're dealing with scalar values when comparing
-            if match and match.get("match"):
-                confidence = match["match"].get("confidence", 0)
-                # Ensure confidence is a scalar value
-                if isinstance(confidence, np.ndarray):
-                    if confidence.size == 1:
-                        confidence = float(confidence.item())
+                logger.error(f"Error finding best frame: {e}")
+                import traceback
+                logger.error(f"Best frame selection traceback: {traceback.format_exc()}")
+            
+            logger.info(f"Best frame index: {best_frame_index}")
+            logger.info(f"Best face dimensions: {best_face_width}x{best_face_height} pixels")
+            
+            # Check if we found any usable faces
+            if best_frame_index == -1:
+                logger.warning("No faces detected in any frame")
+                recognition_state.face_recognition_result = {
+                    "success": False,
+                    "face_detected": False,
+                    "error": "No face detected"
+                }
+                recognition_state.recognition_running = False
+                recognition_state.face_recognition_active = False
+                return
+            
+            # Check if the face is too small for reliable recognition
+            if best_face_width < MIN_FACE_WIDTH or best_face_height < MIN_FACE_HEIGHT:
+                logger.warning(f"Face too small for reliable recognition: {best_face_width}x{best_face_height}")
+                result = {
+                    "success": False,
+                    "face_detected": True,
+                    "face_recognized": False,
+                    "face_too_small": True,
+                    "error": "Face is too small for reliable recognition"
+                }
+                
+                # Add distance feedback
+                if best_face_width < MIN_FACE_WIDTH * 0.5 or best_face_height < MIN_FACE_HEIGHT * 0.5:
+                    result["distance_feedback"] = "much_too_far"
+                else:
+                    result["distance_feedback"] = "too_far"
+                
+                # Save debug frame
+                frame_filename = f"{debug_dir}/frame_face_too_small_{timestamp}.jpg"
+                best_frame = frames[best_frame_index]
+                face_loc = face_recognition.face_locations(best_frame, number_of_times_to_upsample=2)[0]
+                cv2.rectangle(best_frame, (face_loc[3], face_loc[0]), 
+                              (face_loc[1], face_loc[2]), (0, 255, 255), 2)
+                cv2.putText(best_frame, "Face too small - Please move closer", 
+                            (face_loc[3], face_loc[0] - 10),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                cv2.imwrite(frame_filename, best_frame)
+                
+                recognition_state.face_recognition_result = result
+                recognition_state.recognition_running = False
+                recognition_state.face_recognition_active = False
+                return
+            
+            # Get the best frame and face location
+            best_frame = frames[best_frame_index]
+            all_face_locations = face_recognition.face_locations(best_frame, number_of_times_to_upsample=2)
+            best_face_location = all_face_locations[0] if all_face_locations else None
+            
+            # Extract face encoding from the best frame
+            face_encodings = []
+            if best_face_location:
+                best_face_encoding = face_recognition.face_encodings(best_frame, [best_face_location])
+                if best_face_encoding:
+                    face_encodings.append(best_face_encoding[0])
+            
+            # Helper function to sanitize values from arrays
+            def sanitize_value(value):
+                if isinstance(value, np.ndarray):
+                    if value.size == 1:
+                        return value.item()
                     else:
-                        confidence = float(confidence.mean())
-                # Now compare with scalar values
-                if confidence > best_confidence:
-                    best_match = match
-                    best_confidence = confidence
-        
-        # Save final debug frame
-        faces = [best_face_location] if best_face_location else []
-        
-        # Create a properly serialized match object for visualization
-        match_for_visualization = None
-        if best_match and best_match.get("match"):
-            # Create a copy of the match with scalar values
-            match_data = best_match["match"]
-            match_for_visualization = {
-                "name": str(match_data.get("name", "")),
-                "confidence": float(match_data.get("confidence", 0)),
-                "distance": float(match_data.get("distance", 0))
+                        return float(value.mean())
+                return value
+            
+            # Perform liveness check on ONLY 2 frames for speed
+            liveness_results = []
+            frame_liveness_results = []
+            
+            try:
+                if not skip_liveness:
+                    logger.info("Performing liveness detection on 2 of 4 frames")
+                    
+                    # Select only 2 frames for liveness - first and last for maximum time difference
+                    liveness_frames = [frames[0], frames[-1]]
+                    frame_indices = [0, len(frames)-1]
+                    
+                    # Process the selected frames
+                    for idx, i in enumerate(frame_indices):
+                        frame = frames[i]
+                        try:
+                            if frame is not None:
+                                face_locs = face_recognition.face_locations(frame, number_of_times_to_upsample=2)
+                                if face_locs:
+                                    face_loc = face_locs[0]
+                                    # Check liveness for this frame
+                                    try:
+                                        liveness_result = recognition.liveness_detector.check_face_liveness(frame, face_loc)
+                                        logger.info(f"Frame {i+1} liveness result: {liveness_result}")
+                                        
+                                        # Ensure is_live is a scalar boolean
+                                        is_live = liveness_result.get("is_live", False)
+                                        if isinstance(is_live, np.ndarray):
+                                            is_live = is_live.any()  # Use .any() explicitly for array evaluation
+                                        
+                                        # Store the result with scalar values
+                                        frame_liveness_results.append({
+                                            "frame_index": i,
+                                            "is_live": bool(is_live),
+                                            "confidence": float(sanitize_value(liveness_result.get("confidence", 0))),
+                                            "texture_score": float(sanitize_value(liveness_result.get("texture_score", 0)))
+                                        })
+                                        
+                                        # For debug frame visualization
+                                        liveness_results.append({
+                                            "is_live": bool(is_live),
+                                            "confidence": float(sanitize_value(liveness_result.get("confidence", 0))),
+                                            "texture_score": float(sanitize_value(liveness_result.get("texture_score", 0)))
+                                        })
+                                    except Exception as e:
+                                        logger.error(f"Error in liveness detection for frame {i+1}: {e}")
+                                        import traceback
+                                        logger.error(f"Liveness detection traceback: {traceback.format_exc()}")
+                        except Exception as e:
+                            logger.error(f"Error processing frame {i+1}: {e}")
+                            logger.error(f"Frame processing traceback: {traceback.format_exc()}")
+                    
+                    # Determine overall liveness using a voting system
+                    live_votes = sum(1 for result in frame_liveness_results if bool(result.get("is_live", False)))
+                    total_votes = len(frame_liveness_results)
+                    
+                    logger.info(f"Liveness votes: {live_votes}/{total_votes}")
+                    
+                    # Calculate average confidence
+                    avg_confidence = 0
+                    if total_votes > 0:
+                        confidence_sum = 0
+                        for result in frame_liveness_results:
+                            confidence = sanitize_value(result.get("confidence", 0))
+                            confidence_sum += confidence
+                        avg_confidence = confidence_sum / total_votes
+                    
+                    # Need majority of frames to show liveness
+                    is_live = (live_votes > total_votes / 2) if total_votes > 0 else False
+                    
+                    logger.info(f"Overall liveness result: {live_votes}/{total_votes} frames live, avg confidence {avg_confidence:.2f}")
+                    
+                    # Create combined liveness result
+                    combined_liveness_result = {
+                        "is_live": bool(is_live),
+                        "confidence": float(avg_confidence),
+                        "live_frame_count": int(live_votes),
+                        "total_frame_count": int(total_votes),
+                        "frame_results": frame_liveness_results
+                    }
+                else:
+                    logger.info("Skipping liveness detection")
+                    # Create a dummy result for skipped liveness
+                    combined_liveness_result = {
+                        "is_live": True,
+                        "confidence": 1.0,
+                        "skipped": True,
+                        "live_frame_count": 1,  # Count all faces as live
+                        "total_frame_count": 1
+                    }
+            except Exception as e:
+                logger.error(f"Error in liveness check processing: {e}")
+                import traceback
+                logger.error(f"Liveness processing traceback: {traceback.format_exc()}")
+                # Provide a fallback liveness result
+                combined_liveness_result = {
+                    "is_live": True,  # Default to True to avoid blocking recognition
+                    "confidence": 0.5,
+                    "error": str(e),
+                    "skipped": True
+                }
+            
+            # Process all 4 frames for face encodings to get better recognition
+            # Extract face encodings from all frames where a face is detected
+            all_face_encodings = []
+            for i, frame in enumerate(frames):
+                try:
+                    frame_face_locations = face_recognition.face_locations(frame, number_of_times_to_upsample=2)
+                    if frame_face_locations:
+                        frame_face_encodings = face_recognition.face_encodings(frame, [frame_face_locations[0]])
+                        if frame_face_encodings:
+                            all_face_encodings.append(frame_face_encodings[0])
+                            logger.info(f"Added face encoding from frame {i+1}")
+                except Exception as e:
+                    logger.error(f"Error extracting face encoding from frame {i+1}: {e}")
+            
+            # Use all encodings for improved recognition accuracy
+            match_results = []
+            for face_encoding in all_face_encodings:
+                try:
+                    match_result = recognition.identify_face(face_encoding=face_encoding)
+                    
+                    # Ensure all values in match are scalars
+                    if match_result and match_result.get("match"):
+                        match_data = match_result["match"]
+                        scalar_match = {
+                            "name": str(match_data.get("name", "")),
+                            "confidence": float(sanitize_value(match_data.get("confidence", 0))),
+                            "distance": float(sanitize_value(match_data.get("distance", 1.0)))
+                        }
+                        
+                        # Add other fields if present
+                        if "best_single_confidence" in match_data:
+                            scalar_match["best_single_confidence"] = float(sanitize_value(match_data.get("best_single_confidence", 0)))
+                        if "num_encodings" in match_data:
+                            scalar_match["num_encodings"] = int(match_data.get("num_encodings", 1))
+                            
+                        match_result["match"] = scalar_match
+                        
+                    match_results.append(match_result)
+                except Exception as e:
+                    logger.error(f"Error during face identification: {e}")
+                    match_results.append(None)
+            
+            # Find the best match
+            best_match = None
+            best_confidence = 0
+            for match in match_results:
+                # Make sure we're dealing with scalar values when comparing
+                if match and match.get("match"):
+                    confidence = match["match"].get("confidence", 0)
+                    # Ensure confidence is a scalar value
+                    if isinstance(confidence, np.ndarray):
+                        if confidence.size == 1:
+                            confidence = float(confidence.item())
+                        else:
+                            confidence = float(confidence.mean())
+                    # Now compare with scalar values
+                    if confidence > best_confidence:
+                        best_match = match
+                        best_confidence = confidence
+            
+            # Save final debug frame
+            faces = [best_face_location] if best_face_location else []
+            
+            # Create a properly serialized match object for visualization
+            match_for_visualization = None
+            if best_match and best_match.get("match"):
+                # Create a copy of the match with scalar values
+                match_data = best_match["match"]
+                match_for_visualization = {
+                    "name": str(match_data.get("name", "")),
+                    "confidence": float(match_data.get("confidence", 0)),
+                    "distance": float(match_data.get("distance", 0))
+                }
+                
+            matches = [{"match": match_for_visualization}] if match_for_visualization else []
+            frame_filename = f"{debug_dir}/frame_final_{timestamp}.jpg"
+            
+            # Ensure liveness result is properly serialized for visualization
+            visualization_liveness = None
+            if liveness_results and len(liveness_results) > 0:
+                liveness_result = liveness_results[0]
+                # Create a serialized copy with scalar values
+                visualization_liveness = {
+                    "is_live": bool(liveness_result.get("is_live", False)),
+                    "confidence": float(liveness_result.get("confidence", 0)),
+                    "texture_score": float(liveness_result.get("texture_score", 0))
+                }
+            else:
+                # Use combined result if available
+                visualization_liveness = {
+                    "is_live": bool(combined_liveness_result.get("is_live", False)),
+                    "confidence": float(combined_liveness_result.get("confidence", 0))
+                }
+            
+            save_debug_frame(best_frame, frame_filename, 
+                            faces=faces, 
+                            liveness_results=[visualization_liveness] if visualization_liveness else None,
+                            matches=matches)
+            
+            # Prepare final result
+            result = {
+                "success": True,
+                "face_detected": True,
+                "face_recognized": best_match is not None,
+                "liveness_check_passed": combined_liveness_result.get("is_live", False),
+                "face_too_small": False,
+                "face_encodings": [encoding.tolist() for encoding in all_face_encodings],
+                "face_locations": [best_face_location] if best_face_location else [],
+                "debug_frame": os.path.basename(frame_filename)
             }
             
-        matches = [{"match": match_for_visualization}] if match_for_visualization else []
-        frame_filename = f"{debug_dir}/frame_final_{timestamp}.jpg"
-        
-        # Ensure liveness result is properly serialized for visualization
-        visualization_liveness = None
-        if liveness_results and len(liveness_results) > 0:
-            liveness_result = liveness_results[0]
-            # Create a serialized copy with scalar values
-            visualization_liveness = {
-                "is_live": bool(liveness_result.get("is_live", False)),
-                "confidence": float(liveness_result.get("confidence", 0)),
-                "texture_score": float(liveness_result.get("texture_score", 0))
+            # Add match information if found
+            if best_match and best_match.get("match"):
+                result["match"] = best_match["match"]
+            
+            # Add liveness results
+            result["is_live"] = combined_liveness_result.get("is_live", False)
+            result["liveness_results"] = combined_liveness_result
+            
+            # Store the result
+            recognition_state.face_recognition_result = result
+            
+        except Exception as e:
+            logger.error(f"Error during face recognition: {e}")
+            import traceback
+            logger.error(f"Face recognition traceback: {traceback.format_exc()}")
+            recognition_state.face_recognition_result = {
+                "success": False,
+                "error": str(e)
             }
-        else:
-            # Use combined result if available
-            visualization_liveness = {
-                "is_live": bool(combined_liveness_result.get("is_live", False)),
-                "confidence": float(combined_liveness_result.get("confidence", 0))
-            }
         
-        save_debug_frame(best_frame, frame_filename, 
-                        faces=faces, 
-                        liveness_results=[visualization_liveness] if visualization_liveness else None,
-                        matches=matches)
-        
-        # Prepare final result
-        result = {
-            "success": True,
-            "face_detected": True,
-            "face_recognized": best_match is not None,
-            "liveness_check_passed": combined_liveness_result.get("is_live", False),
-            "face_too_small": False,
-            "face_encodings": [encoding.tolist() for encoding in all_face_encodings],
-            "face_locations": [best_face_location] if best_face_location else [],
-            "debug_frame": os.path.basename(frame_filename)
-        }
-        
-        # Add match information if found
-        if best_match and best_match.get("match"):
-            result["match"] = best_match["match"]
-        
-        # Add liveness results
-        result["is_live"] = combined_liveness_result.get("is_live", False)
-        result["liveness_results"] = combined_liveness_result
-        
-        # Store the result
-        face_recognition_result = result
-        
-    except Exception as e:
-        logger.error(f"Error during face recognition: {e}")
-        import traceback
-        logger.error(f"Face recognition traceback: {traceback.format_exc()}")
-        face_recognition_result = {
-            "success": False,
-            "error": str(e)
-        }
-    
-    recognition_running = False
-    face_recognition_active = False 
+        recognition_state.recognition_running = False
+        recognition_state.face_recognition_active = False 
+
+    return app 
