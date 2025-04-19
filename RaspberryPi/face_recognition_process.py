@@ -408,7 +408,16 @@ def save_debug_frame(frame, filename, faces=None, liveness_results=None, matches
             is_live = "?"
             if liveness_results and i < len(liveness_results):
                 result = liveness_results[i]
-                if result.get("is_live", False):
+                # Handle is_live which might be a NumPy array
+                is_live_value = result.get("is_live", False)
+                if isinstance(is_live_value, np.ndarray):
+                    # Convert NumPy array to scalar boolean 
+                    if is_live_value.size == 1:
+                        is_live_value = bool(is_live_value.item())
+                    else:
+                        is_live_value = bool(is_live_value.any())  # Consider live if any element is True
+                        
+                if is_live_value:
                     is_live = "Live"
                 else:
                     is_live = "Not Live"

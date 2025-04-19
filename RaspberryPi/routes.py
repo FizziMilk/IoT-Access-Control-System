@@ -868,11 +868,37 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                 
                 # Save final debug frame
                 faces = [best_face_location] if best_face_location else []
-                matches = [{"match": best_match["match"] if best_match else None}] if faces else []
+                
+                # Create a properly serialized match object for visualization
+                match_for_visualization = None
+                if best_match and best_match.get("match"):
+                    # Create a copy of the match with scalar values
+                    match_data = best_match["match"]
+                    match_for_visualization = {
+                        "name": str(match_data.get("name", "")),
+                        "confidence": float(match_data.get("confidence", 0)),
+                        "distance": float(match_data.get("distance", 0))
+                    }
+                    
+                matches = [{"match": match_for_visualization}] if faces else []
                 frame_filename = f"{debug_dir}/frame_final_{timestamp}.jpg"
                 
-                # Use the first liveness result for visualization, but the combined result for decision
-                visualization_liveness = liveness_results[0] if liveness_results else combined_liveness_result
+                # Ensure liveness result is properly serialized for visualization
+                visualization_liveness = None
+                if liveness_results and len(liveness_results) > 0:
+                    liveness_result = liveness_results[0]
+                    # Create a serialized copy with scalar values
+                    visualization_liveness = {
+                        "is_live": bool(liveness_result.get("is_live", False)),
+                        "confidence": float(liveness_result.get("confidence", 0)),
+                        "texture_score": float(liveness_result.get("texture_score", 0))
+                    }
+                else:
+                    # Use combined result if available
+                    visualization_liveness = {
+                        "is_live": bool(combined_liveness_result.get("is_live", False)),
+                        "confidence": float(combined_liveness_result.get("confidence", 0))
+                    }
                 
                 save_debug_frame(best_frame, frame_filename, 
                                faces=faces, 
