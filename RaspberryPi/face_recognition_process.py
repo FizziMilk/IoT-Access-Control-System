@@ -13,7 +13,6 @@ import face_recognition
 import base64
 import requests
 from datetime import datetime
-import pickle
 
 # Configure logging
 logging.basicConfig(
@@ -122,294 +121,230 @@ class LivenessDetector:
 
 
 class WebRecognition:
-    """
-    Face recognition handler for web applications.
-    """
+    """Face recognition system for web applications"""
     
     def __init__(self, backend_url=None):
-        """
-        Initialize the recognition system.
-        
-        Args:
-            backend_url: URL of the backend API for retrieving known faces
-        """
-        self.backend_url = backend_url
+        """Initialize the recognition system"""
+        logger.info("Initializing WebRecognition")
         self.known_face_encodings = []
         self.known_face_names = []
+        self.detection_threshold = 0.6  # Lower values are more strict
         self.liveness_detector = LivenessDetector()
-        self.load_encodings()
+        self.backend_url = backend_url
         
-    def load_encodings(self):
-        """
-        Load face encodings and names.
+    def load_encodings(self, encodings, names):
+        """Load face encodings and corresponding names"""
+        if len(encodings) != len(names):
+            logger.error(f"Mismatch between encodings ({len(encodings)}) and names ({len(names)})")
+            return False
+            
+        # Convert all encodings to numpy arrays
+        self.known_face_encodings = [np.array(e) if isinstance(e, list) else e for e in encodings]
+        self.known_face_names = names
+        logger.info(f"Loaded {len(encodings)} encodings with names")
+        return True
         
-        Raises:
-            Exception: If there is a mismatch in the lengths of encodings and names
+    def identify_face(self, frame=None, face_encoding=None, face_location=None):
         """
-        try:
-            # Try to load from the backend first
-            if self.backend_url:
-                self.load_known_faces()
-            
-            # If no encoding from the backend, try to load from file
-            if not self.known_face_encodings:
-                # Check if the pickle file exists
-                if os.path.exists("known_face_encodings.pkl") and os.path.exists("known_face_names.pkl"):
-                    logging.info("Loading face encodings from local files")
-                    with open("known_face_encodings.pkl", "rb") as f:
-                        self.known_face_encodings = pickle.load(f)
-                    with open("known_face_names.pkl", "rb") as f:
-                        self.known_face_names = pickle.load(f)
-            
-            # Ensure all encodings are numpy arrays
-            self.known_face_encodings = [np.array(encoding) if not isinstance(encoding, np.ndarray) else encoding 
-                                        for encoding in self.known_face_encodings]
-            
-            # Verify that the number of encodings and names match
-            if len(self.known_face_encodings) != len(self.known_face_names):
-                raise Exception(f"Mismatch in encodings and names: {len(self.known_face_encodings)} encodings, {len(self.known_face_names)} names")
-                
-            logging.info(f"Loaded {len(self.known_face_encodings)} face encodings")
-            
-        except Exception as e:
-            logging.error(f"Error loading encodings: {str(e)}")
-            # Initialize empty lists if loading fails
-            self.known_face_encodings = []
-            self.known_face_names = []
-            
-    def identify_face(self, frame=None, face_location=None, face_encoding=None):
+        Identify a face in the provided frame or using a provided encoding.
+        Returns a match object with name, distance, and confidence.
         """
-        Identify a face using either a provided frame or encoding.
+        logger.info(f"Attempting to identify face with {len(self.known_face_encodings)} known faces")
         
-        Args:
-            frame: Optional image frame containing a face
-            face_location: Optional location of face in the frame
-            face_encoding: Optional pre-computed face encoding
+        # If we don't have any known faces to compare against, return no match
+        if len(self.known_face_encodings) == 0:
+            logger.warning("No known faces to compare against")
+            return {"match": None, "distance": 1.0, "confidence": 0}
+        
+        if face_encoding is None and frame is not None:
+            # Detect faces if location not provided
+            if face_location is None:
+                face_locations = face_recognition.face_locations(frame)
+                if not face_locations:
+                    logger.warning("No faces detected during identification")
+                    return {"match": None, "distance": 1.0, "confidence": 0}
+                face_location = face_locations[0]  # Use the first face
             
-        Returns:
-            Dictionary with name and confidence of the match, or None if no match
-        """
-        # Ensure we have a face encoding to work with
-        if face_encoding is None and frame is not None and face_location is not None:
-            face_encoding = face_recognition.face_encodings(frame, [face_location])[0]
-        elif face_encoding is None:
-            logging.error("Cannot identify face: need either face_encoding or both frame and face_location")
-            return None
-            
-        # Convert face_encoding to numpy array if it's not already
+            # Get face encoding
+            face_encoding = face_recognition.face_encodings(frame, [face_location])
+            if not face_encoding:
+                logger.warning("Failed to extract face encoding")
+                return {"match": None, "distance": 1.0, "confidence": 0}
+            face_encoding = face_encoding[0]
+        
+        # Ensure face_encoding is a numpy array
         if not isinstance(face_encoding, np.ndarray):
-            face_encoding = np.array(face_encoding)
-            
-        # Check if we have any known face encodings to compare against
-        if not self.known_face_encodings:
-            logging.warning("No known face encodings available for comparison")
-            return None
-            
+            try:
+                face_encoding = np.array(face_encoding)
+                logger.debug("Converted face encoding to numpy array")
+            except Exception as e:
+                logger.error(f"Failed to convert face encoding to numpy array: {e}")
+                return {"match": None, "distance": 1.0, "confidence": 0}
+                
+        # Calculate face distance to all known faces
         try:
-            # Calculate face distances
+            # Verify all known face encodings are numpy arrays
+            self.known_face_encodings = [
+                np.array(encoding) if not isinstance(encoding, np.ndarray) else encoding
+                for encoding in self.known_face_encodings
+            ]
+            
             face_distances = face_recognition.face_distance(self.known_face_encodings, face_encoding)
+            logger.debug(f"Face distances: {face_distances}")
             
-            # Find the index of the closest match
-            best_match_index = np.argmin(face_distances)
-            best_match_distance = face_distances[best_match_index]
-            
-            # Convert distance to confidence (0-1 scale, higher is better)
-            # Using formula: confidence = 1 - min(1, face_distance / 0.6)
-            confidence = max(0, min(1, 1 - (best_match_distance / 0.6)))
-            
-            # Only consider it a match if confidence is above threshold
-            if confidence >= 0.5:  # 50% confidence threshold
-                return {
-                    "name": self.known_face_names[best_match_index],
-                    "confidence": float(confidence),  # Convert numpy float to Python float for JSON serialization
-                    "distance": float(best_match_distance)
-                }
+            # Find the best match (lowest distance)
+            if len(face_distances) > 0:
+                best_match_index = np.argmin(face_distances)
+                best_match_distance = face_distances[best_match_index]
+                
+                # Convert distance to confidence (0-100)
+                # The lower the distance, the higher the confidence
+                confidence = (1 - best_match_distance) * 100
+                
+                # Check if the match is good enough (threshold)
+                # A lower distance means a better match
+                if best_match_distance < 0.6:  # Threshold for good match
+                    match = {
+                        "name": self.known_face_names[best_match_index],
+                        "distance": float(best_match_distance),
+                        "confidence": float(confidence)
+                    }
+                    logger.info(f"Face identified as {match['name']} with confidence {confidence:.2f}%")
+                    return {"match": match, "distance": float(best_match_distance), "confidence": float(confidence)}
+                else:
+                    logger.info(f"Face not recognized (best distance: {best_match_distance:.4f}, threshold: 0.6)")
+                    return {"match": None, "distance": float(best_match_distance), "confidence": float(confidence)}
             else:
-                logging.info(f"Best match below threshold: {self.known_face_names[best_match_index]} with confidence {confidence:.2f}")
-                return {
-                    "name": "Unknown",
-                    "confidence": 0.0,
-                    "distance": float(best_match_distance)
-                }
+                logger.warning("No face distances computed")
+                return {"match": None, "distance": 1.0, "confidence": 0}
                 
         except Exception as e:
-            logging.error(f"Error identifying face: {str(e)}")
-            return {
-                "name": "Unknown",
-                "confidence": 0.0,
-                "distance": 1.0
-            }
-            
-    def check_liveness(self, frame, face_location):
-        """
-        Check if a detected face is live.
-        
-        Args:
-            frame: Image frame containing a face
-            face_location: Location of face in the frame as (top, right, bottom, left)
-            
-        Returns:
-            Boolean indicating whether the face is live
-        """
-        return self.liveness_detector.check_liveness(frame, face_location)
+            logger.error(f"Error during face identification: {e}")
+            return {"match": None, "distance": 1.0, "confidence": 0}
     
-    def load_known_faces(self):
-        """
-        Load known face encodings from a backend API.
+    def check_liveness(self, frame, face_location=None):
+        """Check if a face is live"""
+        # If no face location provided, get the whole frame
+        if face_location is None:
+            return self.liveness_detector.check_liveness(frame)
         
-        Returns:
-            Boolean indicating success or failure
-        """
-        if not self.backend_url:
-            logging.warning("No backend URL provided for loading known faces")
-            return False
-            
-        try:
-            # Construct the endpoint URL for face encodings
-            url = f"{self.backend_url.rstrip('/')}/api/face-encodings"
-            logging.info(f"Fetching face encodings from: {url}")
-            
-            # Make the request
-            response = requests.get(url, timeout=10)
-            
-            # Check if the request was successful
-            if response.status_code != 200:
-                logging.error(f"Failed to fetch face encodings: HTTP {response.status_code}")
-                return False
-                
-            # Parse the response data
-            data = response.json()
-            
-            if not data or not isinstance(data, list):
-                logging.error(f"Invalid response data: {data}")
-                return False
-                
-            # Clear existing encodings
-            self.known_face_encodings = []
-            self.known_face_names = []
-            
-            # Process each encoding
-            for item in data:
-                if not isinstance(item, dict) or "encoding" not in item or "name" not in item:
-                    logging.warning(f"Skipping invalid encoding entry: {item}")
-                    continue
-                    
-                # Convert encoding to numpy array
-                try:
-                    encoding = np.array(item["encoding"])
-                    name = item["name"]
-                    
-                    self.known_face_encodings.append(encoding)
-                    self.known_face_names.append(name)
-                except Exception as e:
-                    logging.warning(f"Error processing encoding for {item.get('name')}: {str(e)}")
-                    
-            logging.info(f"Loaded {len(self.known_face_encodings)} face encodings from backend")
-            return len(self.known_face_encodings) > 0
-            
-        except requests.exceptions.RequestException as e:
-            logging.error(f"Request error fetching face encodings: {str(e)}")
-            return False
-        except Exception as e:
-            logging.error(f"Error loading known faces: {str(e)}")
-            return False
+        # Extract face region
+        top, right, bottom, left = face_location
+        face_img = frame[top:bottom, left:right]
+        
+        # Ensure face region is valid
+        if face_img.size == 0:
+            logger.warning("Invalid face region for liveness check")
+            return {"is_live": False, "error": "Invalid face region"}
+        
+        return self.liveness_detector.check_liveness(face_img)
 
 
-def save_debug_frame(frame, debug_dir, face_locations=None, liveness_results=None, match_results=None, prefix="debug"):
+def save_debug_frame(frame, output_path, faces=None, liveness_results=None, matches=None):
     """
-    Save a debug frame with visualizations of detected faces, liveness, and matches.
+    Save a debug frame with visual annotations for face detection, liveness and matching.
     
     Args:
-        frame: The image frame to save
-        debug_dir: Directory to save debug images
-        face_locations: List of face locations as (top, right, bottom, left)
-        liveness_results: List of liveness check results for each face
-        match_results: List of match results for each face
-        prefix: Prefix for the debug image filename
+        frame: The original camera frame
+        output_path: Path to save the debug image
+        faces: List of face locations (top, right, bottom, left)
+        liveness_results: List of liveness check results
+        matches: List of match results
     """
-    if frame is None or debug_dir is None:
-        return None
+    try:
+        # Make a copy of the frame to avoid modifying the original
+        debug_frame = frame.copy()
         
-    # Create debug directory if it doesn't exist
-    if not os.path.exists(debug_dir):
-        os.makedirs(debug_dir)
+        # Add timestamp
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        cv2.putText(debug_frame, timestamp, (10, 20), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
         
-    # Create a copy of the frame for drawing
-    debug_frame = frame.copy()
-    
-    # Draw face boxes and labels if available
-    if face_locations is not None:
-        for i, face_location in enumerate(face_locations):
-            top, right, bottom, left = face_location
-            
-            # Default values
-            is_live = False
-            match_name = "Unknown"
-            confidence = 0.0
-            
-            # Get liveness result if available
-            if liveness_results is not None and i < len(liveness_results):
-                is_live = liveness_results[i]
+        # Draw faces if provided
+        if faces:
+            for i, face_location in enumerate(faces):
+                # Handle both tuple format and dictionary format
+                if isinstance(face_location, tuple):
+                    top, right, bottom, left = face_location
+                elif isinstance(face_location, dict):
+                    top = face_location.get('top', 0)
+                    right = face_location.get('right', 0)
+                    bottom = face_location.get('bottom', 0)
+                    left = face_location.get('left', 0)
+                else:
+                    logger.warning(f"Unknown face_location format: {type(face_location)}")
+                    continue
                 
-            # Get match result if available
-            if match_results is not None and i < len(match_results):
-                match_result = match_results[i]
-                if match_result is not None and "name" in match_result:
-                    match_name = match_result["name"]
-                    confidence = match_result.get("confidence", 0.0)
-            
-            # Choose color based on liveness
-            color = (0, 255, 0) if is_live else (0, 0, 255)  # Green for live, Red for not live
-            
-            # Draw the box
-            cv2.rectangle(debug_frame, (left, top), (right, bottom), color, 2)
-            
-            # Create label: Name (Confidence)
-            if match_name != "Unknown" and confidence > 0:
-                label = f"{match_name} ({confidence:.2f})"
-            else:
-                label = match_name
+                # Default color for face box (yellow)
+                color = (0, 255, 255)  # Yellow = default
                 
-            # Add liveness indicator to label
-            label = f"{label} - {'Live' if is_live else 'Not Live'}"
+                # Check if we have liveness results for this face
+                is_live = False
+                if liveness_results and i < len(liveness_results):
+                    liveness_result = liveness_results[i]
+                    if isinstance(liveness_result, dict) and liveness_result.get('is_live', False):
+                        color = (0, 255, 0)  # Green = live face
+                        is_live = True
+                    else:
+                        color = (0, 0, 255)  # Red = fake face
+                
+                # Draw face box
+                cv2.rectangle(debug_frame, (left, top), (right, bottom), color, 2)
+                
+                # Add liveness text
+                liveness_text = "LIVE" if is_live else "FAKE"
+                cv2.putText(debug_frame, liveness_text, (left, top - 10),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+                
+                # Add match information if available
+                if matches and i < len(matches):
+                    match_info = matches[i]
+                    name = "Unknown"
+                    confidence = 0
+                    
+                    # Better handling of different match formats
+                    logger.debug(f"Match info format: {type(match_info)} - {match_info}")
+                    
+                    # Format 1: {"match": {"name": "...", "confidence": ...}, ...}
+                    if isinstance(match_info, dict) and "match" in match_info:
+                        match_data = match_info.get("match")
+                        if match_data and isinstance(match_data, dict):
+                            name = match_data.get("name", "Unknown")
+                            confidence = match_data.get("confidence", 0)
+                    
+                    # Format 2: Direct data in the object
+                    elif isinstance(match_info, dict) and "name" in match_info:
+                        name = match_info.get("name", "Unknown")
+                        confidence = match_info.get("confidence", 0)
+                    
+                    # Format 3: Object with only confidence/distance but no match
+                    elif isinstance(match_info, dict) and "confidence" in match_info:
+                        confidence = match_info.get("confidence", 0)
+                    
+                    # Prepare text to display
+                    if name != "Unknown" and confidence > 0:
+                        match_text = f"{name} ({confidence:.1f}%)"
+                    elif confidence > 0:
+                        match_text = f"Unknown ({confidence:.1f}%)"
+                    else:
+                        match_text = "Unknown"
+                    
+                    # Draw match text under the face
+                    text_y = bottom + 25
+                    cv2.putText(debug_frame, match_text, (left, text_y),
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+        
+        # Create output directory if it doesn't exist
+        output_dir = os.path.dirname(output_path)
+        if output_dir and not os.path.exists(output_dir):
+            os.makedirs(output_dir, exist_ok=True)
             
-            # Draw label above the face box
-            cv2.putText(debug_frame, label, (left, top - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
-    
-    # Add timestamp and debug info to the image
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    
-    # Create info string based on available data
-    info_text = f"Timestamp: {timestamp}"
-    if face_locations is None:
-        info_text += " | No faces detected"
-    else:
-        info_text += f" | Faces: {len(face_locations)}"
-        if liveness_results is not None:
-            live_count = sum(1 for result in liveness_results if result)
-            info_text += f" | Live: {live_count}/{len(liveness_results)}"
-        if match_results is not None:
-            match_count = sum(1 for result in match_results if result is not None)
-            info_text += f" | Matches: {match_count}/{len(match_results)}"
-    
-    # Add debug type
-    info_text += f" | Type: {prefix}"
-    
-    # Draw background rectangle for info text
-    cv2.rectangle(debug_frame, (0, 0), (debug_frame.shape[1], 30), (0, 0, 0), -1)
-    
-    # Draw info text
-    cv2.putText(debug_frame, info_text, (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-    
-    # Generate timestamped filename
-    timestamp_file = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-    debug_file = os.path.join(debug_dir, f"frame_{prefix}_{timestamp_file}.jpg")
-    
-    # Save the debug frame
-    cv2.imwrite(debug_file, debug_frame)
-    logging.info(f"Saved debug frame to {debug_file}")
-    
-    return os.path.basename(debug_file)
+        # Save the debug frame
+        cv2.imwrite(output_path, debug_frame)
+        logger.info(f"Saved debug frame to {output_path}")
+        
+    except Exception as e:
+        logger.error(f"Error saving debug frame: {e}", exc_info=True)
 
 
 def load_known_faces(backend_url):
@@ -509,181 +444,270 @@ def perform_liveness_check(frame, face_locations):
     return results
 
 
-def run_face_recognition(camera_index=0, backend_url=None, output_file=None, skip_liveness=False, debug_dir=None):
+def run_face_recognition(camera_index=0, backend_url=None, output_file=None, perform_liveness_check=True, debug_dir=None):
     """
-    Run the face recognition process.
+    Run the face recognition process
     
     Args:
         camera_index: Index of the camera to use
-        backend_url: URL of the backend API
-        output_file: File to write the results to
-        skip_liveness: Whether to skip liveness checks
-        debug_dir: Directory to save debug images
+        backend_url: URL of the backend API for face data
+        output_file: Path to save JSON results
+        perform_liveness_check: Whether to perform liveness check
+        debug_dir: Directory to save debug frames
         
     Returns:
-        Dictionary with recognition results
+        dict with recognition results
     """
     camera = None
-    start_time = time.time()
-    metrics = {
-        "total_time": 0,
-        "camera_init_time": 0,
-        "face_detection_time": 0,
-        "liveness_check_time": 0,
-        "recognition_time": 0
+    result = {
+        "success": False,
+        "message": "",
+        "results": [],
+        "debug_frames": []
     }
-    debug_frame_path = None
     
     try:
-        logging.info("Starting face recognition process")
+        # Initialize the WebRecognition class
+        recognition = WebRecognition(backend_url=backend_url)
         
-        # Initialize camera
-        camera_start = time.time()
-        camera = WebCamera(camera_index)
+        # Try to open the camera with multiple attempts
+        logger.info(f"Attempting to open camera {camera_index}")
+        max_attempts = 5  # Increased attempts
+        for attempt in range(1, max_attempts + 1):
+            try:
+                # Release any existing camera first
+                if camera and camera.isOpened():
+                    camera.release()
+                    time.sleep(0.5)  # Wait for release to complete
+                
+                # Open the camera
+                camera = cv2.VideoCapture(camera_index)
+                
+                # Wait a bit and check if it's really open
+                time.sleep(0.5)
+                if not camera.isOpened():
+                    logger.warning(f"Failed to open camera (attempt {attempt}/{max_attempts})")
+                    if attempt < max_attempts:
+                        time.sleep(1.5)  # Longer wait before retrying
+                        continue
+                    else:
+                        result["message"] = f"Failed to open camera after {max_attempts} attempts"
+                        return result
+                else:
+                    # Set camera properties for better performance
+                    camera.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Minimize buffering delay
+                    logger.info(f"Camera opened successfully on attempt {attempt}")
+                    break
+            except Exception as e:
+                logger.error(f"Error opening camera (attempt {attempt}/{max_attempts}): {e}")
+                if attempt < max_attempts:
+                    time.sleep(1.5)  # Longer wait before retrying
+                    continue
+                else:
+                    result["message"] = f"Error opening camera: {str(e)}"
+                    return result
         
-        # Wait for camera to initialize properly (added delay)
-        time.sleep(2)
+        # Enhanced camera warmup - discard first few frames with better checking
+        logger.info("Starting enhanced camera warmup...")
+        warmup_frames = 20  # Increased from 10 to 20
+        valid_frames = 0
+        max_warmup_attempts = 30  # Maximum number of attempts to get valid frames
+        attempt = 0
         
-        # Check if camera is working
-        for _ in range(5):  # Try up to 5 times
-            frame = camera.get_frame()
-            if frame is not None and not frame.size == 0:
-                break
-            logging.warning("Camera not ready, retrying...")
-            time.sleep(1)
-        
-        if frame is None or frame.size == 0:
-            logging.error("Could not get frame from camera")
-            return {
-                "success": False,
-                "message": "No camera available or cannot capture frame",
-                "metrics": metrics,
-                "debug_frame": debug_frame_path
-            }
+        while valid_frames < warmup_frames and attempt < max_warmup_attempts:
+            ret, frame = camera.read()
+            attempt += 1
             
-        metrics["camera_init_time"] = time.time() - camera_start
-        logging.info(f"Camera initialized in {metrics['camera_init_time']:.2f} seconds")
+            if ret and frame is not None and frame.size > 0:
+                valid_frames += 1
+                logger.debug(f"Warmup frame {valid_frames}/{warmup_frames} captured")
+            else:
+                logger.debug(f"Invalid frame during warmup (attempt {attempt})")
+            
+            time.sleep(0.1)  # Small delay between frames
         
-        # Initialize recognition
-        recognition = WebRecognition(backend_url)
+        if valid_frames < warmup_frames:
+            logger.warning(f"Camera warmup incomplete: only {valid_frames}/{warmup_frames} valid frames captured")
+        else:
+            logger.info("Camera warmup completed successfully")
         
-        # Detect faces
-        face_detection_start = time.time()
-        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        face_locations = face_recognition.face_locations(rgb_frame)
-        metrics["face_detection_time"] = time.time() - face_detection_start
+        # Capture frame with enhanced retry
+        logger.info("Capturing frame for face recognition")
+        max_frame_attempts = 8  # Increased from 5 to 8
+        frame = None
+        
+        for frame_attempt in range(1, max_frame_attempts + 1):
+            ret, frame = camera.read()
+            if not ret or frame is None or frame.size == 0:
+                logger.warning(f"Failed to capture valid frame (attempt {frame_attempt}/{max_frame_attempts})")
+                if frame_attempt < max_frame_attempts:
+                    time.sleep(0.3)  # Increased wait before retrying
+                    continue
+                else:
+                    result["message"] = "Failed to capture a valid frame"
+                    return result
+            else:
+                logger.info(f"Valid frame captured on attempt {frame_attempt}")
+                break
+                
+        # Save initial debug frame
+        if debug_dir:
+            initial_debug_path = os.path.join(debug_dir, "initial_frame.jpg")
+            save_debug_frame(frame, initial_debug_path)
+            result["debug_frames"].append(initial_debug_path)
+        
+        # Step 1: Detect faces in the frame
+        logger.info("Detecting faces in frame")
+        face_locations = face_recognition.face_locations(frame)
         
         if not face_locations:
-            logging.warning("No faces detected in frame")
+            logger.warning("No faces detected in frame")
+            result["message"] = "No faces detected"
             
             # Save debug frame showing no faces detected
             if debug_dir:
-                debug_frame_path = save_debug_frame(frame, debug_dir, prefix="no_faces")
+                no_face_debug_path = os.path.join(debug_dir, "no_faces.jpg")
+                save_debug_frame(frame, no_face_debug_path)
+                result["debug_frames"].append(no_face_debug_path)
                 
-            return {
-                "success": False,
-                "message": "No faces detected",
-                "metrics": metrics,
-                "debug_frame": debug_frame_path
-            }
+            return result
             
-        logging.info(f"Detected {len(face_locations)} faces in {metrics['face_detection_time']:.2f} seconds")
+        logger.info(f"Detected {len(face_locations)} faces")
         
-        # Check liveness for each face
+        # Save debug frame with face detections
+        if debug_dir:
+            faces_debug_path = os.path.join(debug_dir, "faces_detected.jpg")
+            save_debug_frame(frame, faces_debug_path, faces=face_locations)
+            result["debug_frames"].append(faces_debug_path)
+        
+        # Step 2: Perform liveness check if requested
         liveness_results = []
-        liveness_start = time.time()
-        
-        if not skip_liveness:
+        if perform_liveness_check:
+            logger.info("Performing liveness check")
+            liveness_detector = LivenessDetector()
+            
             for face_location in face_locations:
-                is_live = recognition.check_liveness(frame, face_location)
-                liveness_results.append(is_live)
+                liveness_result = liveness_detector.check_liveness(frame, face_location)
+                liveness_results.append(liveness_result)
                 
-            metrics["liveness_check_time"] = time.time() - liveness_start
-            logging.info(f"Liveness checks completed in {metrics['liveness_check_time']:.2f} seconds")
+                if not liveness_result.get("is_live", False):
+                    logger.warning(f"Liveness check failed: {liveness_result}")
             
-            # Check if any face passed liveness test
-            if not any(liveness_results):
-                logging.warning("No live faces detected")
+            # Check if any face passed liveness
+            if not any(result.get("is_live", False) for result in liveness_results):
+                logger.warning("All faces failed liveness check")
+                result["message"] = "Liveness check failed for all faces"
+                result["results"] = [
+                    {"face_location": loc, "liveness": lv, "match": None} 
+                    for loc, lv in zip(face_locations, liveness_results)
+                ]
                 
-                # Save debug frame showing liveness failures
+                # Save debug frame with liveness results
                 if debug_dir:
-                    debug_frame_path = save_debug_frame(frame, debug_dir, face_locations, liveness_results, None, prefix="no_live_faces")
+                    liveness_debug_path = os.path.join(debug_dir, "liveness_failed.jpg")
+                    save_debug_frame(frame, liveness_debug_path, faces=face_locations, liveness_results=liveness_results)
+                    result["debug_frames"].append(liveness_debug_path)
                     
-                return {
-                    "success": False,
-                    "message": "No live faces detected",
-                    "metrics": metrics,
-                    "debug_frame": debug_frame_path
-                }
-        else:
-            # Skip liveness check, assume all faces are live
-            liveness_results = [True] * len(face_locations)
-            logging.info("Skipping liveness checks")
-            
-        # Identify each live face
-        recognition_start = time.time()
-        match_results = []
-        best_match = None
-        best_confidence = -1
+                return result
+                
+            # Save debug frame with liveness results
+            if debug_dir:
+                liveness_debug_path = os.path.join(debug_dir, "liveness_check.jpg")
+                save_debug_frame(frame, liveness_debug_path, faces=face_locations, liveness_results=liveness_results)
+                result["debug_frames"].append(liveness_debug_path)
         
-        for i, (face_location, is_live) in enumerate(zip(face_locations, liveness_results)):
-            if not is_live and not skip_liveness:
-                match_results.append(None)
+        # Step 3: Get face encodings
+        logger.info("Extracting face encodings")
+        face_encodings = face_recognition.face_encodings(frame, face_locations)
+        
+        if not face_encodings:
+            logger.warning("Could not extract face encodings")
+            result["message"] = "Failed to extract face encodings"
+            return result
+            
+        # Step 4: Identify faces
+        logger.info("Identifying faces against known encodings")
+        match_results = []
+        
+        for i, face_encoding in enumerate(face_encodings):
+            # Only process faces that passed liveness check if liveness was requested
+            if perform_liveness_check and not liveness_results[i].get("is_live", True):
+                logger.info(f"Skipping identification for face {i} due to failed liveness check")
+                match_results.append({"match": None, "distance": 1.0, "confidence": 0})
                 continue
                 
-            # Get face encoding
-            face_encoding = face_recognition.face_encodings(rgb_frame, [face_location])[0]
-            
-            # Identify face
             match = recognition.identify_face(face_encoding=face_encoding)
             match_results.append(match)
             
-            if match and match.get("confidence", 0) > best_confidence:
-                best_match = match
-                best_confidence = match.get("confidence", 0)
-                
-        metrics["recognition_time"] = time.time() - recognition_start
-        logging.info(f"Face recognition completed in {metrics['recognition_time']:.2f} seconds")
+            if match.get("match"):
+                logger.info(f"Face {i} identified as {match['match']['name']} with confidence {match['match']['confidence']:.2f}")
+            else:
+                logger.info(f"Face {i} not recognized")
         
-        # Save final debug frame with all information
+        # Step 5: Prepare results
+        face_data = []
+        
+        for i, (face_location, face_encoding) in enumerate(zip(face_locations, face_encodings)):
+            face_result = {
+                "face_location": {
+                    "top": int(face_location[0]),
+                    "right": int(face_location[1]),
+                    "bottom": int(face_location[2]),
+                    "left": int(face_location[3])
+                }
+            }
+            
+            if perform_liveness_check:
+                face_result["liveness"] = liveness_results[i]
+                
+            face_result["match"] = match_results[i].get("match")
+            face_result["confidence"] = match_results[i].get("confidence", 0)
+            face_result["distance"] = match_results[i].get("distance", 1.0)
+            face_data.append(face_result)
+            
+        result["success"] = True
+        result["message"] = "Face recognition completed"
+        result["results"] = face_data
+        
+        # Save final debug frame
         if debug_dir:
-            debug_frame_path = save_debug_frame(frame, debug_dir, face_locations, liveness_results, match_results, prefix="final")
+            final_debug_path = os.path.join(debug_dir, "final_result.jpg")
+            # Ensure matches are properly formatted for save_debug_frame
+            save_debug_frame(frame, final_debug_path, faces=face_locations, 
+                            liveness_results=liveness_results, matches=match_results)
+            result["debug_frames"].append(final_debug_path)
             
-        # Prepare final result
-        metrics["total_time"] = time.time() - start_time
-        
-        result = {
-            "success": True,
-            "message": "Face recognition completed successfully",
-            "metrics": metrics,
-            "debug_frame": debug_frame_path,
-            "matches": [m for m in match_results if m is not None],
-            "best_match": best_match
-        }
-        
-        # Write results to file if specified
+        # Save results to output file if specified
         if output_file:
-            with open(output_file, "w") as f:
-                json.dump(result, f, indent=2)
+            try:
+                with open(output_file, 'w') as f:
+                    # Ensure results are JSON serializable
+                    json_result = json.dumps(result, cls=NumpyEncoder)
+                    f.write(json_result)
+                logger.info(f"Results saved to {output_file}")
+            except Exception as e:
+                logger.error(f"Error saving results to file: {e}")
                 
-        return result
-        
     except Exception as e:
-        logging.error(f"Error in face recognition process: {str(e)}")
-        return {
-            "success": False,
-            "message": f"Error: {str(e)}",
-            "metrics": metrics,
-            "debug_frame": debug_frame_path
-        }
-        
+        error_msg = f"Error during face recognition: {str(e)}"
+        logger.error(error_msg, exc_info=True)
+        result["message"] = error_msg
     finally:
-        # Clean up resources
+        # Release camera resources
         if camera:
-            camera.release()
-            
-        # Close any open cv2 windows
-        cv2.destroyAllWindows()
+            try:
+                camera.release()
+                logger.info("Camera resources released")
+            except Exception as e:
+                logger.error(f"Error releasing camera: {e}")
+        
+        # Close all OpenCV windows if any
+        try:
+            cv2.destroyAllWindows()
+        except Exception as e:
+            logger.error(f"Error closing OpenCV windows: {e}")
+        
+    return result
 
 
 def main():
