@@ -337,7 +337,7 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                 return render_template("door_unlocked.html")
             else:
                 # No recognition data available, just render the template
-            return render_template("door_unlocked.html")
+                return render_template("door_unlocked.html")
         elif response.get("status") == "error":
             flash(response.get("message", "Incorrect OTP code. Please try again."), "danger")
             return render_template("otp.html", phone_number=phone_number)
@@ -1022,11 +1022,11 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                     return redirect(url_for("face_recognition"))
             
             try:
-            # Convert face encoding list to JSON string
-            encoding_json = json.dumps(face_encoding)
-            
-            # Encode JSON string as base64
-            encoding_base64 = base64.b64encode(encoding_json.encode('utf-8')).decode('utf-8')
+                # Convert face encoding list to JSON string
+                encoding_json = json.dumps(face_encoding)
+                
+                # Encode JSON string as base64
+                encoding_base64 = base64.b64encode(encoding_json.encode('utf-8')).decode('utf-8')
             except (TypeError, json.JSONDecodeError) as e:
                 logger.error(f"JSON serialization error: {e}", exc_info=True)
                 flash("Error processing face data: invalid format.", "danger")
@@ -1041,22 +1041,22 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
             if resp.status_code == 200 or resp.status_code == 201:
                 try:
                     data = resp.json()
-            if data.get("status") == "success":
-                # Clear the session data
-                if 'face_encoding' in flask_session:
-                    flask_session.pop('face_encoding')
-                
-                flash("Face registered successfully. Please wait for OTP or admin approval.", "success")
-                # Try to send OTP to the newly registered user
+                    if data.get("status") == "success":
+                        # Clear the session data
+                        if 'face_encoding' in flask_session:
+                            flask_session.pop('face_encoding')
+                        
+                        flash("Face registered successfully. Please wait for OTP or admin approval.", "success")
+                        # Try to send OTP to the newly registered user
                         resp = backend_session.post(f"{backend_url}/door-entry", json={"phone_number": phone_number})
-                data = resp.json()
-                
-                if data.get("status") == "OTP sent":
-                    return render_template("otp.html", phone_number=phone_number)
-                elif data.get("status") == "pending":
-                    return render_template("pending.html", phone_number=phone_number)
-                else:
-                    return redirect(url_for("door_entry"))
+                        data = resp.json()
+                        
+                        if data.get("status") == "OTP sent":
+                            return render_template("otp.html", phone_number=phone_number)
+                        elif data.get("status") == "pending":
+                            return render_template("pending.html", phone_number=phone_number)
+                        else:
+                            return redirect(url_for("door_entry"))
                 except Exception as e:
                     logger.error(f"Error processing registration response: {e}")
                     flash("Error processing backend response.", "danger")
