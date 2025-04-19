@@ -1,4 +1,4 @@
-from flask import render_template, request, redirect, url_for, flash, session as flask_session, jsonify, Response
+from flask import render_template, request, redirect, url_for, flash, session as flask_session, jsonify, Response, current_app
 from datetime import datetime
 import time
 from utils import verify_otp_rest
@@ -16,7 +16,6 @@ import io
 import platform
 import copy
 import requests
-import datetime
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -499,7 +498,8 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                                        font, font_scale, font_color, line_type)
                     
                     # Add timestamp
-                    cv2.putText(frame, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), 
+                    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    cv2.putText(frame, timestamp, 
                                (10, 30), font, font_scale, font_color, 1)
                     
                     # Convert to JPEG
