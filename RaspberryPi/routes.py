@@ -97,6 +97,9 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
     face_recognition_result = None
     camera_lock = threading.Lock()
     
+    # Flag to track if cleanup is needed
+    camera_needs_cleanup = False
+    
     def get_camera():
         """Get or initialize camera with proper error handling and fallbacks"""
         nonlocal camera, camera_needs_cleanup
@@ -832,24 +835,24 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
             flash("Error connecting to backend.", "danger")
         return redirect(url_for("door_entry")) 
     
-    # Add a flag to track if cleanup is needed
-    camera_needs_cleanup = False
-    
     # Clean up resources when app exits
     @app.teardown_appcontext
     def cleanup_resources(exception=None):
         """Clean up all resources when application context tears down"""
         nonlocal camera, camera_needs_cleanup
         
-        # Skip full cleanup on regular requests
-        if not camera_needs_cleanup and request.endpoint not in [
-            'face_recognition', 'start_face_recognition', 'process_face'
-        ]:
-            return
+        # Skip full cleanup on regular requests or if outside request context
+        if not camera_needs_cleanup:
+            # Check if we're in a request context before accessing request.endpoint
+            from flask import has_request_context
+            if not has_request_context() or request.endpoint not in [
+                'face_recognition', 'start_face_recognition', 'process_face'
+            ]:
+                return
         
         logger.info("Cleaning up resources on app context teardown")
         
-        # Release camera only if it exists and we're in a critical endpoint
+        # Release camera only if it exists and we're in a critical endpoint or cleanup is needed
         with camera_lock:
             if camera is not None and camera_needs_cleanup:
                 try:
@@ -876,8 +879,9 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                 # Reset the cleanup flag
                 camera_needs_cleanup = False
                 
-        # Only destroy windows on specific endpoints
-        if request.endpoint in ['face_recognition', 'process_face']:
+        # Only destroy windows on specific endpoints if in request context
+        from flask import has_request_context
+        if has_request_context() and request.endpoint in ['face_recognition', 'process_face']:
             try:
                 cv2.destroyAllWindows()
                 # Force window cleanup

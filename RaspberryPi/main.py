@@ -55,7 +55,7 @@ def cleanup_camera_resources():
 app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", "supersecretkey")
 
-# Run camera cleanup
+# Run camera cleanup at startup
 cleanup_camera_resources()
 
 # Set up upload folder for face recognition debug frames
@@ -75,7 +75,7 @@ session, backend_url = create_backend_session()
 mqtt_handler = MQTTHandler(app, door_controller)
 
 # Setup routes
-setup_routes(app, door_controller, mqtt_handler, session, backend_url)
+app_with_routes = setup_routes(app, door_controller, mqtt_handler, session, backend_url)
 
 # Register cleanup
 atexit.register(door_controller.cleanup)
