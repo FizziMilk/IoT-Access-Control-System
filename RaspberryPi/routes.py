@@ -964,25 +964,49 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
         nonlocal simple_camera
         
         if simple_camera is None or not simple_camera.isOpened():
-            logger.info("Initializing simplified camera at index 0")
-            # Try to initialize camera
-            cam = cv2.VideoCapture(0)
+            logger.info("Initializing simplified camera")
             
-            # Give camera time to initialize
-            time.sleep(0.5)
+            # Try to initialize camera using different indices in order
+            # Higher indices first, based on the devices found in your system
+            device_indices = [10, 13, 14, 15, 16, 19, 20, 21, 22, 23, 0, 1, 2]
             
-            # Check if camera opened successfully
-            if cam.isOpened():
-                # Set camera properties
-                cam.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-                cam.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-                cam.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            for idx in device_indices:
+                logger.info(f"Trying camera index {idx}")
+                # Try to initialize camera
+                cam = cv2.VideoCapture(idx)
                 
-                # Set the global camera
-                simple_camera = cam
-                logger.info("Simplified camera initialized successfully")
-            else:
-                logger.error("Failed to open simplified camera")
+                # Give camera time to initialize
+                time.sleep(0.5)
+                
+                # Check if camera opened successfully and can read frames
+                if cam.isOpened():
+                    ret, frame = cam.read()
+                    if ret and frame is not None:
+                        # We found a working camera
+                        logger.info(f"Successfully opened camera {idx}")
+                        
+                        # Set camera properties
+                        cam.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+                        cam.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+                        cam.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                        
+                        # Set the global camera
+                        simple_camera = cam
+                        logger.info(f"Simplified camera initialized successfully with index {idx}")
+                        return simple_camera
+                    else:
+                        logger.warning(f"Camera {idx} opened but couldn't read frames")
+                        cam.release()
+                else:
+                    logger.warning(f"Failed to open camera {idx}")
+                    # Make sure to release even if open failed
+                    try:
+                        cam.release()
+                    except:
+                        pass
+            
+            # If we get here, we couldn't initialize any camera
+            logger.error("Failed to open any camera")
         
         return simple_camera
     
@@ -1371,6 +1395,113 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                     time.sleep(0.1)
                 
                 test_result += f"Successfully read {frames_read} out of 5 frames.\n"
+                
+                if frames_read > 0:
+                    test_result += "Camera test PASSED!\n"
+                    flash(f"Camera {camera_index} is working!", "success")
+                else:
+                    test_result += "Camera opened but could not read frames. Test FAILED.\n"
+                    flash(f"Camera {camera_index} opened but couldn't read frames.", "warning")
+            else:
+                test_result += f"Failed to open camera {camera_index}.\n"
+                flash(f"Failed to open camera {camera_index}.", "danger")
+                
+            # Always release the camera
+            cam.release()
+            test_result += "Camera released.\n"
+            
+        except Exception as e:
+            test_result += f"Error testing camera: {str(e)}\n"
+            logger.error(f"Error testing camera {camera_index}: {str(e)}")
+            logger.error(traceback.format_exc())
+            flash(f"Error testing camera {camera_index}: {str(e)}", "danger")
+        
+        # Return the diagnostic page with results
+        return render_template('camera_diagnostic.html', 
+                              camera_status=False, 
+                              camera_info=None,
+                              process_info=None,
+                              test_result=test_result,
+                              test_image=test_image)
+    
+    @app.route('/test-high-index-camera', methods=['POST'])
+    def test_high_index_camera():
+        """Test a camera with a higher device index"""
+        camera_index = int(request.form.get('index', 10))
+        test_result = f"Testing camera at higher index {camera_index}:\n\n"
+        test_image = None
+        
+        try:
+            # Try to release any existing cameras first
+            try:
+                if platform.system() == 'Linux':
+                    subprocess.run(f'sudo fuser -k /dev/video{camera_index} 2>/dev/null', shell=True)
+            except:
+                pass
+                
+            # Wait for camera to be released
+            time.sleep(1.0)
+            
+            # Initialize camera
+            test_result += f"Initializing camera at index {camera_index}...\n"
+            
+            # Open using direct path to video device for Linux
+            if platform.system() == 'Linux':
+                cam_path = f"/dev/video{camera_index}"
+                test_result += f"Using path: {cam_path}\n"
+                
+                # Try both index and direct path methods
+                cam = None
+                try:
+                    # First try by numeric index 
+                    cam = cv2.VideoCapture(camera_index)
+                    if not cam.isOpened():
+                        # If that fails, try by direct path
+                        cam.release()
+                        cam = cv2.VideoCapture(cam_path)
+                except Exception as e:
+                    test_result += f"Error with numeric index, trying path: {str(e)}\n"
+                    cam = cv2.VideoCapture(cam_path)
+            else:
+                cam = cv2.VideoCapture(camera_index)
+            
+            # Wait for camera to initialize
+            time.sleep(2.0)  # Longer wait time for problematic cameras
+            
+            if cam.isOpened():
+                test_result += "Camera opened successfully.\n"
+                
+                # Get camera properties
+                width = cam.get(cv2.CAP_PROP_FRAME_WIDTH)
+                height = cam.get(cv2.CAP_PROP_FRAME_HEIGHT)
+                fps = cam.get(cv2.CAP_PROP_FPS)
+                driver = cam.get(cv2.CAP_PROP_BACKEND)
+                
+                test_result += f"Resolution: {width}x{height}\n"
+                test_result += f"FPS: {fps}\n"
+                test_result += f"Backend/Driver: {driver}\n"
+                
+                # Try to read frames
+                test_result += "Attempting to read frames...\n"
+                
+                # Try multiple reads with longer timeouts
+                frames_read = 0
+                for i in range(10):  # Try more frame reads
+                    ret, frame = cam.read()
+                    if ret:
+                        frames_read += 1
+                        # Save the last successful frame for display
+                        if frame is not None:
+                            _, buffer = cv2.imencode('.jpg', frame)
+                            test_image = base64.b64encode(buffer).decode('utf-8')
+                            test_result += f"Frame {i+1}: Success\n"
+                        else:
+                            test_result += f"Frame {i+1}: Got frame but it's None\n"
+                    else:
+                        test_result += f"Frame {i+1}: Failed to read\n"
+                    time.sleep(0.5)  # Longer delay between reads
+                
+                test_result += f"Successfully read {frames_read} out of 10 frames.\n"
                 
                 if frames_read > 0:
                     test_result += "Camera test PASSED!\n"

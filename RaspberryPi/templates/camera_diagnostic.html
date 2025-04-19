@@ -120,6 +120,46 @@
                 </form>
             </div>
             
+            <h4>Test Higher Indices (Your System)</h4>
+            <p>Based on your system's configuration, try these device indices:</p>
+            
+            <div class="d-flex flex-wrap gap-2 mb-3">
+                <form action="{{ url_for('test_high_index_camera') }}" method="POST">
+                    <input type="hidden" name="index" value="10">
+                    <button type="submit" class="btn btn-outline-success">Test video10</button>
+                </form>
+                
+                <form action="{{ url_for('test_high_index_camera') }}" method="POST">
+                    <input type="hidden" name="index" value="13">
+                    <button type="submit" class="btn btn-outline-success">Test video13</button>
+                </form>
+                
+                <form action="{{ url_for('test_high_index_camera') }}" method="POST">
+                    <input type="hidden" name="index" value="14">
+                    <button type="submit" class="btn btn-outline-success">Test video14</button>
+                </form>
+                
+                <form action="{{ url_for('test_high_index_camera') }}" method="POST">
+                    <input type="hidden" name="index" value="15">
+                    <button type="submit" class="btn btn-outline-success">Test video15</button>
+                </form>
+                
+                <form action="{{ url_for('test_high_index_camera') }}" method="POST">
+                    <input type="hidden" name="index" value="16">
+                    <button type="submit" class="btn btn-outline-success">Test video16</button>
+                </form>
+                
+                <form action="{{ url_for('test_high_index_camera') }}" method="POST">
+                    <input type="hidden" name="index" value="19">
+                    <button type="submit" class="btn btn-outline-success">Test video19</button>
+                </form>
+                
+                <form action="{{ url_for('test_high_index_camera') }}" method="POST">
+                    <input type="hidden" name="index" value="20">
+                    <button type="submit" class="btn btn-outline-success">Test video20</button>
+                </form>
+            </div>
+            
             {% if test_result %}
                 <h4>Test Result:</h4>
                 <div class="command-output">{{ test_result }}</div>
