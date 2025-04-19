@@ -142,44 +142,54 @@ class WebRecognition:
         logger.info(f"Loaded {len(encodings)} encodings with names")
         return True
         
-    def identify_face(self, frame, face_location=None):
+    def identify_face(self, frame=None, face_location=None, face_encoding=None):
         """
-        Identify a face in the given frame
+        Identify a face in the given frame or using provided encoding
         
         Args:
-            frame: OpenCV BGR image
+            frame: Optional OpenCV BGR image
             face_location: Optional face location tuple (top, right, bottom, left)
+            face_encoding: Optional face encoding directly provided
             
         Returns:
             dict or None: Match information if found, None otherwise
         """
-        # Convert to RGB (face_recognition uses RGB)
-        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        
-        # If face location not provided, detect faces
-        if face_location is None:
-            face_locations = face_recognition.face_locations(rgb_frame)
-            if not face_locations:
+        # If face_encoding is provided directly, use it
+        if face_encoding is not None:
+            # No need to detect or encode the face
+            pass
+        elif frame is not None:
+            # Convert to RGB (face_recognition uses RGB)
+            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            
+            # If face location not provided, detect faces
+            if face_location is None:
+                face_locations = face_recognition.face_locations(rgb_frame)
+                if not face_locations:
+                    return None
+                face_location = face_locations[0]  # Use first detected face
+            else:
+                face_locations = [face_location]
+                
+            # Get face encodings
+            face_encodings = face_recognition.face_encodings(rgb_frame, face_locations)
+            
+            if not face_encodings:
+                logger.warning("Could not encode detected face")
                 return None
-            face_location = face_locations[0]  # Use first detected face
+                
+            face_encoding = face_encodings[0]
         else:
-            face_locations = [face_location]
-            
-        # Get face encodings
-        face_encodings = face_recognition.face_encodings(rgb_frame, face_locations)
-        
-        if not face_encodings:
-            logger.warning("Could not encode detected face")
+            # Need either frame or face_encoding
+            logger.error("Either frame or face_encoding must be provided")
             return None
-            
-        face_encoding = face_encodings[0]
         
         # No known faces to compare against
         if not self.known_face_encodings:
             logger.warning("No known face encodings to match against")
             return {
                 "encoding": face_encoding,
-                "location": face_location,
+                "location": face_location if 'face_location' in locals() else None,
                 "match": None
             }
         
@@ -188,7 +198,7 @@ class WebRecognition:
         
         result = {
             "encoding": face_encoding,
-            "location": face_location,
+            "location": face_location if 'face_location' in locals() else None,
             "match": None
         }
         

@@ -671,25 +671,8 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
             # backend_session is also available from the outer scope
             
             try:
-                # First check if this face already has access
-                resp = backend_session.get(f"{backend_url}/api/face-access/{face_id}")
-                logger.debug(f"Face access check response: Status {resp.status_code}")
-                
-                if resp.status_code == 200:
-                    try:
-                        face_access = resp.json()
-                        logger.info(f"Face access check: {face_access}")
-                    
-                        if face_access.get('has_access', False):
-                            flash('Face recognized! Welcome back.', 'success')
-                            return redirect(url_for('door_entry', face_id=face_id))
-                    except json.JSONDecodeError as e:
-                        logger.warning(f"Failed to decode face access response: {e}")
-                        # Continue to identification as fallback
-                else:
-                    logger.warning(f"Face access check failed with status: {resp.status_code}")
-                
-                # If not, try to identify the face
+                # First check if this face already has access - use face encoding directly
+                # Send the face encoding to the backend for matching against registered users
                 face_encoding = face_recognition_result['face_encodings'][0]
                 # Ensure we're working with a Python list, not a numpy array
                 if isinstance(face_encoding, np.ndarray):
@@ -700,32 +683,86 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                 # Log the type of encoding we're sending
                 logger.debug(f"Sending face encoding type: {type(encoding_list).__name__}")
                 
-                resp = backend_session.post(
-                    f"{backend_url}/api/users/identify-face",
-                    json={'face_encoding': encoding_list, 'tolerance': 0.6}
-                )
+                # Convert face encoding to JSON and then base64
+                encoding_json = json.dumps(encoding_list)
+                encoding_base64 = base64.b64encode(encoding_json.encode('utf-8')).decode('utf-8')
                 
-                logger.debug(f"Face identification response: Status {resp.status_code}")
+                # Check against backend for face identification
+                # Use the get-face-data endpoint to get known faces, then match locally if needed
+                resp = backend_session.get(f"{backend_url}/get-face-data")
                 
                 if resp.status_code == 200:
                     try:
                         data = resp.json()
-                        logger.info(f"Face identification result: {data}")
-                        
-                        if data['success']:
-                            flash(f"Face recognized! Welcome, {data['user']['name']}.", 'success')
-                            return redirect(url_for('door_entry', face_id=face_id))
+                        if data.get('face_data'):
+                            # There are registered faces - save this user's face data for possible registration
+                            flask_session['face_encoding'] = encoding_list
+                            
+                            # Check if any faces match the current one
+                            # This would typically be done by the backend, but we can do a local match
+                            from face_recognition_process import WebRecognition
+                            recognition = WebRecognition()
+                            
+                            # Process face data from the backend
+                            face_encodings = []
+                            phone_numbers = []
+                            
+                            for face_item in data['face_data']:
+                                phone_number = face_item['phone_number']
+                                face_b64 = face_item['face_encoding']
+                                
+                                # Decode base64 to JSON string, then parse to list
+                                face_json = base64.b64decode(face_b64).decode('utf-8')
+                                face_encoding = json.loads(face_json)
+                                
+                                face_encodings.append(face_encoding)
+                                phone_numbers.append(phone_number)
+                            
+                            # Load encodings into recognition system
+                            if face_encodings:
+                                recognition.load_encodings(face_encodings, phone_numbers)
+                                
+                                # Identify face
+                                face_result = recognition.identify_face(
+                                    frame=None,  # We don't need the frame since we already have the encoding
+                                    face_encoding=encoding_list
+                                )
+                                
+                                if face_result and face_result.get('match'):
+                                    # Face found - redirect to door entry
+                                    matched_phone = face_result['match']['name']
+                                    flash(f"Face recognized! Welcome, {matched_phone}.", 'success')
+                                    
+                                    # Log the successful face recognition
+                                    try:
+                                        backend_session.post(f"{backend_url}/log-door-access", json={
+                                            "user": matched_phone,
+                                            "method": "Face Recognition",
+                                            "status": "Successful",
+                                            "details": f"Face recognized with confidence {face_result['match']['confidence']:.2f}"
+                                        })
+                                    except Exception as e:
+                                        logger.error(f"Error logging face access: {e}")
+                                    
+                                    return redirect(url_for('door_entry'))
+                                else:
+                                    # No match found
+                                    flash('Face not recognized. Please register to gain access.', 'warning')
+                                    return redirect(url_for('register_face'))
+                            else:
+                                # No registered faces
+                                flash('No registered faces found. Please register to gain access.', 'warning')
+                                return redirect(url_for('register_face'))
                         else:
-                            # If face is not recognized, capture it for potential registration
-                            flash('Face not recognized. Please register to gain access.', 'warning')
-                            # Save the face encoding for registration
+                            # No face data returned
+                            flash('No registered faces found. Please register to gain access.', 'warning')
                             return redirect(url_for('register_face'))
                     except json.JSONDecodeError as e:
-                        logger.error(f"Error identifying face: {e}")
-                        flash('Error identifying face. Please try again.', 'error')
+                        logger.error(f"Error decoding face data: {e}")
+                        flash('Error processing face data. Please try again.', 'error')
                         return redirect(url_for('face_recognition'))
                 else:
-                    logger.warning(f"Face identification failed with status: {resp.status_code}")
+                    logger.warning(f"Face data retrieval failed with status: {resp.status_code}")
                     flash('Error communicating with the backend service. Please try again later.', 'error')
                     return redirect(url_for('face_recognition'))
             
@@ -742,9 +779,31 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
             flash('An unexpected error occurred. Please try again.', 'error')
             return redirect(url_for('face_recognition'))
     
-    @app.route('/register-face', methods=['POST'])
+    @app.route('/register-face', methods=['GET', 'POST'])
     def register_face():
         """Register a captured face with a phone number"""
+        # For GET requests, show the registration form
+        if request.method == 'GET':
+            # Get the latest debug frame timestamp
+            debug_dir = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'static', 'debug_frames')
+            timestamp = ""
+            
+            try:
+                # Get list of files in debug_frames directory
+                if os.path.exists(debug_dir):
+                    files = [f for f in os.listdir(debug_dir) if f.startswith('frame_final_')]
+                    if files:
+                        # Sort by timestamp (which is part of the filename)
+                        files.sort(reverse=True)
+                        # Extract the timestamp part from the filename
+                        timestamp = files[0].replace('frame_final_', '').replace('.jpg', '')
+                        logger.info(f"Using debug frame with timestamp: {timestamp}")
+            except Exception as e:
+                logger.error(f"Error getting debug frame timestamp: {e}")
+                
+            return render_template("register_face.html", timestamp=timestamp)
+            
+        # For POST requests, process the registration
         phone_number = request.form.get('phone_number')
         
         # Get the face encoding from Flask session
@@ -752,7 +811,7 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
         
         if not phone_number or not face_encoding:
             flash("Phone number and face image required.", "danger")
-            return redirect(url_for("door_entry"))
+            return redirect(url_for("face_recognition"))
             
         try:
             # Convert face encoding to base64 string
@@ -768,7 +827,7 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                 except Exception as e:
                     logger.error(f"Error converting face encoding: {e}", exc_info=True)
                     flash("Error processing face data.", "danger")
-                    return redirect(url_for("door_entry"))
+                    return redirect(url_for("face_recognition"))
             
             try:
                 # Convert face encoding list to JSON string
@@ -779,38 +838,46 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
             except (TypeError, json.JSONDecodeError) as e:
                 logger.error(f"JSON serialization error: {e}", exc_info=True)
                 flash("Error processing face data: invalid format.", "danger")
-                return redirect(url_for("door_entry"))
+                return redirect(url_for("face_recognition"))
             
             # Send the face encoding and phone number to the backend
             resp = backend_session.post(f"{backend_url}/register-face", json={
                 "phone_number": phone_number,
                 "face_encoding": encoding_base64
             })
-            data = resp.json()
             
-            if data.get("status") == "success":
-                # Clear the session data
-                if 'face_encoding' in flask_session:
-                    flask_session.pop('face_encoding')
-                
-                flash("Face registered successfully. Please wait for OTP or admin approval.", "success")
-                # Try to send OTP to the newly registered user
-                resp = backend_session.post(f"{backend_url}/door-entry", json={"phone_number": phone_number})
-                data = resp.json()
-                
-                if data.get("status") == "OTP sent":
-                    return render_template("otp.html", phone_number=phone_number)
-                elif data.get("status") == "pending":
-                    return render_template("pending.html", phone_number=phone_number)
-                else:
-                    return redirect(url_for("door_entry"))
+            if resp.status_code == 200 or resp.status_code == 201:
+                try:
+                    data = resp.json()
+                    if data.get("status") == "success":
+                        # Clear the session data
+                        if 'face_encoding' in flask_session:
+                            flask_session.pop('face_encoding')
+                        
+                        flash("Face registered successfully. Please wait for OTP or admin approval.", "success")
+                        # Try to send OTP to the newly registered user
+                        resp = backend_session.post(f"{backend_url}/door-entry", json={"phone_number": phone_number})
+                        data = resp.json()
+                        
+                        if data.get("status") == "OTP sent":
+                            return render_template("otp.html", phone_number=phone_number)
+                        elif data.get("status") == "pending":
+                            return render_template("pending.html", phone_number=phone_number)
+                        else:
+                            return redirect(url_for("door_entry"))
+                    else:
+                        flash(data.get("error", "Error registering face"), "danger")
+                except Exception as e:
+                    logger.error(f"Error processing registration response: {e}")
+                    flash("Error processing backend response.", "danger")
             else:
-                flash(data.get("error", "Error registering face"), "danger")
+                logger.error(f"Registration failed with status: {resp.status_code}")
+                flash("Error registering with backend service.", "danger")
         except Exception as e:
+            logger.error(f"Error connecting to backend: {e}")
             flash("Error connecting to backend.", "danger")
-            print(f"[DEBUG] Error: {e}")
             
-        return redirect(url_for("door_entry"))
+        return redirect(url_for("face_recognition"))
     
     @app.route('/update-name', methods=['POST'])
     def update_name():
