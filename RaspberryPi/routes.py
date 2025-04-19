@@ -547,6 +547,11 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
     def start_face_recognition():
         nonlocal camera, camera_needs_cleanup
         
+        # Ensure any previous recognition state is completely reset
+        recognition_state.recognition_running = False
+        recognition_state.face_recognition_active = False
+        recognition_state.face_recognition_result = None
+        
         # If camera has been released, get a new one
         with camera_lock:
             if camera is None or not hasattr(camera, 'isOpened') or not camera.isOpened():
@@ -854,6 +859,7 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
             # Reset recognition state
             recognition_state.face_recognition_active = False
             recognition_state.face_recognition_result = None
+            recognition_state.recognition_running = False  # Also reset the running flag
             
             # Set cleanup flag
             camera_needs_cleanup = True
@@ -930,6 +936,9 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
             # Force camera to None to ensure full reinitialization on next access
             with camera_lock:
                 camera = None
+            
+            # Add a slight delay before responding to allow resources to be released
+            time.sleep(0.5)
             
             return jsonify({
                 "status": "success", 
@@ -1324,7 +1333,7 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
             # Check 1: Face has some variation in color/texture (non-flat)
             gray = cv2.cvtColor(face_img, cv2.COLOR_RGB2GRAY) if len(face_img.shape) == 3 else face_img
             std_dev = np.std(gray)
-            texture_check = std_dev > 25  # Arbitrary threshold
+            texture_check = std_dev > 15  # Lowered from 25 to 15 - less strict threshold for texture variance
             
             # Check 2: Face doesn't have unnaturally uniform regions
             # Simplified check for demonstration
