@@ -345,10 +345,19 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
         # Check schedule first
         if check_schedule(door_controller, mqtt_handler, backend_session, backend_url):
             return render_template("door_unlocked.html")
-
-        # For GET requests, show the entry options page
-        if request.method == "GET":
-            return render_template("entry_options.html")
+        
+        # For GET requests, show the entry form
+        if request.method == 'GET':
+            # Get recent recognition data from session if available
+            recent_recognition = None
+            if 'recent_recognition' in flask_session:
+                recent_recognition = flask_session.get('recent_recognition')
+                # Clear from session after retrieving
+                flask_session.pop('recent_recognition', None)
+            
+            return render_template('door_entry.html', 
+                                  recent_recognition=recent_recognition,
+                                  testing_mode=TESTING_MODE_ENABLED)
 
         # If we get here, schedule check didn't unlock the door
         if request.method == "POST":
@@ -680,56 +689,66 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
     
     @app.route('/check-face-recognition-status')
     def check_face_recognition_status():
-        """Check if face recognition is complete and get results"""
+        """Check the status of face recognition process"""
         nonlocal face_recognition_active, face_recognition_result
         
+        # Check if recognition is active
         if face_recognition_active:
-            return jsonify({'status': 'processing'})
-        
-        if face_recognition_result:
-            # Fix potential JSON serialization issues by ensuring all values are serializable
-            result = copy.deepcopy(face_recognition_result)
+            status = "processing"
+            result = None
+        elif face_recognition_result is not None:
+            status = "complete"
             
-            # Function to make all values JSON serializable
+            # Deep copy and make serializable to avoid modifying the original
             def make_serializable(obj):
+                """Make obj JSON serializable"""
                 if isinstance(obj, dict):
                     return {k: make_serializable(v) for k, v in obj.items()}
                 elif isinstance(obj, list):
-                    return [make_serializable(item) for item in obj]
-                elif isinstance(obj, (np.ndarray, np.generic)):
-                    try:
-                        return obj.tolist()
-                    except Exception as e:
-                        logger.error(f"Failed to convert numpy array to list: {e}")
-                        return []
-                elif isinstance(obj, datetime):
-                    return obj.isoformat()
-                elif isinstance(obj, (bool, int, float, str)) or obj is None:
+                    return [make_serializable(i) for i in obj]
+                elif isinstance(obj, np.ndarray):
+                    return obj.tolist()
+                elif isinstance(obj, (int, float, str, bool, type(None))):
                     return obj
                 else:
-                    logger.warning(f"Converting non-serializable type {type(obj).__name__} to string")
-                    return str(obj)
+                    try:
+                        # Try to convert to primitive type
+                        return str(obj)
+                    except Exception:
+                        return repr(obj)
             
             try:
-                # Convert all values to be JSON serializable
-                serializable_result = make_serializable(result)
+                result = make_serializable(face_recognition_result)
                 
-                # Log that we're returning results
-                logger.debug(f"Returning face recognition results: {serializable_result.get('success')}")
+                # Add debug frame information if available
+                debug_dir = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'static', 'debug_frames')
                 
-                return jsonify({'status': 'complete', 'result': serializable_result})
+                try:
+                    # Try to find the final or most relevant frame
+                    if os.path.exists(debug_dir):
+                        # Look for files in order of preference: 
+                        # 1. final frame, 2. faces frame, 3. liveness frame, 4. no faces frame, 5. initial frame
+                        patterns = ['frame_final_', 'frame_faces_', 'frame_liveness_fail_', 'frame_nofaces_', 'frame_initial_']
+                        
+                        for pattern in patterns:
+                            files = [f for f in os.listdir(debug_dir) if f.startswith(pattern)]
+                            if files:
+                                # Sort by timestamp (which is part of the filename) to get the most recent
+                                files.sort(reverse=True)
+                                # Add the filename to the result
+                                result['debug_frame'] = files[0]
+                                logger.info(f"Found debug frame: {files[0]}")
+                                break
+                except Exception as e:
+                    logger.error(f"Error finding debug frame: {e}")
             except Exception as e:
-                logger.error(f"Error serializing face recognition result: {e}", exc_info=True)
-                # Return a simplified result
-                return jsonify({
-                    'status': 'complete', 
-                    'result': {
-                        'success': face_recognition_result.get('success', False),
-                        'error': 'Error serializing result data'
-                    }
-                })
+                logger.error(f"Error making result serializable: {e}")
+                result = {"success": False, "error": "Error processing result"}
+        else:
+            status = "not_started"
+            result = None
         
-        return jsonify({'status': 'not_started'})
+        return jsonify({"status": status, "result": result})
     
     @app.route('/process-face/<face_id>', methods=['POST'])
     def process_face(face_id):
@@ -743,6 +762,13 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                 return redirect(url_for('face_recognition'))
             
             logger.info(f"Processing face with ID: {face_id}")
+            
+            # Get debug frame if passed
+            debug_frame = request.form.get('debug_frame')
+            if debug_frame:
+                logger.info(f"Debug frame provided: {debug_frame}")
+                # Store in session for display in results
+                flask_session['debug_frame'] = debug_frame
             
             if not face_recognition_result:
                 logger.warning("No face recognition results available")
@@ -850,10 +876,28 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                                     except Exception as e:
                                         logger.error(f"Error logging face access: {e}")
                                     
+                                    # Include debug frame in session for display on door entry page
+                                    if 'debug_frame' in flask_session:
+                                        flask_session['recent_recognition'] = {
+                                            'user': matched_phone,
+                                            'confidence': face_result['match']['confidence'],
+                                            'debug_frame': flask_session['debug_frame'],
+                                            'timestamp': datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                                        }
+                                    
                                     return redirect(url_for('door_entry'))
                                 else:
                                     # No match found
                                     flash('Face not recognized. Please register to gain access.', 'warning')
+                                    # Pass debug frame timestamp to registration page
+                                    if 'debug_frame' in flask_session:
+                                        # Extract timestamp from frame name
+                                        frame_name = flask_session['debug_frame']
+                                        if frame_name.startswith('frame_final_'):
+                                            timestamp = frame_name.replace('frame_final_', '').replace('.jpg', '')
+                                        else:
+                                            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+                                        return redirect(url_for('register_face', timestamp=timestamp))
                                     return redirect(url_for('register_face'))
                             else:
                                 # No registered faces
@@ -879,7 +923,7 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                 
             # If not recognized, offer registration
             return redirect(url_for('register_face'))
-            
+                
         except Exception as e:
             logger.error(f"Error processing face: {e}", exc_info=True)
             flash('An unexpected error occurred. Please try again.', 'error')
@@ -971,8 +1015,6 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                             return render_template("pending.html", phone_number=phone_number)
                         else:
                             return redirect(url_for("door_entry"))
-                    else:
-                        flash(data.get("error", "Error registering face"), "danger")
                 except Exception as e:
                     logger.error(f"Error processing registration response: {e}")
                     flash("Error processing backend response.", "danger")
@@ -1106,49 +1148,57 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
     
     @app.route('/capture-preview-frame', methods=['POST'])
     def capture_preview_frame():
-        """Capture a single frame to display during face recognition processing"""
+        """Capture a single frame to display during processing"""
         nonlocal camera
         
         try:
-            logger.info("Capturing preview frame for face recognition")
+            logger.info("Capturing preview frame before facial recognition")
+            
+            # Ensure debug frames directory exists
             debug_dir = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'static', 'debug_frames')
             os.makedirs(debug_dir, exist_ok=True)
             
-            # Get camera and capture a frame
-            with camera_lock:
-                if camera is None:
-                    camera = get_camera()
-                
-                if not (hasattr(camera, 'isOpened') and camera.isOpened()):
-                    logger.warning("Camera not available for preview capture")
-                    return jsonify({"success": False, "error": "Camera not available"})
-                
-                # Read a few frames to make sure we get a current one
-                for _ in range(3):
-                    success, frame = camera.read()
-                
-                if not success or frame is None:
-                    logger.warning("Failed to capture preview frame")
-                    return jsonify({"success": False, "error": "Failed to capture frame"})
+            # Generate timestamp for the frame
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
             
-            # Generate timestamp
-            timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S%f")
+            # Get camera instance
+            curr_camera = get_camera()
+            if curr_camera is None or not hasattr(curr_camera, 'read'):
+                logger.error("Camera not available for preview capture")
+                return jsonify({"success": False, "error": "Camera not available"}), 500
+                
+            # Read frame
+            ret, frame = curr_camera.read()
+            if not ret or frame is None:
+                logger.error("Failed to capture preview frame")
+                return jsonify({"success": False, "error": "Failed to capture frame"}), 500
             
-            # Save the preview frame
-            preview_path = os.path.join(debug_dir, f"preview_{timestamp}.jpg")
-            cv2.imwrite(preview_path, frame)
+            # Add timestamp to the frame
+            cv2.putText(
+                frame, 
+                timestamp, 
+                (10, 30), 
+                cv2.FONT_HERSHEY_SIMPLEX, 
+                0.7, 
+                (0, 255, 0), 
+                2
+            )
+            
+            # Save the frame
+            filename = f"{debug_dir}/preview_{timestamp}.jpg"
+            cv2.imwrite(filename, frame)
+            logger.info(f"Preview frame saved to {filename}")
             
             # Return success with timestamp
-            logger.info(f"Preview frame captured and saved: {preview_path}")
             return jsonify({
                 "success": True, 
                 "timestamp": timestamp,
-                "path": f"/static/debug_frames/preview_{timestamp}.jpg"
+                "filename": f"preview_{timestamp}.jpg"
             })
             
         except Exception as e:
             logger.error(f"Error capturing preview frame: {e}", exc_info=True)
-            return jsonify({"success": False, "error": str(e)})
+            return jsonify({"success": False, "error": str(e)}), 500
     
     # Clean up resources when app exits
     @app.teardown_appcontext

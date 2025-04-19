@@ -40,11 +40,10 @@
             width: 100%;
             max-width: 640px;
             height: auto;
-            margin: 0 auto;
+            margin: 20px auto;
             border: 2px solid #ddd;
             border-radius: 5px;
             box-shadow: 0 2px 4px rgba(0,0,0,0.2);
-            display: block;
         }
         #processingText {
             display: none;
@@ -73,26 +72,6 @@
         #resetCameraButton {
             padding: 10px 15px;
         }
-        #processingOverlay {
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background-color: rgba(0, 0, 0, 0.7);
-            color: white;
-            display: flex;
-            flex-direction: column;
-            justify-content: center;
-            align-items: center;
-            border-radius: 5px;
-            z-index: 15;
-        }
-        
-        .processing-animation {
-            font-size: 3rem;
-            margin-bottom: 1rem;
-        }
     </style>
 </head>
 <body>
@@ -113,9 +92,9 @@
         </div>
         
         <div class="button-group">
-            <button id="startButton" class="btn btn-primary btn-lg">
-                <i class="fas fa-camera"></i> Start Face Recognition
-            </button>
+        <button id="startButton" class="btn btn-primary btn-lg">
+            <i class="fas fa-camera"></i> Start Face Recognition
+        </button>
             <button id="resetCameraButton" class="btn btn-secondary">
                 <i class="fas fa-sync"></i> Reset Camera
             </button>
@@ -125,12 +104,6 @@
             <img id="videoFeed" src="{{ url_for('video_feed') }}" alt="Face Recognition Feed" onerror="handleVideoError(this)">
             <div id="processingText" class="mt-2">
                 <h4>Processing your face. Please keep still...</h4>
-            </div>
-            <div id="processingOverlay" class="d-none">
-                <div class="processing-animation">
-                    <i class="fas fa-cog fa-spin"></i>
-                </div>
-                <p>Processing face recognition...</p>
             </div>
         </div>
         
@@ -245,6 +218,41 @@
         // Show the loading spinner
         document.getElementById('loadingSpinner').style.display = 'block';
         
+        // Save the current video src to restore it later if needed
+        const videoFeed = document.getElementById('videoFeed');
+        const originalVideoSrc = videoFeed.src;
+        
+        // Capture a preview frame first
+        console.log("Capturing preview frame");
+        fetch("/capture-preview-frame", { 
+            method: 'POST'
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                console.log("Preview frame captured successfully:", data.filename);
+                // Display the static preview frame
+                videoFeed.src = `/static/debug_frames/${data.filename}?t=${new Date().getTime()}`;
+                // Add a processing overlay to indicate system is working
+                document.getElementById('processingText').innerHTML = 
+                    "<h4>Processing your face. Please wait...</h4>" +
+                    "<p>Your image has been captured and is being analyzed</p>";
+            } else {
+                console.error("Failed to capture preview frame:", data.error);
+            }
+            
+            // Continue with face recognition
+            startActualFaceRecognition(originalVideoSrc);
+        })
+        .catch(error => {
+            console.error("Error capturing preview frame:", error);
+            // Continue with face recognition even if preview capture fails
+            startActualFaceRecognition(originalVideoSrc);
+        });
+    }
+    
+    // Function to start the actual face recognition process after preview capture
+    function startActualFaceRecognition(originalVideoSrc) {
         // Animate the progress bar
         let progressBar = document.getElementById('progressBar');
         let statusText = document.getElementById('statusText');
@@ -296,33 +304,14 @@
         // Track when recognition started
         window.recognitionStartTime = new Date().getTime();
         
-        // First capture a preview frame
-        console.log("Capturing preview frame before recognition");
-        fetch("{{ url_for('capture_preview_frame') }}", {
-            method: 'POST'
-        })
-        .then(response => response.json())
-        .then(data => {
-            console.log("Preview frame response:", data);
-            
-            if (data.success) {
-                // Replace live video with the static preview image
-                const videoFeed = document.getElementById('videoFeed');
-                videoFeed.src = data.path + "?t=" + new Date().getTime();
-                
-                // Show the processing overlay
-                document.getElementById('processingOverlay').classList.remove('d-none');
-            }
-            
-            // Now start the actual face recognition
-            console.log("Starting actual face recognition after preview capture");
-            return fetch("{{ url_for('start_face_recognition') }}", {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/x-www-form-urlencoded',
-                },
-                body: skipLiveness ? 'skip_liveness=true' : ''
-            });
+        // Start face recognition via AJAX
+        console.log("Sending POST request to start face recognition");
+        fetch("{{ url_for('start_face_recognition') }}", {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+            },
+            body: skipLiveness ? 'skip_liveness=true' : ''
         })
         .then(response => {
             console.log("Received response from start_face_recognition:", response.status);
@@ -334,19 +323,19 @@
             // Add a delay before starting status checks to allow backend to initialize
             setTimeout(() => {
                 console.log("Starting recognition status checks");
-                checkRecognitionStatus(progressInterval);
+                checkRecognitionStatus(progressInterval, originalVideoSrc);
             }, 2000); // 2 second delay to avoid race condition
         })
         .catch(error => {
-            console.error('Error in face recognition flow:', error);
+            console.error('Error starting face recognition:', error);
             clearInterval(progressInterval);
             statusText.textContent = "Error starting face recognition. Resetting camera...";
             
-            // Hide processing overlay if shown
-            document.getElementById('processingOverlay').classList.add('d-none');
-            
             // Try resetting camera
             resetCameraResources();
+            
+            // Restore original video feed
+            document.getElementById('videoFeed').src = originalVideoSrc;
             
             // Show error and reset UI after a delay
             setTimeout(resetUI, 5000);
@@ -379,7 +368,7 @@
     
     // Monitor for request timeouts on the status check
     let timeoutErrorCount = 0;
-    function checkRecognitionStatus(progressInterval) {
+    function checkRecognitionStatus(progressInterval, originalVideoSrc) {
         console.log("Checking recognition status");
         
         // Clear any previous timeout
@@ -394,6 +383,10 @@
             clearInterval(progressInterval);
             document.getElementById('statusText').textContent = "Face recognition timed out. Resetting camera...";
             resetCameraResources();
+            
+            // Restore original video feed
+            document.getElementById('videoFeed').src = originalVideoSrc;
+            
             setTimeout(resetUI, 5000);
             return;
         }
@@ -413,24 +406,41 @@
             
             if (data.status === 'processing') {
                 // Still processing, check again in a moment
-                window.statusCheckTimer = setTimeout(() => checkRecognitionStatus(progressInterval), 1000); // Increased delay to 1000ms
+                window.statusCheckTimer = setTimeout(() => checkRecognitionStatus(progressInterval, originalVideoSrc), 1000); // Increased delay to 1000ms
             } else if (data.status === 'complete') {
-                // Recognition complete, submit form to process results
+                // Recognition complete, get the final debug frame
                 console.log("Recognition complete with result:", data.result);
                 document.getElementById('statusText').textContent = "Recognition complete!";
                 clearInterval(progressInterval);
                 document.getElementById('progressBar').style.width = '100%';
                 
-                // Hide the processing overlay, as recognition is complete
-                document.getElementById('processingOverlay').classList.add('d-none');
-                
                 // Check if the result contains face data
                 if (data.result && data.result.face_detected) {
+                    // If there's debug frame information, try to display it
+                    if (data.result.debug_frame) {
+                        console.log("Displaying final debug frame:", data.result.debug_frame);
+                        try {
+                            document.getElementById('videoFeed').src = 
+                                `/static/debug_frames/${data.result.debug_frame}?t=${new Date().getTime()}`;
+                        } catch (e) {
+                            console.error("Error displaying final debug frame:", e);
+                        }
+                    }
+                    
                     // Generate a unique face ID
                     const faceId = Date.now().toString(36) + Math.random().toString(36).substr(2);
                     
                     // Set the face ID in the hidden input
                     document.getElementById('faceIdInput').value = faceId;
+                    
+                    // Store the debug frame filename in the form if available
+                    if (data.result.debug_frame) {
+                        const debugFrameInput = document.createElement('input');
+                        debugFrameInput.type = 'hidden';
+                        debugFrameInput.name = 'debug_frame';
+                        debugFrameInput.value = data.result.debug_frame;
+                        document.getElementById('faceForm').appendChild(debugFrameInput);
+                    }
                     
                     // Set the form action with the face ID
                     const form = document.getElementById('faceForm');
@@ -440,10 +450,12 @@
                     setTimeout(() => {
                         console.log("Submitting form to process face");
                         form.submit();
-                    }, 1000);
+                    }, 2000); // Increased to 2 seconds to give more time to see the final frame
                 } else {
                     // No face detected
                     document.getElementById('statusText').textContent = "No face detected. Please try again.";
+                    // Restore original video feed
+                    document.getElementById('videoFeed').src = originalVideoSrc;
                     // Reset UI after a delay
                     setTimeout(resetUI, 3000);
                 }
@@ -451,8 +463,8 @@
                 // Not started or error
                 document.getElementById('statusText').textContent = "Recognition not active.";
                 clearInterval(progressInterval);
-                // Hide the processing overlay
-                document.getElementById('processingOverlay').classList.add('d-none');
+                // Restore original video feed
+                document.getElementById('videoFeed').src = originalVideoSrc;
                 // Reset UI after a delay
                 setTimeout(resetUI, 3000);
             }
@@ -468,21 +480,21 @@
             // After 3 timeouts, try resetting camera and restarting
             if (timeoutErrorCount >= 3) {
                 document.getElementById('statusText').textContent = "Connection issues. Resetting camera...";
-                // Hide the processing overlay
-                document.getElementById('processingOverlay').classList.add('d-none');
                 resetCameraResources();
                 timeoutErrorCount = 0;
+                
+                // Restore original video feed
+                document.getElementById('videoFeed').src = originalVideoSrc;
                 
                 // Reset UI after a delay
                 setTimeout(resetUI, 5000);
             } else {
                 // Retry the status check after a short delay
-                window.statusCheckTimer = setTimeout(() => checkRecognitionStatus(progressInterval), 2000); // Increased delay for retries
+                window.statusCheckTimer = setTimeout(() => checkRecognitionStatus(progressInterval, originalVideoSrc), 2000); // Increased delay for retries
             }
         });
     }
     
-    // Function to reset UI to initial state
     function resetUI() {
         // Reset the UI to initial state
         console.log("Resetting UI");
@@ -494,12 +506,6 @@
         document.getElementById('loadingSpinner').style.display = 'none';
         document.getElementById('progressBar').style.width = '0%';
         document.getElementById('statusText').textContent = "Initializing camera...";
-        
-        // Hide processing overlay
-        document.getElementById('processingOverlay').classList.add('d-none');
-        
-        // Reload the video feed to show live camera again
-        reloadVideoFeed();
     }
 
     // Ensure DOM is fully loaded before attaching events
@@ -519,7 +525,7 @@
             startBtn.addEventListener('click', startFaceRecognition);
             console.log("Start button handler attached");
         }
-    });
+        });
     </script>
 </body>
 </html> 
