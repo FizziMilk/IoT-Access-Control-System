@@ -1,622 +1,437 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Face Recognition</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
-    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
     <style>
         body {
-            min-height: 100vh;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            background-color: #f5f5f5;
-        }
-        .container {
-            text-align: center;
-            max-width: 700px;
-            padding: 30px;
-            background-color: white;
-            border-radius: 10px;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-        }
-        .spinner-container {
-            margin: 30px auto;
-            display: none; /* Hide initially */
-        }
-        .spinner-border {
-            width: 3rem;
-            height: 3rem;
-        }
-        #startButton {
-            padding: 15px 30px;
-            font-size: 1.2rem;
-        }
-        #instructions {
-            margin-bottom: 25px;
-        }
-        #videoFeed {
-            width: 100%;
-            max-width: 640px;
-            height: auto;
-            margin: 20px auto;
-            border: 2px solid #ddd;
-            border-radius: 5px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
-        }
-        #processingText {
-            display: none;
-            margin: 10px 0;
-            background-color: rgba(0,0,0,0.7);
-            color: white;
-            padding: 10px;
-            border-radius: 5px;
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            z-index: 10;
-            max-width: 90%;
+            padding: 20px;
         }
         .video-container {
             position: relative;
-            margin: 20px auto;
+            width: 100%;
             max-width: 640px;
+            margin: 0 auto;
+            text-align: center;
         }
-        .button-group {
-            display: flex;
-            justify-content: center;
-            gap: 10px;
-            margin-bottom: 20px;
-        }
-        #resetCameraButton {
-            padding: 10px 15px;
-        }
-        .distance-warning {
-            background-color: rgba(255, 193, 7, 0.85);
-            color: #000;
-            padding: 15px;
+        #video {
+            width: 100%;
+            border: 1px solid #ddd;
             border-radius: 5px;
-            font-weight: bold;
-            margin-top: 20px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
-            animation: pulse 2s infinite;
+            background-color: #f8f8f8;
         }
-        .distance-error {
-            background-color: rgba(220, 53, 69, 0.85);
-            color: white;
-            padding: 15px;
+        .controls {
+            margin-top: 20px;
+            text-align: center;
+        }
+        #debug-frame-container {
+            margin-top: 20px;
+            display: none;
+        }
+        #debug-frame {
+            max-width: 100%;
+            border: 1px solid #ddd;
             border-radius: 5px;
-            font-weight: bold;
-            margin-top: 20px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
-            animation: pulse 2s infinite;
         }
-        @keyframes pulse {
-            0% { transform: scale(1); }
-            50% { transform: scale(1.03); }
-            100% { transform: scale(1); }
+        .loading-container {
+            margin: 20px 0;
+            text-align: center;
+            display: none;
         }
-        #retryButton {
-            font-size: 1.1rem;
-            padding: 8px 20px;
-            background-color: #28a745;
-            border-color: #28a745;
-            transition: all 0.3s;
+        .processing-text {
+            margin-top: 10px;
+            display: none;
         }
-        #retryButton:hover {
-            background-color: #218838;
-            transform: scale(1.05);
+        .debug-section {
+            margin-top: 30px;
+            padding: 15px;
+            background-color: #f7f7f7;
+            border-radius: 5px;
         }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>Face Recognition</h1>
+        <h1 class="text-center mb-4">Face Recognition</h1>
         
-        {% with messages = get_flashed_messages(with_categories=true) %}
-            {% if messages %}
-                {% for category, message in messages %}
-                    <div class="alert alert-{{ category }}">{{ message }}</div>
-                {% endfor %}
-            {% endif %}
-        {% endwith %}
-        
-        <div id="instructions">
-            <p class="lead">Click the button below to start facial recognition.</p>
-            <p>Look directly at the camera and keep your face visible.</p>
-        </div>
-        
-        <div class="button-group">
-        <button id="startButton" class="btn btn-primary btn-lg">
-            <i class="fas fa-camera"></i> Start Face Recognition
-        </button>
-            <button id="resetCameraButton" class="btn btn-secondary">
-                <i class="fas fa-sync"></i> Reset Camera
-            </button>
-        </div>
-        
-        <div class="video-container">
-            <img id="videoFeed" src="{{ url_for('video_feed') }}" alt="Face Recognition Feed" onerror="handleVideoError(this)">
-            <div id="processingText" class="mt-2">
-                <h4>Processing your face. Please keep still...</h4>
+        <div class="row">
+            <div class="col-md-8 offset-md-2">
+                <div id="status-text"></div>
+                
+                <div id="instructions" class="alert alert-info">
+                    <h4>Instructions:</h4>
+                    <p>1. Position your face clearly in the camera view.</p>
+                    <p>2. Ensure good lighting conditions.</p>
+                    <p>3. Remove glasses or items covering your face.</p>
+                    <p>4. Click the "Start Face Recognition" button when ready.</p>
+                </div>
+                
+                <div class="video-container">
+                    <video id="video" autoplay muted></video>
+                </div>
+                
+                <div id="loading" class="loading-container">
+                    <div class="spinner-border text-primary" role="status">
+                        <span class="sr-only">Loading...</span>
+                    </div>
+                </div>
+                
+                <div id="processing-text" class="processing-text">
+                    Processing... Please look at the camera and remain still.
+                </div>
+                
+                <div id="debug-frame-container" class="text-center">
+                    <h5>Debug Image:</h5>
+                    <img id="debug-frame" alt="Debug Frame">
+                </div>
+                
+                <div id="results" class="mt-3"></div>
+                
+                <div class="controls">
+                    <button id="start-recognition" class="btn btn-secondary" disabled>Start Face Recognition</button>
+                </div>
+                
+                <div class="debug-section mt-4">
+                    <h5>Troubleshooting Tips:</h5>
+                    <ul>
+                        <li>If your face is not recognized, ensure you are registered in the system.</li>
+                        <li>Keep your face clearly visible in the frame.</li>
+                        <li>Avoid extreme lighting conditions (too bright or too dark).</li>
+                        <li>Try to keep a neutral facial expression.</li>
+                    </ul>
+                    
+                    <div class="form-check mt-3">
+                        <input class="form-check-input" type="checkbox" id="skip-liveness">
+                        <label class="form-check-label" for="skip-liveness">
+                            Skip liveness check (for testing only)
+                        </label>
+                    </div>
+                    
+                    <div class="alert alert-warning mt-3">
+                        <strong>Note:</strong> This is for testing purposes. In a production environment, liveness checks should always be enabled to prevent spoofing attempts.
+                    </div>
+                </div>
             </div>
         </div>
-        
-        <div class="spinner-container" id="loadingSpinner">
-            <div class="spinner-border text-primary" role="status">
-                <span class="visually-hidden">Loading...</span>
-            </div>
-            <p class="mt-2">Processing... Please look at the camera and keep still</p>
-            <div class="progress mt-3" style="height: 20px;">
-                <div id="progressBar" class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar" style="width: 0%"></div>
-            </div>
-            <p id="statusText" class="mt-2">Initializing camera...</p>
-        </div>
-        
-        <form id="faceForm" method="POST" style="display:none;">
-            <input type="hidden" name="face_id" id="faceIdInput">
-            <!-- No additional fields needed -->
-        </form>
-        
-        <div class="mt-4">
-            <a href="{{ url_for('door_entry') }}" class="btn btn-secondary" id="backButton">
-                <i class="fas fa-arrow-left"></i> Back
-            </a>
-        </div>
-        
-        {% if testing_mode %}
-        <div class="mt-3 alert alert-warning">
-            <strong>Testing Mode Enabled</strong>
-            <div class="form-check mt-2">
-                <input class="form-check-input" type="checkbox" id="skipLivenessCheck">
-                <label class="form-check-label" for="skipLivenessCheck">
-                    Skip liveness detection (for testing only)
-                </label>
-            </div>
-        </div>
-        {% endif %}
     </div>
-    
+
     <script>
-    console.log("Script initializing at: " + new Date().toISOString());
-
-    // Reset camera resources function
-    function resetCameraResources() {
-        $('#resetCameraButton').prop('disabled', true).html('<i class="fas fa-spinner fa-spin"></i> Resetting...');
-        
-        $.ajax({
-            url: '/reset-camera-resources',
-            method: 'POST',
-            success: function(response) {
-                console.log('Camera reset successful:', response);
-                
-                // Reload the video feed
-                reloadVideoFeed();
-                
-                $('#statusText').text('Camera reset successful');
-            },
-            error: function(xhr, status, error) {
-                console.error('Error resetting camera:', error);
-                $('#statusText').text('Error resetting camera: ' + error);
-            },
-            complete: function() {
-                $('#resetCameraButton').prop('disabled', false).html('<i class="fas fa-sync"></i> Reset Camera');
-                
-                // Display a notification
-                const notification = $('<div class="alert alert-success alert-dismissible fade show" role="alert">' +
-                    'Camera reset completed. If video still doesn\'t appear, try refreshing the page.' +
-                    '<button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>' +
-                    '</div>');
-                
-                // Insert notification at the top of the container
-                $('.container').prepend(notification);
-                
-                // Auto-dismiss after 5 seconds
-                setTimeout(function() {
-                    try {
-                        notification.alert('close');
-                    } catch (e) {
-                        console.log('Error closing alert:', e);
-                        notification.remove();
-                    }
-                }, 5000);
-            }
-        });
-    }
-    
-    // Reload video feed
-    function reloadVideoFeed() {
-        console.log("Reloading video feed");
-        const videoFeed = document.getElementById('videoFeed');
-        if (videoFeed) {
-            if (videoFeed.src.includes('?')) {
-                videoFeed.src = videoFeed.src.split('?')[0] + '?t=' + new Date().getTime();
-            } else {
-                videoFeed.src = videoFeed.src + '?t=' + new Date().getTime();
-            }
-        }
-    }
-    
-    // Function to start face recognition process
-    function startFaceRecognition() {
-        console.log("Starting face recognition at: " + new Date().toISOString());
-        
-        // Hide the instructions and button
-        document.getElementById('instructions').style.display = 'none';
-        document.getElementById('startButton').style.display = 'none';
-        document.getElementById('resetCameraButton').style.display = 'none';
-        document.getElementById('backButton').style.display = 'none';
-        
-        // Show the processing text
-        document.getElementById('processingText').style.display = 'block';
-        
-        // Show the loading spinner
-        document.getElementById('loadingSpinner').style.display = 'block';
-        
-        // Save the current video src to restore it later if needed
-        const videoFeed = document.getElementById('videoFeed');
-        const originalVideoSrc = videoFeed.src;
-        
-        // Capture a preview frame first
-        console.log("Capturing preview frame");
-        fetch("/capture-preview-frame", { 
-            method: 'POST'
-        })
-        .then(response => response.json())
-        .then(data => {
-            if (data.success) {
-                console.log("Preview frame captured successfully:", data.filename);
-                // Display the static preview frame
-                videoFeed.src = `/static/debug_frames/${data.filename}?t=${new Date().getTime()}`;
-                // Add a processing overlay to indicate system is working
-                document.getElementById('processingText').innerHTML = 
-                    "<h4>Processing your face. Please wait...</h4>" +
-                    "<p>Your image has been captured and is being analyzed</p>";
-            } else {
-                console.error("Failed to capture preview frame:", data.error);
-            }
-            
-            // Continue with face recognition
-            startActualFaceRecognition(originalVideoSrc);
-        })
-        .catch(error => {
-            console.error("Error capturing preview frame:", error);
-            // Continue with face recognition even if preview capture fails
-            startActualFaceRecognition(originalVideoSrc);
-        });
-    }
-    
-    // Function to start the actual face recognition process after preview capture
-    function startActualFaceRecognition(originalVideoSrc) {
-        // Animate the progress bar
-        let progressBar = document.getElementById('progressBar');
-        let statusText = document.getElementById('statusText');
-        let progress = 0;
-        let statusMessages = [
-            "Initializing face recognition...",
-            "Looking for face...",
-            "Performing liveness check...",
-            "Analyzing facial features...",
-            "Matching with database...",
-            "Almost done..."
-        ];
-        
-        // Start progress animation
-        let progressInterval = setInterval(function() {
-            progress += 1;
-            if (progress <= 100) {
-                progressBar.style.width = progress + '%';
-                
-                // Update status text at certain progress points
-                if (progress === 10) {
-                    statusText.textContent = statusMessages[1];
-                } else if (progress === 30) {
-                    statusText.textContent = statusMessages[2];
-                } else if (progress === 50) {
-                    statusText.textContent = statusMessages[3];
-                } else if (progress === 70) {
-                    statusText.textContent = statusMessages[4];
-                } else if (progress === 90) {
-                    statusText.textContent = statusMessages[5];
-                }
-            }
-        }, 500); // Updates every 500ms
-        
-        // Check if skip liveness is checked (in testing mode)
-        var skipLivenessElement = document.getElementById('skipLivenessCheck');
-        var skipLiveness = skipLivenessElement && skipLivenessElement.checked;
-        
-        // Reset the error counters
-        videoErrorCount = 0;
-        timeoutErrorCount = 0;
-        
-        // Ensure that any previous lingering status checks are not running
-        if (window.statusCheckTimer) {
-            clearTimeout(window.statusCheckTimer);
-            window.statusCheckTimer = null;
-        }
-        
-        // Track when recognition started
-        window.recognitionStartTime = new Date().getTime();
-        
-        // Start face recognition via AJAX
-        console.log("Sending POST request to start face recognition");
-        fetch("{{ url_for('start_face_recognition') }}", {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/x-www-form-urlencoded',
-            },
-            body: skipLiveness ? 'skip_liveness=true' : ''
-        })
-        .then(response => {
-            console.log("Received response from start_face_recognition:", response.status);
-            return response.json();
-        })
-        .then(data => {
-            console.log("Recognition started, waiting before beginning status checks");
-            
-            // Add a delay before starting status checks to allow backend to initialize
-            setTimeout(() => {
-                console.log("Starting recognition status checks");
-                checkRecognitionStatus(progressInterval, originalVideoSrc);
-            }, 1000); // 1 second delay (reduced from 2 seconds) to avoid race condition
-        })
-        .catch(error => {
-            console.error('Error starting face recognition:', error);
-            clearInterval(progressInterval);
-            statusText.textContent = "Error starting face recognition. Resetting camera...";
-            
-            // Try resetting camera
-            resetCameraResources();
-            
-            // Restore original video feed
-            document.getElementById('videoFeed').src = originalVideoSrc;
-            
-            // Show error and reset UI after a delay
-            setTimeout(resetUI, 5000);
-        });
-    }
-    
-    // Handle video feed errors with auto-reset after multiple failures
+    // Initialize variables
+    let videoInitialized = false;
     let videoErrorCount = 0;
-    function handleVideoError(img) {
-        videoErrorCount++;
-        console.log(`Video feed error #${videoErrorCount}`);
-        
-        // After 3 failures, try resetting camera automatically
-        if (videoErrorCount === 3) {
-            $('#statusText').text('Camera issues detected. Attempting auto-reset...');
-            resetCameraResources();
+    const MAX_VIDEO_ERRORS = 3;
+    let recognitionStarted = false;
+    let recognitionAttempts = 0;
+    const MAX_RECOGNITION_ATTEMPTS = 2;
+    let statusCheckInterval = null;
+
+    // Elements
+    const video = document.getElementById('video');
+    const statusText = document.getElementById('status-text');
+    const startButton = document.getElementById('start-recognition');
+    const instructionsElement = document.getElementById('instructions');
+    const loadingElement = document.getElementById('loading');
+    const processingElement = document.getElementById('processing-text');
+    const resultsElement = document.getElementById('results');
+    const debugFrameElement = document.getElementById('debug-frame');
+    const debugFrameContainer = document.getElementById('debug-frame-container');
+    
+    // Initialize video
+    function initializeVideo() {
+        // Set up video events
+        video.onloadeddata = function() {
+            console.log("Video feed loaded successfully");
+            videoInitialized = true;
             videoErrorCount = 0;
-            return;
-        }
+            startButton.disabled = false;
+            startButton.classList.remove('btn-secondary');
+            startButton.classList.add('btn-primary');
+        };
         
-        // If video feed fails to load, try again after a short delay
-        setTimeout(function() {
-            if (img.src.includes('?')) {
-                img.src = img.src.split('?')[0] + '?t=' + new Date().getTime();
+        video.onerror = function(e) {
+            console.error("Video error:", e);
+            videoErrorCount++;
+            
+            if (videoErrorCount >= MAX_VIDEO_ERRORS) {
+                statusText.innerHTML = '<div class="alert alert-danger">Camera not available. Please check your camera connection and refresh the page.</div>';
+                startButton.disabled = true;
             } else {
-                img.src = img.src + '?t=' + new Date().getTime();
+                console.log(`Video error ${videoErrorCount}, attempting reload in 2 seconds...`);
+                setTimeout(reloadVideoSource, 2000);
             }
-        }, 1000);
+        };
+        
+        // Initial load of video source
+        reloadVideoSource();
     }
     
-    // Monitor for request timeouts on the status check
-    let timeoutErrorCount = 0;
-    function checkRecognitionStatus(progressInterval, originalVideoSrc) {
-        console.log("Checking recognition status");
-        
-        // Clear any previous timeout
-        if (window.statusCheckTimer) {
-            clearTimeout(window.statusCheckTimer);
-        }
-        
-        // Timeout or abort recognition if it takes too long (60 seconds)
-        const elapsedTime = new Date().getTime() - window.recognitionStartTime;
-        if (elapsedTime > 60000) {
-            console.error('Face recognition timeout after 60 seconds');
-            clearInterval(progressInterval);
-            document.getElementById('statusText').textContent = "Face recognition timed out. Resetting camera...";
-            resetCameraResources();
-            
-            // Restore original video feed
-            document.getElementById('videoFeed').src = originalVideoSrc;
-            
-            setTimeout(resetUI, 5000);
+    // Reload video source
+    function reloadVideoSource() {
+        const timestamp = new Date().getTime();
+        video.src = `/video_feed?t=${timestamp}`;
+    }
+    
+    // Check if video is initialized
+    function isVideoInitialized() {
+        return videoInitialized && video.readyState >= 2;
+    }
+    
+    // Start face recognition
+    function startFaceRecognition() {
+        if (!isVideoInitialized()) {
+            statusText.innerHTML = '<div class="alert alert-warning">Camera is not ready yet. Please wait a moment and try again.</div>';
             return;
         }
         
-        const timeoutPromise = new Promise((_, reject) => {
-            setTimeout(() => reject(new Error('Request timeout')), 5000);
-        });
+        if (recognitionStarted) {
+            statusText.innerHTML = '<div class="alert alert-info">Face recognition is already in progress.</div>';
+            return;
+        }
         
-        Promise.race([
-            fetch("{{ url_for('check_face_recognition_status') }}"),
-            timeoutPromise
-        ])
+        recognitionStarted = true;
+        recognitionAttempts++;
+        
+        // Update UI
+        instructionsElement.style.display = 'none';
+        loadingElement.style.display = 'block';
+        processingElement.style.display = 'block';
+        statusText.innerHTML = '<div class="alert alert-info">Starting face recognition...</div>';
+        startButton.disabled = true;
+        resultsElement.style.display = 'none';
+        debugFrameContainer.style.display = 'none';
+        
+        // Reset video if needed
+        if (recognitionAttempts > 1) {
+            fetch('/reset-camera-resources', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                }
+            })
+            .then(response => response.json())
+            .then(data => {
+                console.log("Camera resources reset:", data);
+                setTimeout(startRecognitionRequest, 1000);
+            })
+            .catch(error => {
+                console.error("Error resetting camera:", error);
+                startRecognitionRequest();
+            });
+        } else {
+            startRecognitionRequest();
+        }
+    }
+    
+    // Make the recognition request
+    function startRecognitionRequest() {
+        // Get skip liveness value
+        const skipLiveness = document.getElementById('skip-liveness').checked;
+        
+        // Create form data
+        const formData = new FormData();
+        formData.append('skip_liveness', skipLiveness ? 'true' : 'false');
+        
+        // Start recognition
+        fetch('/start-face-recognition', {
+            method: 'POST',
+            body: formData
+        })
         .then(response => response.json())
         .then(data => {
-            // Reset timeout error counter on successful response
-            timeoutErrorCount = 0;
+            console.log("Start recognition response:", data);
             
-            if (data.status === 'processing') {
-                // Still processing, check again in a moment
-                window.statusCheckTimer = setTimeout(() => checkRecognitionStatus(progressInterval, originalVideoSrc), 500); // Reduced from 1000ms for more responsive feedback
-            } else if (data.status === 'face_too_small') {
-                // Face detected but too small - show guidance to the user
-                console.log("Face detected but too small/far away:", data.result);
-                
-                // Show the final debug frame showing the too-small face
-                if (data.result && data.result.debug_frame) {
-                    try {
-                        document.getElementById('videoFeed').src = 
-                            `/static/debug_frames/${data.result.debug_frame}?t=${new Date().getTime()}`;
-                    } catch (e) {
-                        console.error("Error displaying face-too-small debug frame:", e);
-                    }
-                }
-                
-                // Update progress bar to show we're waiting for user to adjust
-                clearInterval(progressInterval);
-                document.getElementById('progressBar').style.width = '50%';
-                document.getElementById('progressBar').classList.add('bg-warning');
-                
-                // Show distance feedback based on how far they are
-                let distanceMessage = "Please move closer to the camera";
-                let distanceClass = "distance-warning";
-                
-                if (data.result && data.result.distance_feedback === "much_too_far") {
-                    distanceMessage = "You are too far away. Please move much closer to the camera.";
-                    distanceClass = "distance-error";
-                } else if (data.result && data.result.distance_feedback === "too_far") {
-                    distanceMessage = "You are slightly too far. Please move a bit closer to the camera.";
-                    distanceClass = "distance-warning";
-                }
-                
-                document.getElementById('statusText').innerHTML = 
-                    `<div class="${distanceClass}"><i class="fas fa-exclamation-triangle"></i> ${distanceMessage}</div>`;
-                
-                // Display instructions
-                document.getElementById('processingText').innerHTML = 
-                    `<h4>Face detected but too small for recognition</h4>
-                     <p>Please adjust your position and look directly at the camera.</p>
-                     <p><button id="retryButton" class="btn btn-primary mt-2">Try Again</button></p>`;
-                
-                // Make the processing text more visible
-                document.getElementById('processingText').style.display = 'block';
-                document.getElementById('processingText').style.backgroundColor = 'rgba(0,0,0,0.7)';
-                document.getElementById('processingText').style.padding = '20px';
-                
-                // Add event listener to the retry button
-                document.getElementById('retryButton').addEventListener('click', function() {
-                    // Reset UI and restart recognition
-                    document.getElementById('statusText').textContent = "Starting new recognition attempt...";
-                    document.getElementById('progressBar').classList.remove('bg-warning');
-                    document.getElementById('progressBar').style.width = '0%';
-                    startFaceRecognition();
-                });
-                
-            } else if (data.status === 'complete') {
-                // Recognition complete, get the final debug frame
-                console.log("Recognition complete with result:", data.result);
-                document.getElementById('statusText').textContent = "Recognition complete!";
-                clearInterval(progressInterval);
-                document.getElementById('progressBar').style.width = '100%';
-                
-                // Check if the result contains face data
-                if (data.result && data.result.face_detected) {
-                    // If there's debug frame information, try to display it
-                    if (data.result.debug_frame) {
-                        console.log("Displaying final debug frame:", data.result.debug_frame);
-                        try {
-                            document.getElementById('videoFeed').src = 
-                                `/static/debug_frames/${data.result.debug_frame}?t=${new Date().getTime()}`;
-                        } catch (e) {
-                            console.error("Error displaying final debug frame:", e);
-                        }
-                    }
-                    
-                    // Generate a unique face ID
-                    const faceId = Date.now().toString(36) + Math.random().toString(36).substr(2);
-                    
-                    // Set the face ID in the hidden input
-                    document.getElementById('faceIdInput').value = faceId;
-                    
-                    // Store the debug frame filename in the form if available
-                    if (data.result.debug_frame) {
-                        const debugFrameInput = document.createElement('input');
-                        debugFrameInput.type = 'hidden';
-                        debugFrameInput.name = 'debug_frame';
-                        debugFrameInput.value = data.result.debug_frame;
-                        document.getElementById('faceForm').appendChild(debugFrameInput);
-                    }
-                    
-                    // Set the form action with the face ID
-                    const form = document.getElementById('faceForm');
-                    form.action = "/process-face/" + faceId;
-                    
-                    // Give a moment to see the complete status before submitting
-                    setTimeout(() => {
-                        console.log("Submitting form to process face");
-                        form.submit();
-                    }, 2000); // Increased to 2 seconds to give more time to see the final frame
-                } else {
-                    // No face detected
-                    document.getElementById('statusText').textContent = "No face detected. Please try again.";
-                    // Restore original video feed
-                    document.getElementById('videoFeed').src = originalVideoSrc;
-                    // Reset UI after a delay
-                    setTimeout(resetUI, 3000);
-                }
+            if (data.status === 'started') {
+                // Start checking status
+                statusText.innerHTML = '<div class="alert alert-info">Processing... Please look at the camera and remain still.</div>';
+                startStatusChecking();
             } else {
-                // Not started or error
-                document.getElementById('statusText').textContent = "Recognition not active.";
-                clearInterval(progressInterval);
-                // Restore original video feed
-                document.getElementById('videoFeed').src = originalVideoSrc;
-                // Reset UI after a delay
-                setTimeout(resetUI, 3000);
+                statusText.innerHTML = `<div class="alert alert-danger">Error starting recognition: ${data.message || 'Unknown error'}</div>`;
+                resetUI();
             }
         })
         .catch(error => {
-            console.error('Error checking recognition status:', error);
-            clearInterval(progressInterval);
-            document.getElementById('statusText').textContent = "Error checking status. Retrying...";
-            
-            // Count timeout errors
-            timeoutErrorCount++;
-            
-            // After 3 timeouts, try resetting camera and restarting
-            if (timeoutErrorCount >= 3) {
-                document.getElementById('statusText').textContent = "Connection issues. Resetting camera...";
-                resetCameraResources();
-                timeoutErrorCount = 0;
-                
-                // Restore original video feed
-                document.getElementById('videoFeed').src = originalVideoSrc;
-                
-                // Reset UI after a delay
-                setTimeout(resetUI, 5000);
-            } else {
-                // Retry the status check after a short delay
-                window.statusCheckTimer = setTimeout(() => checkRecognitionStatus(progressInterval, originalVideoSrc), 1000); // Reduced from 2000ms for faster recovery
-            }
+            console.error("Error starting recognition:", error);
+            statusText.innerHTML = '<div class="alert alert-danger">Error starting recognition. Please try again.</div>';
+            resetUI();
         });
     }
     
-    function resetUI() {
-        // Reset the UI to initial state
-        console.log("Resetting UI");
-        document.getElementById('instructions').style.display = 'block';
-        document.getElementById('startButton').style.display = 'inline-block';
-        document.getElementById('resetCameraButton').style.display = 'inline-block';
-        document.getElementById('backButton').style.display = 'inline-block';
-        document.getElementById('processingText').style.display = 'none';
-        document.getElementById('loadingSpinner').style.display = 'none';
-        document.getElementById('progressBar').style.width = '0%';
-        document.getElementById('statusText').textContent = "Initializing camera...";
+    // Check recognition status
+    function startStatusChecking() {
+        if (statusCheckInterval) {
+            clearInterval(statusCheckInterval);
+        }
+        
+        // Check status every 1 second
+        statusCheckInterval = setInterval(checkRecognitionStatus, 1000);
+        
+        // Also set a timeout to stop checking after 30 seconds
+        setTimeout(() => {
+            if (statusCheckInterval) {
+                clearInterval(statusCheckInterval);
+                statusCheckInterval = null;
+                
+                if (recognitionStarted) {
+                    statusText.innerHTML = '<div class="alert alert-danger">Recognition timed out. Please try again.</div>';
+                    resetUI();
+                }
+            }
+        }, 30000);
     }
-
-    // Ensure DOM is fully loaded before attaching events
-    document.addEventListener('DOMContentLoaded', function() {
-        console.log("DOM fully loaded, attaching event handlers");
-        
-        // Safely attach event to reset button
-        const resetBtn = document.getElementById('resetCameraButton');
-        if (resetBtn) {
-            resetBtn.addEventListener('click', resetCameraResources);
-            console.log("Reset button handler attached");
-        }
-        
-        // Safely attach event to start button
-        const startBtn = document.getElementById('startButton');
-        if (startBtn) {
-            startBtn.addEventListener('click', startFaceRecognition);
-            console.log("Start button handler attached");
-        }
+    
+    // Check recognition status
+    function checkRecognitionStatus() {
+        fetch('/check-face-recognition-status')
+        .then(response => response.json())
+        .then(data => {
+            console.log("Recognition status:", data);
+            
+            // Process based on status
+            switch (data.status) {
+                case 'not_started':
+                    statusText.innerHTML = '<div class="alert alert-info">Face recognition has not been started yet.</div>';
+                    resetUI(true);
+                    break;
+                    
+                case 'starting':
+                    statusText.innerHTML = '<div class="alert alert-info">Starting face recognition...</div>';
+                    break;
+                    
+                case 'processing':
+                    statusText.innerHTML = '<div class="alert alert-info">Processing... Please look at the camera and remain still.</div>';
+                    break;
+                    
+                case 'complete':
+                    // Recognition complete
+                    clearInterval(statusCheckInterval);
+                    statusCheckInterval = null;
+                    loadingElement.style.display = 'none';
+                    processingElement.style.display = 'none';
+                    
+                    // Get the result
+                    const result = data.result || {};
+                    
+                    // Show debug frame if available
+                    if (result.debug_frame) {
+                        showDebugFrame(result.debug_frame);
+                    }
+                    
+                    // Process result
+                    if (result.success === false) {
+                        statusText.innerHTML = `<div class="alert alert-warning">${result.message || 'Error processing face recognition.'}</div>`;
+                    } else if (!result.matches || result.matches.length === 0) {
+                        statusText.innerHTML = '<div class="alert alert-warning">No face matched. Please register first to gain access.</div>';
+                    } else if (result.best_match) {
+                        // Face matched - process the face
+                        processRecognizedFace(result.best_match);
+                    } else {
+                        statusText.innerHTML = '<div class="alert alert-warning">Face recognition completed but no match found.</div>';
+                    }
+                    
+                    resetUI(false);
+                    break;
+                    
+                case 'error':
+                    clearInterval(statusCheckInterval);
+                    statusCheckInterval = null;
+                    loadingElement.style.display = 'none';
+                    processingElement.style.display = 'none';
+                    
+                    // Show error
+                    if (data.result && data.result.message) {
+                        statusText.innerHTML = `<div class="alert alert-danger">Error during recognition: ${data.result.message}</div>`;
+                    } else {
+                        statusText.innerHTML = '<div class="alert alert-danger">Error during recognition. Please try again.</div>';
+                    }
+                    
+                    resetUI(false);
+                    break;
+                    
+                default:
+                    statusText.innerHTML = '<div class="alert alert-info">Checking recognition status...</div>';
+            }
+        })
+        .catch(error => {
+            console.error("Error checking recognition status:", error);
+            statusText.innerHTML = '<div class="alert alert-danger">Error checking recognition status. Please try again.</div>';
+            resetUI(true);
         });
-    </script>
+    }
+    
+    // Process recognized face
+    function processRecognizedFace(faceMatch) {
+        try {
+            // Extract face match data
+            if (typeof faceMatch === 'string') {
+                try {
+                    faceMatch = JSON.parse(faceMatch);
+                } catch (e) {
+                    console.error("Error parsing face match JSON:", e);
+                    statusText.innerHTML = '<div class="alert alert-danger">Error processing face match data. Please try again.</div>';
+                    return;
+                }
+            }
+            
+            const userId = faceMatch.id;
+            const userName = faceMatch.name || 'Unknown';
+            
+            // Show success message
+            statusText.innerHTML = `<div class="alert alert-success">Welcome, ${userName}! Processing access...</div>`;
+            
+            // Submit form to process face
+            const form = document.createElement('form');
+            form.method = 'POST';
+            form.action = `/process-face/${userId}`;
+            document.body.appendChild(form);
+            form.submit();
+        } catch (error) {
+            console.error("Error processing face match:", error);
+            statusText.innerHTML = '<div class="alert alert-danger">Error processing recognition result. Please try again.</div>';
+        }
+    }
+    
+    // Show debug frame
+    function showDebugFrame(debugFrameName) {
+        if (debugFrameName) {
+            const debugFramePath = `/static/debug_frames/${debugFrameName}`;
+            debugFrameElement.src = debugFramePath;
+            debugFrameContainer.style.display = 'block';
+            console.log("Showing debug frame:", debugFramePath);
+        }
+    }
+    
+    // Reset UI
+    function resetUI(fullReset = true) {
+        startButton.disabled = false;
+        
+        if (fullReset) {
+            recognitionStarted = false;
+            instructionsElement.style.display = 'block';
+            loadingElement.style.display = 'none';
+            processingElement.style.display = 'none';
+        }
+    }
+    
+    // Error handling for video feed
+    function handleVideoError() {
+        console.error("Video feed error detected");
+        
+        // Try to reload the video feed after a delay
+        setTimeout(() => {
+            reloadVideoSource();
+        }, 2000);
+    }
+    
+    // Initialize on load
+    document.addEventListener('DOMContentLoaded', function() {
+        initializeVideo();
+        
+        // Set up button event
+        startButton.addEventListener('click', startFaceRecognition);
+    });
+</script>
+
 </body>
 </html> 
