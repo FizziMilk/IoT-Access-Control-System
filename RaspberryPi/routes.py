@@ -1096,6 +1096,310 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
             
         return render_template('face_recognition_simple.html')
     
+    @app.route('/camera-diagnostic')
+    def camera_diagnostic():
+        """Diagnostic page for camera hardware troubleshooting"""
+        # Pass initial empty values
+        return render_template('camera_diagnostic.html', 
+                              camera_status=False, 
+                              camera_info=None,
+                              process_info=None,
+                              test_result=None,
+                              test_image=None)
+    
+    @app.route('/check-camera-hardware', methods=['POST'])
+    def check_camera_hardware():
+        """Check camera hardware status"""
+        camera_info = ""
+        camera_status = False
+        
+        try:
+            # Try to get system camera info
+            if platform.system() == 'Linux':
+                # On Linux, check for video devices
+                try:
+                    result = subprocess.run('ls -l /dev/video*', shell=True, capture_output=True, text=True)
+                    camera_info += "Video devices:\n" + result.stdout + "\n\n"
+                    
+                    if "/dev/video" in result.stdout:
+                        camera_status = True
+                except Exception as e:
+                    camera_info += f"Error checking video devices: {str(e)}\n\n"
+                
+                # Check loaded modules
+                try:
+                    result = subprocess.run('lsmod | grep -E "video|camera|uvc"', shell=True, capture_output=True, text=True)
+                    camera_info += "Camera related kernel modules:\n" + result.stdout + "\n\n"
+                except Exception as e:
+                    camera_info += f"Error checking kernel modules: {str(e)}\n\n"
+                    
+                # Check dmesg for camera info
+                try:
+                    result = subprocess.run('dmesg | grep -E "camera|video|uvc" | tail -20', shell=True, capture_output=True, text=True)
+                    camera_info += "Camera messages from dmesg:\n" + result.stdout + "\n\n"
+                except Exception as e:
+                    camera_info += f"Error checking dmesg: {str(e)}\n\n"
+                    
+            elif platform.system() == 'Windows':
+                # On Windows, use DirectShow device enumeration via PowerShell
+                try:
+                    ps_command = """
+                    Add-Type -AssemblyName System.Windows.Forms
+                    [System.Windows.Forms.Screen]::AllScreens | ForEach-Object {
+                        "Display: " + $_.DeviceName + " Primary: " + $_.Primary + " Bounds: " + $_.Bounds
+                    }
+                    
+                    # Try to get webcam info via WMI
+                    Get-WmiObject Win32_PnPEntity | Where-Object {$_.Caption -like "*webcam*" -or $_.Caption -like "*camera*"} | Select-Object Caption, DeviceID
+                    """
+                    result = subprocess.run(['powershell', '-Command', ps_command], capture_output=True, text=True)
+                    camera_info += "System camera devices:\n" + result.stdout + "\n\n"
+                    
+                    # If we found any cameras, set status to true
+                    if "webcam" in result.stdout.lower() or "camera" in result.stdout.lower():
+                        camera_status = True
+                except Exception as e:
+                    camera_info += f"Error checking Windows camera devices: {str(e)}\n\n"
+            
+            # Try OpenCV camera detection
+            camera_info += "Attempting OpenCV camera detection:\n"
+            for idx in range(3):  # Try first 3 indices
+                try:
+                    cam = cv2.VideoCapture(idx)
+                    time.sleep(0.5)  # Give camera time to initialize
+                    
+                    if cam.isOpened():
+                        camera_status = True
+                        # Get camera properties
+                        width = cam.get(cv2.CAP_PROP_FRAME_WIDTH)
+                        height = cam.get(cv2.CAP_PROP_FRAME_HEIGHT)
+                        fps = cam.get(cv2.CAP_PROP_FPS)
+                        
+                        camera_info += f"Camera {idx}: Available\n"
+                        camera_info += f"  Resolution: {width}x{height}\n"
+                        camera_info += f"  FPS: {fps}\n"
+                        
+                        # Try to grab a frame
+                        ret, frame = cam.read()
+                        if ret:
+                            camera_info += f"  Frame capture: Success\n"
+                        else:
+                            camera_info += f"  Frame capture: Failed\n"
+                            
+                        # Release the camera
+                        cam.release()
+                    else:
+                        camera_info += f"Camera {idx}: Not available\n"
+                        
+                except Exception as e:
+                    camera_info += f"Error testing camera {idx}: {str(e)}\n"
+                    
+        except Exception as e:
+            camera_info += f"Error during hardware check: {str(e)}\n"
+            logger.error(f"Error in camera hardware check: {str(e)}")
+            logger.error(traceback.format_exc())
+            
+        # Return the diagnostic page with results
+        return render_template('camera_diagnostic.html', 
+                              camera_status=camera_status, 
+                              camera_info=camera_info,
+                              process_info=None,
+                              test_result=None,
+                              test_image=None)
+    
+    @app.route('/check-camera-processes', methods=['POST'])
+    def check_camera_processes():
+        """Check for processes that might be using the camera"""
+        process_info = ""
+        
+        try:
+            if platform.system() == 'Linux':
+                # Check processes using video devices
+                try:
+                    result = subprocess.run('sudo fuser -v /dev/video* 2>&1', shell=True, capture_output=True, text=True)
+                    process_info += "Processes using video devices:\n" + result.stdout + "\n\n"
+                    
+                    # If no processes found, mention it
+                    if not result.stdout.strip():
+                        process_info += "No processes found using video devices.\n\n"
+                except Exception as e:
+                    process_info += f"Error checking processes: {str(e)}\n\n"
+                    
+                # List running processes related to camera
+                try:
+                    result = subprocess.run('ps aux | grep -E "ffmpeg|gstreamer|v4l|camera|opencv|python" | grep -v grep', 
+                                          shell=True, capture_output=True, text=True)
+                    process_info += "Camera-related processes:\n" + result.stdout + "\n"
+                except Exception as e:
+                    process_info += f"Error listing processes: {str(e)}\n\n"
+                    
+            elif platform.system() == 'Windows':
+                # On Windows, check processes that might be using the camera
+                try:
+                    ps_command = """
+                    Get-Process | Where-Object {$_.ProcessName -match 'ffmpeg|camera|opencv|python|vlc|obs'} | 
+                    Select-Object ProcessName, Id, CPU, WorkingSet | Format-Table -AutoSize | Out-String -Width 4096
+                    """
+                    result = subprocess.run(['powershell', '-Command', ps_command], capture_output=True, text=True)
+                    process_info += "Processes that might be using camera:\n" + result.stdout + "\n"
+                except Exception as e:
+                    process_info += f"Error checking Windows processes: {str(e)}\n\n"
+            
+            # Check OpenCV processes specifically
+            try:
+                if platform.system() == 'Linux':
+                    result = subprocess.run('ps aux | grep -i opencv | grep -v grep', shell=True, capture_output=True, text=True)
+                    process_info += "OpenCV processes:\n" + result.stdout + "\n"
+                elif platform.system() == 'Windows':
+                    ps_command = "Get-Process | Where-Object {$_.ProcessName -match 'opencv'} | Format-Table -AutoSize"
+                    result = subprocess.run(['powershell', '-Command', ps_command], capture_output=True, text=True)
+                    process_info += "OpenCV processes:\n" + result.stdout + "\n"
+            except Exception as e:
+                process_info += f"Error checking OpenCV processes: {str(e)}\n\n"
+                
+        except Exception as e:
+            process_info += f"Error checking camera processes: {str(e)}\n"
+            logger.error(f"Error checking camera processes: {str(e)}")
+        
+        # Return the diagnostic page with results
+        return render_template('camera_diagnostic.html', 
+                              camera_status=False, 
+                              camera_info=None,
+                              process_info=process_info,
+                              test_result=None,
+                              test_image=None)
+    
+    @app.route('/kill-camera-processes', methods=['POST'])
+    def kill_camera_processes():
+        """Force kill processes that might be using the camera"""
+        process_info = "Attempting to kill camera processes:\n\n"
+        
+        try:
+            if platform.system() == 'Linux':
+                # Kill processes using video devices
+                try:
+                    result = subprocess.run('sudo fuser -k /dev/video* 2>&1', shell=True, capture_output=True, text=True)
+                    process_info += "Killed processes using video devices:\n" + result.stdout + "\n\n"
+                except Exception as e:
+                    process_info += f"Error killing processes: {str(e)}\n\n"
+                    
+                # Kill specific camera-related processes
+                try:
+                    subprocess.run('pkill -f "ffmpeg|gstreamer|v4l"', shell=True)
+                    process_info += "Sent kill signal to camera-related processes.\n\n"
+                except Exception as e:
+                    process_info += f"Error killing camera processes: {str(e)}\n\n"
+                    
+            elif platform.system() == 'Windows':
+                # On Windows, use taskkill to terminate camera processes
+                try:
+                    # Kill processes that might be using the camera
+                    result = subprocess.run('taskkill /F /IM opencv_videoio_ffmpeg*.exe', shell=True, capture_output=True, text=True)
+                    process_info += "Killed OpenCV video processes:\n" + result.stdout + "\n\n"
+                except Exception as e:
+                    process_info += f"Error killing Windows camera processes: {str(e)}\n\n"
+            
+            # Sleep to give OS time to release resources
+            time.sleep(1.0)
+            process_info += "Camera resources should now be released.\n"
+            
+            # Add a success message
+            flash("Camera processes terminated. Try using the camera now.", "success")
+                
+        except Exception as e:
+            process_info += f"Error killing camera processes: {str(e)}\n"
+            logger.error(f"Error killing camera processes: {str(e)}")
+            flash("Error killing camera processes.", "danger")
+        
+        # Return the diagnostic page with results
+        return render_template('camera_diagnostic.html', 
+                              camera_status=False, 
+                              camera_info=None,
+                              process_info=process_info,
+                              test_result=None,
+                              test_image=None)
+    
+    @app.route('/test-camera', methods=['POST'])
+    def test_camera():
+        """Test a specific camera index"""
+        camera_index = int(request.form.get('index', 0))
+        test_result = f"Testing camera at index {camera_index}:\n\n"
+        test_image = None
+        
+        try:
+            # Try to release any existing cameras first
+            try:
+                if platform.system() == 'Linux':
+                    subprocess.run(f'sudo fuser -k /dev/video{camera_index} 2>/dev/null', shell=True)
+            except:
+                pass
+                
+            # Wait for camera to be released
+            time.sleep(1.0)
+            
+            # Initialize camera
+            test_result += f"Initializing camera {camera_index}...\n"
+            cam = cv2.VideoCapture(camera_index)
+            
+            # Wait for camera to initialize
+            time.sleep(1.0)
+            
+            if cam.isOpened():
+                test_result += "Camera opened successfully.\n"
+                
+                # Get camera properties
+                width = cam.get(cv2.CAP_PROP_FRAME_WIDTH)
+                height = cam.get(cv2.CAP_PROP_FRAME_HEIGHT)
+                fps = cam.get(cv2.CAP_PROP_FPS)
+                
+                test_result += f"Resolution: {width}x{height}\n"
+                test_result += f"FPS: {fps}\n"
+                
+                # Try to read frames
+                test_result += "Attempting to read frames...\n"
+                
+                # Try multiple reads to ensure camera is working
+                frames_read = 0
+                for _ in range(5):
+                    ret, frame = cam.read()
+                    if ret:
+                        frames_read += 1
+                        # Save the last successful frame for display
+                        if test_image is None:
+                            _, buffer = cv2.imencode('.jpg', frame)
+                            test_image = base64.b64encode(buffer).decode('utf-8')
+                    time.sleep(0.1)
+                
+                test_result += f"Successfully read {frames_read} out of 5 frames.\n"
+                
+                if frames_read > 0:
+                    test_result += "Camera test PASSED!\n"
+                    flash(f"Camera {camera_index} is working!", "success")
+                else:
+                    test_result += "Camera opened but could not read frames. Test FAILED.\n"
+                    flash(f"Camera {camera_index} opened but couldn't read frames.", "warning")
+            else:
+                test_result += f"Failed to open camera {camera_index}.\n"
+                flash(f"Failed to open camera {camera_index}.", "danger")
+                
+            # Always release the camera
+            cam.release()
+            test_result += "Camera released.\n"
+            
+        except Exception as e:
+            test_result += f"Error testing camera: {str(e)}\n"
+            logger.error(f"Error testing camera {camera_index}: {str(e)}")
+            logger.error(traceback.format_exc())
+            flash(f"Error testing camera {camera_index}: {str(e)}", "danger")
+        
+        # Return the diagnostic page with results
+        return render_template('camera_diagnostic.html', 
+                              camera_status=False, 
+                              camera_info=None,
+                              process_info=None,
+                              test_result=test_result,
+                              test_image=test_image)
+    
     # Clean up resources when app exits
     @app.teardown_appcontext
     def cleanup_resources(exception=None):

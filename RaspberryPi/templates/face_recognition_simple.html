@@ -77,6 +77,10 @@
             <a href="{{ url_for('door_entry') }}" class="btn btn-secondary">
                 <i class="fas fa-arrow-left"></i> Back
             </a>
+            
+            <a href="{{ url_for('camera_diagnostic') }}" class="btn btn-info">
+                <i class="fas fa-tools"></i> Camera Diagnostic Tool
+            </a>
         </div>
         
         <div class="mt-4 text-muted">
@@ -86,6 +90,7 @@
                 <li>You must manually stop the camera when done</li>
                 <li>Based on the approach in the Medium article</li>
             </ul>
+            <p class="mt-3">If you're having camera issues, please use the <a href="{{ url_for('camera_diagnostic') }}">Camera Diagnostic Tool</a>.</p>
         </div>
     </div>
 </body>
