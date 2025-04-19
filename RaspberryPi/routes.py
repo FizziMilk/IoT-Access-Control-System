@@ -1087,7 +1087,7 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                 "face_recognized": False,
                 "is_live": False,
                 "matched_users": [],
-                "timestamp": datetime.datetime.now().isoformat()
+                "timestamp": datetime.now().isoformat()
             }
             
             # Create a camera object - faster to create a new one than reuse
@@ -1187,7 +1187,7 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                     cv2.putText(debug_frame, f"Too small: {face_width}x{face_height}", 
                                (left, top - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
                     
-                    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                     cv2.imwrite(f"static/debug/face_too_small_{timestamp}.jpg", debug_frame)
                     
                     recognition_state.face_recognition_result = result
@@ -1310,7 +1310,7 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
             recognition_state.face_recognition_result = {
                 "success": False,
                 "error": f"Unexpected error in face recognition: {str(e)}",
-                "timestamp": datetime.datetime.now().isoformat()
+                "timestamp": datetime.now().isoformat()
             }
         finally:
             # Always set recognition state to inactive when done
