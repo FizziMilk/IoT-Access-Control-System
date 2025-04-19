@@ -73,11 +73,21 @@ class LivenessDetector:
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
         color_std = np.std(hsv[:,:,1])  # Saturation channel
         
-        # Evaluate liveness
-        entropy_ok = texture_entropy > self.entropy_threshold
-        gradient_ok = mean_gradient > self.gradient_threshold
-        reflection_ok = bright_spot_ratio < self.reflection_threshold
-        color_ok = color_std > self.color_threshold
+        # Ensure all values are scalar to avoid array comparison issues
+        if isinstance(texture_entropy, np.ndarray):
+            texture_entropy = float(texture_entropy.item()) if texture_entropy.size == 1 else float(texture_entropy.mean())
+        if isinstance(mean_gradient, np.ndarray):
+            mean_gradient = float(mean_gradient.item()) if mean_gradient.size == 1 else float(mean_gradient.mean())
+        if isinstance(bright_spot_ratio, np.ndarray):
+            bright_spot_ratio = float(bright_spot_ratio.item()) if bright_spot_ratio.size == 1 else float(bright_spot_ratio.mean())
+        if isinstance(color_std, np.ndarray):
+            color_std = float(color_std.item()) if color_std.size == 1 else float(color_std.mean())
+
+        # Evaluate liveness as scalar boolean values
+        entropy_ok = bool(texture_entropy > self.entropy_threshold)
+        gradient_ok = bool(mean_gradient > self.gradient_threshold)
+        reflection_ok = bool(bright_spot_ratio < self.reflection_threshold)
+        color_ok = bool(color_std > self.color_threshold)
         
         # Combined result
         is_live = entropy_ok and gradient_ok and reflection_ok and color_ok
@@ -91,7 +101,7 @@ class LivenessDetector:
             "mean_gradient": float(mean_gradient),
             "bright_spot_ratio": float(bright_spot_ratio),
             "color_std": float(color_std),
-            "is_live": is_live
+            "is_live": bool(is_live)
         }
     
     def _calculate_lbp(self, img, radius=1, num_points=8):
