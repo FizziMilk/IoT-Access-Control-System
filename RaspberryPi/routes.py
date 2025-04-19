@@ -2,7 +2,6 @@ from flask import render_template, request, redirect, url_for, flash, session as
 from datetime import datetime
 import time
 from utils import verify_otp_rest
-from Web_Recognition.web_face_service import WebFaceService
 import cv2
 import logging
 import os
@@ -88,8 +87,6 @@ def check_schedule(door_controller, mqtt_handler, backend_session=None, backend_
     return False
 
 def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_url):
-    # Import the WebFaceService for use in routes
-    from Web_Recognition.web_face_service import WebFaceService
     
     # Set up Qt environment once at startup
     setup_qt_environment()
