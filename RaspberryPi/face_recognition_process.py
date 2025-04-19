@@ -355,13 +355,81 @@ def load_known_faces(backend_url):
         logger.error(traceback.format_exc())
         return [], []
 
-def capture_and_analyze_frame(camera, recognition):
+def save_debug_frame(frame, prefix, directory, face_locations=None, is_live=None, match=None):
+    """
+    Save a debug frame with optional visualizations for detections.
+    
+    Args:
+        frame: OpenCV image frame
+        prefix: Prefix for the filename
+        directory: Directory to save the frame
+        face_locations: Optional list of face locations
+        is_live: Optional boolean indicating liveness
+        match: Optional match information
+    """
+    if not directory:
+        return None
+        
+    try:
+        # Create a copy to avoid modifying the original
+        debug_frame = frame.copy()
+        
+        # Draw face locations if provided
+        if face_locations:
+            for top, right, bottom, left in face_locations:
+                # Draw a box around the face
+                cv2.rectangle(debug_frame, (left, top), (right, bottom), (0, 255, 0), 2)
+                
+                # Add status text
+                status_text = ""
+                status_color = (255, 255, 255)
+                
+                if is_live is not None:
+                    if is_live:
+                        status_text = "LIVE"
+                        status_color = (0, 255, 0)  # Green
+                    else:
+                        status_text = "FAKE"
+                        status_color = (0, 0, 255)  # Red
+                
+                if match:
+                    status_text += f" - {match['name']} ({match['confidence']:.2f})"
+                
+                if status_text:
+                    # Draw a filled rectangle for text background
+                    text_size = cv2.getTextSize(status_text, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)[0]
+                    cv2.rectangle(debug_frame, 
+                                (left, top - 25), 
+                                (left + text_size[0] + 10, top), 
+                                (0, 0, 0), -1)
+                    # Add text
+                    cv2.putText(debug_frame, status_text, (left + 5, top - 5), 
+                              cv2.FONT_HERSHEY_SIMPLEX, 0.6, status_color, 2)
+        
+        # Generate a unique filename with timestamp
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        filename = f"{prefix}_{timestamp}.jpg"
+        filepath = os.path.join(directory, filename)
+        
+        # Save the frame
+        cv2.imwrite(filepath, debug_frame)
+        logger.info(f"Saved debug frame to {filepath}")
+        return filepath
+        
+    except Exception as e:
+        logger.error(f"Error saving debug frame: {e}")
+        logger.error(traceback.format_exc())
+        return None
+
+def capture_and_analyze_frame(camera, recognition, debug_frames=False, frames_dir=None):
     """
     Capture a frame and perform face recognition with liveness check
     
     Args:
         camera: OpenCV camera object
         recognition: WebRecognition object
+        debug_frames: Whether to save debug frames
+        frames_dir: Directory to save debug frames
         
     Returns:
         dict: Recognition results
@@ -374,7 +442,8 @@ def capture_and_analyze_frame(camera, recognition):
         'is_live': False,
         'liveness_metrics': {},
         'match': None,
-        'error': None
+        'error': None,
+        'debug_frame': None
     }
     
     try:
@@ -383,6 +452,10 @@ def capture_and_analyze_frame(camera, recognition):
         if not ret or frame is None:
             result['error'] = "Failed to capture frame"
             return result
+            
+        # Save initial frame if debug enabled
+        if debug_frames and frames_dir:
+            save_debug_frame(frame, "initial", frames_dir)
             
         # Convert to RGB (face_recognition uses RGB)
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -401,6 +474,10 @@ def capture_and_analyze_frame(camera, recognition):
             top, right, bottom, left = face_location
             face_image = frame[top:bottom, left:right]
             
+            # Save detected face if debug enabled
+            if debug_frames and frames_dir:
+                save_debug_frame(frame, "detected_face", frames_dir, face_locations)
+            
             # Perform liveness check on face region
             if face_image.size > 0:  # Ensure face_image is not empty
                 liveness_result = perform_liveness_check(face_image)
@@ -408,6 +485,10 @@ def capture_and_analyze_frame(camera, recognition):
                 result['liveness_metrics'] = {
                     k: v for k, v in liveness_result.items() if k != 'is_live'
                 }
+                
+                # Save liveness result frame if debug enabled
+                if debug_frames and frames_dir:
+                    save_debug_frame(frame, "liveness_check", frames_dir, face_locations, result['is_live'])
                 
                 # Only proceed with recognition if the face seems live
                 if liveness_result['is_live']:
@@ -420,8 +501,19 @@ def capture_and_analyze_frame(camera, recognition):
                         match = recognition.identify_face(frame, face_location)
                         if match:
                             result['match'] = match
+                            
+                            # Save match result frame if debug enabled
+                            if debug_frames and frames_dir:
+                                result['debug_frame'] = save_debug_frame(
+                                    frame, "match_result", frames_dir, 
+                                    face_locations, result['is_live'], match
+                                )
             else:
                 logger.warning("Empty face image extracted, skipping liveness check")
+        else:
+            # Save no-face frame if debug enabled
+            if debug_frames and frames_dir:
+                save_debug_frame(frame, "no_face", frames_dir)
             
         result['success'] = True
         return result
@@ -439,6 +531,10 @@ def main():
     parser.add_argument('--backend-url', required=False, help='Backend URL for authentication')
     parser.add_argument('--timeout', type=int, default=30, help='Timeout in seconds')
     parser.add_argument('--skip-liveness', action='store_true', help='Skip liveness detection (for testing)')
+    # Add the missing arguments
+    parser.add_argument('--debug-frames', action='store_true', help='Save debug frames during processing')
+    parser.add_argument('--frames-dir', help='Directory to store debug frames')
+    parser.add_argument('--upload-folder', help='Upload folder path')
     
     args = parser.parse_args()
     
@@ -447,8 +543,13 @@ def main():
         'success': False,
         'error': None,
         'face_detected': False,
-        'is_live': False
+        'is_live': False,
+        'debug_frame': None  # Add field for debug frame path
     }
+    
+    # Create debug frames directory if enabled
+    if args.debug_frames and args.frames_dir:
+        os.makedirs(args.frames_dir, exist_ok=True)
     
     try:
         logger.info(f"Starting face recognition process. Output will be saved to {args.output}")
@@ -485,7 +586,7 @@ def main():
                 break
                 
             logger.info(f"Capturing frame {i+1}/{max_attempts}")
-            frame_result = capture_and_analyze_frame(camera, recognition)
+            frame_result = capture_and_analyze_frame(camera, recognition, args.debug_frames, args.frames_dir)
             
             if frame_result['success']:
                 # If we found a face, update our result
@@ -503,6 +604,10 @@ def main():
                         if frame_result.get('match'):
                             result['match'] = frame_result['match']
                             logger.info(f"Face matched with {frame_result['match']['name']}")
+                        
+                        # Include debug frame path in result if available
+                        if frame_result.get('debug_frame'):
+                            result['debug_frame'] = frame_result['debug_frame']
                             
                         result['success'] = True
                         logger.info("Face detected and encoded successfully")
@@ -512,6 +617,7 @@ def main():
                         logger.warning("Face detected but failed liveness check")
                         result['is_live'] = False
                         result['liveness_metrics'] = frame_result.get('liveness_metrics', {})
+                        result['debug_frame'] = frame_result.get('debug_frame')
                         
                         # Continue trying for a better frame
                         time.sleep(0.2)
@@ -539,6 +645,14 @@ def main():
                     result['success'] = True  # Consider it a success even if not recognized
             else:
                 result['error'] = "No face detected after multiple attempts"
+                
+                # Create a final debug frame for no face detected
+                if args.debug_frames and args.frames_dir and camera:
+                    ret, frame = camera.read()
+                    if ret:
+                        result['debug_frame'] = save_debug_frame(
+                            frame, "final_no_face", args.frames_dir
+                        )
     
     except Exception as e:
         logger.error(f"Unhandled exception: {str(e)}")
@@ -614,31 +728,39 @@ class WebCamera:
         """Attempt to open the camera with the given ID."""
         try:
             self.logger.info(f"Starting camera (ID: {camera_id})")
-            self.cap = cv2.VideoCapture(camera_id)
             
-            # Try different backend APIs if the default doesn't work
-            if not self.cap.isOpened():
-                # On Linux, try V4L2 explicitly
-                if os.name != 'nt':
-                    self.cap = cv2.VideoCapture(camera_id, cv2.CAP_V4L2)
-                # On Windows, try DirectShow
-                else:
-                    self.cap = cv2.VideoCapture(camera_id, cv2.CAP_DSHOW)
+            # Try with different API backends
+            for api_preference in [cv2.CAP_ANY, cv2.CAP_DSHOW, cv2.CAP_V4L2]:
+                try:
+                    # Don't use V4L2 on Windows
+                    if api_preference == cv2.CAP_V4L2 and os.name == 'nt':
+                        continue
+                        
+                    self.logger.info(f"Trying camera {camera_id} with API: {api_preference}")
+                    self.cap = cv2.VideoCapture(camera_id, api_preference)
+                    
+                    if self.cap.isOpened():
+                        # Set resolution
+                        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
+                        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
+                        
+                        # Set parameters to reduce latency
+                        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                        
+                        # Check if camera works by reading a frame
+                        ret, frame = self.cap.read()
+                        if ret and frame is not None:
+                            self.is_running = True
+                            self.logger.info(f"Camera {camera_id} started successfully with API: {api_preference}")
+                            return True
+                        else:
+                            self.logger.warning(f"Camera {camera_id} opened but failed to read frame, trying next API")
+                            self.cap.release()
+                except Exception as e:
+                    self.logger.warning(f"Failed to open camera {camera_id} with API {api_preference}: {e}")
             
-            if self.cap.isOpened():
-                # Set resolution
-                self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
-                self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
-                
-                # Set parameters to reduce latency
-                self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-                
-                self.is_running = True
-                self.logger.info(f"Camera {camera_id} started successfully")
-                return True
-            else:
-                self.logger.warning(f"Failed to open camera {camera_id}")
-                return False
+            self.logger.warning(f"Failed to open camera {camera_id} with any API")
+            return False
         except Exception as e:
             self.logger.error(f"Error starting camera {camera_id}: {e}")
             return False
@@ -677,11 +799,23 @@ class WebCamera:
             ret, frame = self.cap.read()
             if not ret:
                 self.logger.warning("Failed to capture frame")
-                return self.placeholder_frame if hasattr(self, 'placeholder_frame') else None
+                # Try to restart the camera if we failed to get a frame
+                self.is_running = False
+                self.start()
+                
+                # If restarting didn't help, return placeholder
+                if hasattr(self, 'placeholder_frame'):
+                    return self.placeholder_frame
+                return None
                 
             return frame
         
         return None
+    
+    def read(self):
+        """Compatibility method to match OpenCV's camera.read() interface."""
+        frame = self.get_frame()
+        return (frame is not None), frame
     
     def release(self):
         """Release the camera resources."""
