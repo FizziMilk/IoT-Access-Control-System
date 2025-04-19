@@ -164,7 +164,7 @@
             let statusText = document.getElementById('statusText');
             let progress = 0;
             let statusMessages = [
-                "Initializing camera...",
+                "Initializing face recognition...",
                 "Looking for face...",
                 "Performing liveness check...",
                 "Analyzing facial features...",
@@ -195,21 +195,74 @@
             
             // Check if skip liveness is checked (in testing mode)
             var skipLivenessElement = document.getElementById('skipLivenessCheck');
-            if (skipLivenessElement && skipLivenessElement.checked) {
-                // Add a hidden field to the form
-                var hiddenField = document.createElement('input');
-                hiddenField.type = 'hidden';
-                hiddenField.name = 'skip_liveness';
-                hiddenField.value = 'true';
-                document.getElementById('faceForm').appendChild(hiddenField);
-                
-                // Update status text to indicate test mode
-                statusText.textContent = "TEST MODE: Skipping liveness check...";
-            }
+            var skipLiveness = skipLivenessElement && skipLivenessElement.checked;
             
-            // Submit the form
-            document.getElementById('faceForm').submit();
+            // Start face recognition via AJAX
+            fetch("{{ url_for('start_face_recognition') }}", {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                },
+                body: skipLiveness ? 'skip_liveness=true' : ''
+            })
+            .then(response => response.json())
+            .then(data => {
+                // Face recognition started, now poll for results
+                checkRecognitionStatus(progressInterval);
+            })
+            .catch(error => {
+                console.error('Error starting face recognition:', error);
+                clearInterval(progressInterval);
+                statusText.textContent = "Error starting face recognition.";
+                // Show error and reset UI after a delay
+                setTimeout(resetUI, 3000);
+            });
         });
+        
+        function checkRecognitionStatus(progressInterval) {
+            fetch("{{ url_for('check_face_recognition_status') }}")
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'processing') {
+                    // Still processing, check again in a moment
+                    setTimeout(() => checkRecognitionStatus(progressInterval), 500);
+                } else if (data.status === 'complete') {
+                    // Recognition complete, submit form to process results
+                    document.getElementById('statusText').textContent = "Recognition complete!";
+                    clearInterval(progressInterval);
+                    document.getElementById('progressBar').style.width = '100%';
+                    
+                    // Give a moment to see the complete status before submitting
+                    setTimeout(() => {
+                        document.getElementById('faceForm').submit();
+                    }, 1000);
+                } else {
+                    // Not started or error
+                    document.getElementById('statusText').textContent = "Recognition not active.";
+                    clearInterval(progressInterval);
+                    // Reset UI after a delay
+                    setTimeout(resetUI, 3000);
+                }
+            })
+            .catch(error => {
+                console.error('Error checking recognition status:', error);
+                clearInterval(progressInterval);
+                document.getElementById('statusText').textContent = "Error checking status.";
+                // Reset UI after a delay
+                setTimeout(resetUI, 3000);
+            });
+        }
+        
+        function resetUI() {
+            // Reset the UI to initial state
+            document.getElementById('instructions').style.display = 'block';
+            document.getElementById('startButton').style.display = 'inline-block';
+            document.getElementById('backButton').style.display = 'inline-block';
+            document.getElementById('processingText').style.display = 'none';
+            document.getElementById('loadingSpinner').style.display = 'none';
+            document.getElementById('progressBar').style.width = '0%';
+            document.getElementById('statusText').textContent = "Initializing camera...";
+        }
         
         // Handle video error
         function handleVideoError(img) {

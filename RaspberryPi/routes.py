@@ -1,7 +1,8 @@
-from flask import render_template, request, redirect, url_for, flash, session as flask_session, jsonify, send_file, send_from_directory
+from flask import render_template, request, redirect, url_for, flash, session as flask_session, jsonify, Response
 from datetime import datetime
 import time
 from utils import verify_otp_rest
+from Web_Recognition.web_face_service import WebFaceService
 import cv2
 import logging
 import os
@@ -87,55 +88,57 @@ def check_schedule(door_controller, mqtt_handler, backend_session=None, backend_
     return False
 
 def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_url):
+    # Import the WebFaceService for use in routes
+    from Web_Recognition.web_face_service import WebFaceService
     
     # Set up Qt environment once at startup
     setup_qt_environment()
     
-    # Flag to track if backend connectivity has been verified
-    backend_available = False
+    # Add integrated video feed with face recognition
+    camera = None
+    face_recognition_active = False
+    face_recognition_result = None
+    camera_lock = threading.Lock()
     
-    # Function to verify backend connectivity
-    def check_backend_availability():
-        nonlocal backend_available
-        if backend_available:
-            return True
+    def get_camera():
+        """Get or initialize camera with proper error handling"""
+        nonlocal camera
+        
+        if camera is not None and camera.isOpened():
+            return camera
             
+        # Initialize camera
         try:
-            test_resp = backend_session.get(f"{backend_url}/get-face-data", timeout=3)
-            if test_resp.status_code == 200:
-                backend_available = True
-                logger.info("Backend API connectivity verified")
-                return True
-            else:
-                logger.warning(f"Backend API returned status code: {test_resp.status_code}")
-                return False
+            cam = cv2.VideoCapture(0)
+            # Set camera properties
+            cam.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+            cam.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+            cam.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Minimize latency
+            
+            # Check if camera opened
+            if not cam.isOpened():
+                logger.error("Failed to open camera")
+                return None
+                
+            # Give camera time to adjust
+            time.sleep(0.3)
+            camera = cam
+            return camera
         except Exception as e:
-            logger.warning(f"Backend API connectivity test failed: {e}")
-            return False
+            logger.error(f"Error initializing camera: {e}")
+            return None
     
-    # Function to unlock door without using backend API
-    def unlock_door_direct(method="Manual Override", user="Local System"):
-        try:
-            # Use door controller directly
-            door_controller.unlock_door()
-            logger.info(f"Door unlocked directly via {method} by {user}")
-            
-            # Try to log to backend if available, but don't fail if it's not
-            if backend_available:
-                try:
-                    backend_session.post(f"{backend_url}/log-door-access", json={
-                        "user": user,
-                        "method": method,
-                        "status": "Unlocked",
-                        "details": f"Door unlocked via {method}"
-                    }, timeout=2)
-                except Exception as e:
-                    logger.error(f"Failed to log door access to backend: {e}")
-            
-            return True
-        except Exception as e:
-            logger.error(f"Error unlocking door directly: {e}")
-            return False
+    def release_camera():
+        """Release camera resources safely"""
+        nonlocal camera
+        if camera is not None:
+            try:
+                camera.release()
+                logger.info("Camera released")
+            except Exception as e:
+                logger.error(f"Error releasing camera: {e}")
+            finally:
+                camera = None
     
     @app.route('/')
     def index():
@@ -272,7 +275,7 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
 
         # Show the phone entry form
         return render_template("door_entry.html")
-
+    
     @app.route('/face-recognition', methods=['GET'])
     def face_recognition():
         """Display the face recognition page"""
@@ -297,188 +300,347 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
         # Return the template
         return render_template("face_recognition.html", testing_mode=testing_mode)
     
-    @app.route('/face-recognition-feed')
-    def face_recognition_feed():
-        """Return the latest frame from the face recognition process with detection overlays"""
-        try:
-            # Make sure the UPLOAD_FOLDER is defined
-            if 'UPLOAD_FOLDER' not in app.config:
-                logger.error("UPLOAD_FOLDER not defined in app configuration")
-                return send_placeholder_image()
+    @app.route('/video_feed')
+    def video_feed():
+        """
+        Video streaming route for face recognition.
+        """
+        def generate_frames():
+            nonlocal face_recognition_active, face_recognition_result
             
-            # Make sure the uploads directory exists
-            upload_folder = app.config['UPLOAD_FOLDER']
-            if not os.path.exists(upload_folder):
-                logger.warning(f"Upload folder does not exist: {upload_folder}, creating it")
-                os.makedirs(upload_folder, exist_ok=True)
+            # Set up face recognition if needed
+            recognition = None
+            known_faces_loaded = False
             
-            debug_frame_path = os.path.join(upload_folder, 'debug_frame.jpg')
+            # Create placeholder when needed
+            font = cv2.FONT_HERSHEY_SIMPLEX
+            font_scale = 0.7
+            font_color = (255, 255, 255)
+            line_type = 2
             
-            # If no debug frame exists yet, return a placeholder
-            if not os.path.exists(debug_frame_path):
-                return send_placeholder_image()
-            
-            # Return the latest frame
-            return send_file(debug_frame_path, mimetype='image/jpeg', max_age=0)
-        except Exception as e:
-            app.logger.error(f"Error serving face recognition feed: {str(e)}")
-            return send_placeholder_image()
+            try:
+                while True:
+                    # Acquire lock to ensure thread safety
+                    with camera_lock:
+                        # Get camera
+                        cam = get_camera()
+                        if cam is None:
+                            # Create a placeholder frame
+                            frame = np.zeros((480, 640, 3), dtype=np.uint8)
+                            cv2.putText(frame, "Camera not available", 
+                                      (50, 240), font, font_scale, font_color, line_type)
+                        else:
+                            # Read frame
+                            success, frame = cam.read()
+                            if not success:
+                                # Create a placeholder frame
+                                frame = np.zeros((480, 640, 3), dtype=np.uint8)
+                                cv2.putText(frame, "Failed to read frame", 
+                                          (50, 240), font, font_scale, font_color, line_type)
+                                continue
+                        
+                        # Process face recognition if active
+                        if face_recognition_active:
+                            # Add status text
+                            cv2.putText(frame, "Processing face recognition...", 
+                                      (10, 30), font, font_scale, (0, 255, 0), line_type)
+                            
+                            # Initialize recognition system if needed
+                            if recognition is None:
+                                try:
+                                    from face_recognition_process import WebRecognition
+                                    recognition = WebRecognition()
+                                    logger.info("Face recognition initialized")
+                                except Exception as e:
+                                    logger.error(f"Error initializing face recognition: {e}")
+                                    face_recognition_active = False
+                                    face_recognition_result = {
+                                        'success': False,
+                                        'error': f"Error initializing face recognition: {str(e)}"
+                                    }
+                            
+                            # Load known faces if not already loaded
+                            if not known_faces_loaded and backend_url and recognition:
+                                try:
+                                    from face_recognition_process import load_known_faces
+                                    encodings, names = load_known_faces(backend_url)
+                                    if encodings:
+                                        recognition.load_encodings(encodings, names)
+                                        known_faces_loaded = True
+                                        logger.info(f"Loaded {len(encodings)} face encodings")
+                                except Exception as e:
+                                    logger.error(f"Error loading known faces: {e}")
+                            
+                            # Process face recognition
+                            try:
+                                # Convert to RGB for face_recognition
+                                rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                                
+                                # Find faces
+                                face_locations = face_recognition.face_locations(rgb_frame)
+                                
+                                # Process faces
+                                if face_locations:
+                                    # Draw rectangles around faces
+                                    for top, right, bottom, left in face_locations:
+                                        cv2.rectangle(frame, (left, top), (right, bottom), (0, 255, 0), 2)
+                                    
+                                    # Process the first face
+                                    face_location = face_locations[0]
+                                    top, right, bottom, left = face_location
+                                    
+                                    # Extract face area
+                                    face_image = frame[top:bottom, left:right]
+                                    
+                                    # Perform liveness check
+                                    from face_recognition_process import perform_liveness_check
+                                    liveness_result = perform_liveness_check(face_image)
+                                    
+                                    # Add liveness status to frame
+                                    if liveness_result['is_live']:
+                                        cv2.putText(frame, "LIVE", (left, top - 10), 
+                                                  font, font_scale, (0, 255, 0), line_type)
+                                    else:
+                                        cv2.putText(frame, "FAKE", (left, top - 10), 
+                                                  font, font_scale, (0, 0, 255), line_type)
+                                    
+                                    # Only continue if liveness check passed
+                                    if liveness_result['is_live']:
+                                        # Get face encodings
+                                        face_encodings = face_recognition.face_encodings(rgb_frame, face_locations)
+                                        
+                                        # Identify face if we have encodings
+                                        if face_encodings and recognition and recognition.known_face_encodings:
+                                            match = recognition.identify_face(frame, face_location)
+                                            
+                                            if match:
+                                                # Display match
+                                                name = match['name']
+                                                confidence = match['confidence']
+                                                text = f"{name} ({confidence:.2f})"
+                                                cv2.putText(frame, text, (left, bottom + 25), 
+                                                          font, font_scale, (0, 255, 0), line_type)
+                                                
+                                                # Complete recognition
+                                                face_recognition_result = {
+                                                    'success': True,
+                                                    'face_detected': True,
+                                                    'is_live': True,
+                                                    'match': match,
+                                                    'face_encodings': [e.tolist() for e in face_encodings]
+                                                }
+                                                # Change flag after saving result
+                                                face_recognition_active = False
+                                            else:
+                                                # No match found
+                                                cv2.putText(frame, "Unknown", (left, bottom + 25), 
+                                                          font, font_scale, (0, 0, 255), line_type)
+                                                
+                                                # Complete recognition with no match
+                                                face_recognition_result = {
+                                                    'success': True,
+                                                    'face_detected': True,
+                                                    'is_live': True,
+                                                    'match': None,
+                                                    'face_encodings': [e.tolist() for e in face_encodings]
+                                                }
+                                                # Change flag after saving result
+                                                face_recognition_active = False
+                                else:
+                                    # No faces detected, keep searching
+                                    cv2.putText(frame, "No face detected", (10, 60), 
+                                              font, font_scale, (0, 0, 255), line_type)
+                                    
+                            except Exception as e:
+                                logger.error(f"Error in face recognition: {e}")
+                                face_recognition_active = False
+                                face_recognition_result = {
+                                    'success': False,
+                                    'error': f"Error processing face: {str(e)}"
+                                }
+                        
+                        # Convert frame to JPEG for streaming
+                        ret, buffer = cv2.imencode('.jpg', frame)
+                        frame_bytes = buffer.tobytes()
+                    
+                    # Yield the frame in the MJPEG format
+                    yield (b'--frame\r\n'
+                           b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+                    
+                    # Add a small delay to control frame rate
+                    time.sleep(0.033)  # ~30 FPS
+                    
+            except Exception as e:
+                logger.error(f"Error in video feed: {e}")
+                logger.error(traceback.format_exc())
+            finally:
+                # Always clean up
+                if recognition:
+                    del recognition
+        
+        # Return the streaming response
+        return Response(generate_frames(),
+                        mimetype='multipart/x-mixed-replace; boundary=frame')
     
-    def send_placeholder_image():
-        """Create and send a placeholder image when no frame is available"""
-        # Create a blank image with text
-        import cv2
-        import numpy as np
-        import io
+    @app.route('/start-face-recognition', methods=['POST'])
+    def start_face_recognition():
+        """Start face recognition process on the video feed"""
+        nonlocal face_recognition_active, face_recognition_result
         
-        # Create a blank image with text
-        img = np.zeros((480, 640, 3), dtype=np.uint8)
-        cv2.putText(img, "Waiting for camera...", (150, 240),
-                   cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+        # Reset result
+        face_recognition_result = None
         
-        # Convert to JPEG
-        _, buffer = cv2.imencode('.jpg', img)
+        # Skip liveness check if in testing mode
+        skip_liveness = request.form.get('skip_liveness', 'false').lower() == 'true'
+        if skip_liveness:
+            logger.warning("Skipping liveness detection - TESTING MODE ONLY")
         
-        # Convert to bytes and create a file-like object
-        io_buf = io.BytesIO(buffer)
-        io_buf.seek(0)
+        # Start recognition process
+        with camera_lock:
+            face_recognition_active = True
         
-        return send_file(io_buf, mimetype='image/jpeg', max_age=0)
+        return jsonify({'status': 'started'})
+    
+    @app.route('/check-face-recognition-status')
+    def check_face_recognition_status():
+        """Check if face recognition is complete and get results"""
+        nonlocal face_recognition_active, face_recognition_result
+        
+        if face_recognition_active:
+            return jsonify({'status': 'processing'})
+        
+        if face_recognition_result:
+            result = face_recognition_result
+            return jsonify({'status': 'complete', 'result': result})
+        
+        return jsonify({'status': 'not_started'})
     
     @app.route('/process-face', methods=['POST'])
     def process_face():
-        """Process facial recognition using a separate process"""
-        logger.info("Starting face recognition in separate process")
-        
-        # Check backend availability, but proceed regardless
-        backend_is_available = check_backend_availability()
-        logger.info(f"Backend API availability: {backend_is_available}")
+        """Process facial recognition using the integrated video feed"""
+        nonlocal face_recognition_result
         
         try:
-            # Check if UPLOAD_FOLDER is configured
-            if 'UPLOAD_FOLDER' not in app.config:
-                logger.error("UPLOAD_FOLDER not configured in app settings")
-                flash("System configuration error. Please contact administrator.", "danger")
-                return redirect(url_for("door_entry"))
-            
-            # Ensure upload folder exists
-            upload_folder = app.config['UPLOAD_FOLDER']
-            if not os.path.exists(upload_folder):
-                logger.warning(f"Upload folder does not exist: {upload_folder}, creating it")
-                os.makedirs(upload_folder, exist_ok=True)
-            
-            # Generate a unique output file
-            output_dir = '/tmp/face_recognition_results'
-            os.makedirs(output_dir, exist_ok=True)
-            output_file = os.path.join(output_dir, f"face_result_{uuid.uuid4()}.json")
-            
-            # Check if we should skip liveness detection (for testing only)
+            # Skip liveness check if in testing mode
             skip_liveness = request.form.get('skip_liveness', 'false').lower() == 'true'
-            if skip_liveness:
-                logger.warning("Skipping liveness detection - TESTING MODE ONLY")
             
-            # Set up frames directory for debug display
-            frames_dir = '/tmp/face_recognition_frames'
-            os.makedirs(frames_dir, exist_ok=True)
-            
-            # Build the command
-            cmd = [
-                'python3', 
-                os.path.join(os.path.dirname(os.path.abspath(__file__)), 'face_recognition_process.py'),
-                '--output', output_file,
-                '--debug-frames',
-                '--frames-dir', frames_dir,
-                '--upload-folder', upload_folder,
-                '--timeout', '45',  # Increased timeout for better recognition
-            ]
-            
-            # Only add backend URL if backend is available
-            if backend_is_available:
-                cmd.extend(['--backend-url', backend_url])
-            
-            # Add skip-liveness flag if needed
-            if skip_liveness:
-                cmd.append('--skip-liveness')
-            
-            logger.info(f"Executing: {' '.join(cmd)}")
-            
-            # Run the standalone script as a separate process
-            process = subprocess.run(cmd, 
-                                    timeout=60,  # Increased timeout from 45 to 60 seconds
-                                    check=False,
-                                    capture_output=True)
-            
-            logger.info(f"Process returned with code {process.returncode}")
-            
-            if process.stderr:
-                logger.warning(f"Process stderr: {process.stderr.decode('utf-8', errors='replace')}")
-                
-                # Log the stderr output to help with debugging
-                stderr_output = process.stderr.decode('utf-8', errors='replace')
-                if "liveness check" in stderr_output.lower():
-                    logger.info("Liveness check details found in stderr - helpful for debugging")
-            
-            # Wait briefly to ensure the result file is written
-            time.sleep(0.5)
-            
-            # Check if the output file exists
-            if not os.path.exists(output_file):
-                logger.error("Output file not created")
-                flash("Face recognition failed. Please try again.", "danger")
+            # Check if we have results from the video feed
+            if not face_recognition_result:
+                flash("No face recognition results. Please try again.", "danger")
                 return redirect(url_for("door_entry"))
             
-            # Read the results
-            with open(output_file, 'r') as f:
-                results = json.load(f)
+            # Process results
+            results = face_recognition_result
             
-            # Clean up the output file
-            try:
-                os.remove(output_file)
-            except Exception as e:
-                logger.warning(f"Could not remove output file: {e}")
+            # Clear results
+            face_recognition_result = None
             
-            # Process the results
-            if results.get('success', False):
-                # Get the first match if there are any results
-                if results.get('results') and len(results['results']) > 0:
-                    # We have a direct match from the standalone process
-                    match = results['results'][0]
-                    phone_number = match['name']  # Name field actually contains phone number
-                    confidence = match['confidence']
-                    
-                    logger.info(f"Face directly matched with {phone_number}, confidence: {confidence:.2f}")
-                    
-                    # Directly unlock the door without backend check
-                    if unlock_door_direct(method="Facial Recognition", user=phone_number):
-                        flash("Face recognized! Door unlocked.", "success")
-                        return render_template("door_unlocked.html")
-                    else:
-                        flash("Face recognized but failed to unlock door.", "danger")
+            # Process the results (same logic as before)
+            if results['success']:
+                if results['face_detected'] and 'face_encodings' in results and results['face_encodings']:
+                    # Check if face passed liveness detection
+                    if 'is_live' in results and not results['is_live'] and not skip_liveness:
+                        logger.warning("Face failed liveness detection")
+                        flash("Could not verify that this is a real face. Please try again with better lighting.", "warning")
                         return redirect(url_for("door_entry"))
-                
-                # We detected a live face, but no match was found
-                # Extract face encoding if available for potential registration
-                if results.get('face_detected') and results.get('is_live'):
-                    face_encodings = results.get('face_encodings')
-                    if face_encodings and len(face_encodings) > 0:
-                        # Store the face encoding for potential registration
-                        flask_session['face_encoding'] = face_encodings[0]
-                        flask_session['has_temp_face'] = True
+                    
+                    # We captured a live face, check if it was directly matched
+                    if 'match' in results and results['match']:
+                        # We have a direct match
+                        match = results['match']
+                        phone_number = match['name']  # Name field actually contains phone number
+                        confidence = match['confidence']
                         
-                        flash("Face not recognized. Please verify identity or register.", "warning")
-                        return render_template("verify_options.html", user_recognized=False,
-                                            face_recognized=False, has_face=True)
+                        logger.info(f"Face directly matched with {phone_number}, confidence: {confidence:.2f}")
                         
-                    else:
-                        # No face encodings found but the face was detected
-                        flash("Face detected but couldn't be processed properly. Please try again.", "warning")
+                        # Check if this user is allowed direct access
+                        resp = backend_session.get(f"{backend_url}/check-face-access/{phone_number}")
+                        access_data = resp.json()
+                        
+                        if access_data.get("status") == "approved":
+                            # Unlock door and log access
+                            door_controller.unlock_door()
+                            
+                            # Log door unlock via facial recognition
+                            try:
+                                backend_session.post(f"{backend_url}/log-door-access", json={
+                                    "user": phone_number,
+                                    "method": "Facial Recognition",
+                                    "status": "Unlocked",
+                                    "details": f"Door unlocked via facial recognition, confidence: {confidence:.2f}"
+                                })
+                            except Exception as e:
+                                logger.error(f"Error logging door access: {e}")
+                                
+                            flash("Face recognized! Door unlocked.", "success")
+                            return render_template("door_unlocked.html")
+                        else:
+                            # No direct access - provide options
+                            flash("Face recognized but additional verification needed.", "warning")
+                            return render_template("verify_options.html", phone_number=phone_number,
+                                                user_recognized=True, face_recognized=True)
+                    
+                    # No direct match, try to identify using backend
+                    face_encoding = results['face_encodings'][0]  # Use the first face if multiple detected
+                    
+                    try:
+                        # Send the face encoding to backend for identification
+                        encoding_json = json.dumps(face_encoding)
+                        encoding_base64 = base64.b64encode(encoding_json.encode('utf-8')).decode('utf-8')
+                        
+                        resp = backend_session.post(f"{backend_url}/identify-face", json={
+                            "face_encoding": encoding_base64
+                        })
+                        data = resp.json()
+                        
+                        if data.get("identified") and data.get("user"):
+                            # User recognized
+                            phone_number = data.get("user").get("phone_number")
+                            confidence = data.get("confidence", "N/A")
+                            
+                            # Check if this user is allowed direct access
+                            resp = backend_session.get(f"{backend_url}/check-face-access/{phone_number}")
+                            access_data = resp.json()
+                            
+                            if access_data.get("status") == "approved":
+                                # Unlock door and log access
+                                door_controller.unlock_door()
+                                
+                                # Log door unlock via facial recognition
+                                try:
+                                    backend_session.post(f"{backend_url}/log-door-access", json={
+                                        "user": phone_number,
+                                        "method": "Facial Recognition",
+                                        "status": "Unlocked",
+                                        "details": f"Door unlocked via facial recognition, confidence: {confidence}"
+                                    })
+                                except Exception as e:
+                                    logger.error(f"Error logging door access: {e}")
+                                    
+                                flash("Face recognized! Door unlocked.", "success")
+                                return render_template("door_unlocked.html")
+                            else:
+                                # No direct access - provide options
+                                flash("Face recognized but additional verification needed.", "warning")
+                                return render_template("verify_options.html", phone_number=phone_number,
+                                                    user_recognized=True, face_recognized=True)
+                        else:
+                            # Face not recognized, allow registration
+                            flask_session['face_encoding'] = face_encoding
+                            flask_session['has_temp_face'] = True
+                            
+                            flash("Face not recognized. Please verify identity or register.", "warning")
+                            return render_template("verify_options.html", user_recognized=False,
+                                                face_recognized=False, has_face=True)
+                    
+                    except Exception as e:
+                        logger.error(f"Error identifying face: {e}")
+                        logger.error(traceback.format_exc())
+                        flash("Error identifying face. Please try again.", "danger")
                         return redirect(url_for("door_entry"))
                 else:
-                    # Handle cases where face was detected but not live or couldn't be processed
-                    if results.get('face_detected') and not results.get('is_live'):
-                        flash("Could not verify that this is a real face. Please try again with better lighting.", "warning")
-                    else:
-                        flash("No face detected. Please try again and ensure good lighting.", "warning")
+                    # No face detected
+                    flash("No face detected. Please try again and ensure good lighting.", "warning")
                     return redirect(url_for("door_entry"))
             else:
                 # Error during face recognition
@@ -495,10 +657,6 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                     
                 return redirect(url_for("door_entry"))
                 
-        except subprocess.TimeoutExpired:
-            logger.error("Face recognition process timed out")
-            flash("Face recognition took too long. Please try again.", "danger")
-            return redirect(url_for("door_entry"))
         except Exception as e:
             logger.error(f"Error processing face recognition: {e}")
             logger.error(traceback.format_exc())
@@ -515,41 +673,6 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
         
         if not phone_number or not face_encoding:
             flash("Phone number and face image required.", "danger")
-            return redirect(url_for("door_entry"))
-        
-        # Check backend availability before attempting registration
-        if not check_backend_availability():
-            flash("Backend service unavailable. Registration will be processed when connection is restored.", "warning")
-            
-            # Save registration locally for future processing
-            try:
-                # Store the face data in a local file for later sync
-                local_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'pending_registrations')
-                os.makedirs(local_dir, exist_ok=True)
-                
-                # Create a unique filename with timestamp and phone
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                filename = os.path.join(local_dir, f"face_{timestamp}_{phone_number}.json")
-                
-                # Save the face data
-                with open(filename, 'w') as f:
-                    json.dump({
-                        "phone_number": phone_number,
-                        "face_encoding": face_encoding,
-                        "timestamp": timestamp
-                    }, f)
-                
-                logger.info(f"Saved pending face registration for {phone_number} to {filename}")
-                flash("Face saved locally. Registration will be processed when backend connection is restored.", "info")
-                
-                # Clear the session data
-                if 'face_encoding' in flask_session:
-                    flask_session.pop('face_encoding')
-                    
-                return redirect(url_for("door_entry"))
-            except Exception as e:
-                logger.error(f"Error saving local face data: {e}")
-                flash("Error saving face data. Please try again later.", "danger")
             return redirect(url_for("door_entry"))
             
         try:
@@ -576,28 +699,7 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                 "phone_number": phone_number,
                 "face_encoding": encoding_base64
             })
-            
-            # Validate response status code
-            if resp.status_code != 200:
-                logger.error(f"Backend returned non-200 status: {resp.status_code}")
-                logger.error(f"Response content: {resp.text}")
-                flash("Error connecting to backend service.", "danger")
-                return redirect(url_for("door_entry"))
-                
-            # Check for empty response
-            if not resp.text.strip():
-                logger.error("Backend returned empty response for face registration")
-                flash("Backend service returned empty response. Please try again.", "danger")
-                return redirect(url_for("door_entry"))
-                
-            # Parse response with error handling
-            try:
-                data = resp.json()
-            except json.JSONDecodeError as json_err:
-                logger.error(f"Failed to decode JSON response from face registration: {json_err}")
-                logger.error(f"Response content: {resp.text}")
-                flash("Invalid response from backend service. Please try again.", "danger")
-                return redirect(url_for("door_entry"))
+            data = resp.json()
             
             if data.get("status") == "success":
                 # Clear the session data
@@ -605,14 +707,21 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                     flask_session.pop('face_encoding')
                 
                 flash("Face registered successfully. Please wait for OTP or admin approval.", "success")
+                # Try to send OTP to the newly registered user
+                resp = backend_session.post(f"{backend_url}/door-entry", json={"phone_number": phone_number})
+                data = resp.json()
                 
-                # Skip OTP flow if backend is not fully functional
-                return redirect(url_for("door_entry"))
+                if data.get("status") == "OTP sent":
+                    return render_template("otp.html", phone_number=phone_number)
+                elif data.get("status") == "pending":
+                    return render_template("pending.html", phone_number=phone_number)
+                else:
+                    return redirect(url_for("door_entry"))
             else:
                 flash(data.get("error", "Error registering face"), "danger")
         except Exception as e:
-            logger.error(f"Error connecting to backend for face registration: {e}")
             flash("Error connecting to backend.", "danger")
+            print(f"[DEBUG] Error: {e}")
             
         return redirect(url_for("door_entry"))
     
@@ -632,128 +741,11 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                 flash(data.get("error", "Error updating name"), "danger")
         except Exception as e:
             flash("Error connecting to backend.", "danger")
-        return redirect(url_for("door_entry")) 
-
-    @app.route('/upload/<filename>')
-    def uploaded_file(filename):
-        return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
-
-    @app.route('/video_feed')
-    def video_feed():
-        """Stream video directly from camera as multipart/x-mixed-replace content"""
-        def generate_frames():
-            # Create a camera capture object
-            camera = None
-            try:
-                camera = cv2.VideoCapture(0)  # Use default camera
-                if not camera.isOpened():
-                    raise Exception("Could not open camera")
-                    
-                # Set resolution
-                camera.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-                camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-                # Set FPS to improve performance
-                camera.set(cv2.CAP_PROP_FPS, 30)
-                # Reduce buffer size to minimize latency
-                camera.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-            except Exception as e:
-                logger.error(f"Error opening camera: {e}")
-                
-            # Create a placeholder for when camera isn't working
-            placeholder = np.zeros((480, 640, 3), dtype=np.uint8)
-            cv2.putText(placeholder, "Camera not available", (150, 240),
-                       cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
-            _, placeholder_buffer = cv2.imencode('.jpg', placeholder, [cv2.IMWRITE_JPEG_QUALITY, 90])
-            placeholder_bytes = placeholder_buffer.tobytes()
-            
-            # Processing flag
-            is_processing = False
-            
-            try:
-                while True:
-                    if camera is None or not camera.isOpened():
-                        # Return placeholder if camera not available
-                        yield (b'--frame\r\n'
-                               b'Content-Type: image/jpeg\r\n\r\n' + placeholder_bytes + b'\r\n')
-                        # Try to reopen camera
-                        try:
-                            if camera is not None:
-                                camera.release()
-                            camera = cv2.VideoCapture(0)
-                        except Exception as e:
-                            logger.error(f"Failed to reopen camera: {e}")
-                        time.sleep(0.5)
-                        continue
-                    
-                    # Read frame from camera
-                    ret, frame = camera.read()
-                    
-                    if not ret or frame is None or frame.size == 0:
-                        # Return placeholder if frame reading failed
-                        yield (b'--frame\r\n'
-                               b'Content-Type: image/jpeg\r\n\r\n' + placeholder_bytes + b'\r\n')
-                        time.sleep(0.1)
-                        continue
-                    
-                    # Check if facial recognition is in progress
-                    if 'UPLOAD_FOLDER' in app.config:
-                        debug_frame_path = os.path.join(app.config['UPLOAD_FOLDER'], 'debug_frame.jpg')
-                        
-                        # If debug frame exists and is fresh (modified in last 0.5 seconds), use it
-                        try:
-                            if (os.path.exists(debug_frame_path) and 
-                                time.time() - os.path.getmtime(debug_frame_path) < 0.5):
-                                
-                                is_processing = True
-                                # Use the debug frame instead of the camera frame
-                                with open(debug_frame_path, 'rb') as f:
-                                    frame_bytes = f.read()
-                                    yield (b'--frame\r\n'
-                                           b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
-                                    time.sleep(0.033)  # ~30fps
-                                    continue
-                        except Exception as e:
-                            # If there's an error reading the debug frame, continue with camera frame
-                            logger.error(f"Error reading debug frame: {e}")
-                            
-                    # If we get here, we'll use the camera frame directly
-                    if is_processing:
-                        # Add "Processing..." text if we were in processing mode
-                        cv2.putText(frame, "Processing...", (10, 30),
-                                  cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-                        is_processing = False
-                    
-                    # Convert frame to JPEG
-                    try:
-                        _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 90])
-                        frame_bytes = buffer.tobytes()
-                        
-                        # Only yield if we got valid data
-                        if frame_bytes and len(frame_bytes) > 0:
-                            yield (b'--frame\r\n'
-                                   b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
-                        else:
-                            yield (b'--frame\r\n'
-                                   b'Content-Type: image/jpeg\r\n\r\n' + placeholder_bytes + b'\r\n')
-                    except Exception as e:
-                        logger.error(f"Error encoding frame: {e}")
-                        yield (b'--frame\r\n'
-                               b'Content-Type: image/jpeg\r\n\r\n' + placeholder_bytes + b'\r\n')
-                    
-                    # Small delay for frame rate control
-                    time.sleep(0.033)  # ~30fps
-            
-            except Exception as e:
-                logger.error(f"Error in video streaming: {e}")
-            finally:
-                # Clean up camera resources when done
-                if camera is not None and camera.isOpened():
-                    camera.release()
-        
-        # Return the streaming response
-        return app.response_class(
-            generate_frames(),
-            mimetype='multipart/x-mixed-replace; boundary=frame'
-        )
+        return redirect(url_for("door_entry"))
+    
+    # Clean up resources when app exits
+    @app.teardown_appcontext
+    def cleanup_resources(exception=None):
+        release_camera()
 
     return app 
