@@ -288,11 +288,44 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                 import gc
                 gc.collect()
     
-    @app.route('/')
+    @app.route('/', methods=['GET', 'POST'])
     def index():
         """
-        Root route that ensures proper cleanup when returning from face recognition
+        Root route that serves as the main entry point and handles OTP verification
         """
+        # Check schedule first
+        if check_schedule(door_controller, mqtt_handler, backend_session, backend_url):
+            return render_template("door_unlocked.html")
+            
+        # Handle POST request for OTP verification
+        if request.method == "POST":
+            phone_number = request.form.get('phone_number')
+            if not phone_number:
+                flash("Phone number is required for verification.", "danger")
+                return redirect(url_for("index"))
+
+            try:
+                # Send request to door-entry endpoint
+                resp = backend_session.post(f"{backend_url}/door-entry", json={"phone_number": phone_number})
+                print(f"[DEBUG] Backend response: {resp.status_code} - {resp.text}")
+                data = resp.json()
+
+                if data.get("status") == "OTP sent":
+                    flash("OTP sent to your phone. Please enter the OTP.", "success")
+                    return render_template("otp.html", phone_number=phone_number)
+                elif data.get("status") == "pending":
+                    flash(data.get("message", "Access pending."), "warning")
+                    return render_template("pending.html", phone_number=phone_number)
+                else:
+                    flash(data.get("error", "An error occurred."), "danger")
+                    return redirect(url_for("index"))
+
+            except Exception as e:
+                flash("Error connecting to backend.", "danger")
+                print(f"[DEBUG] Error connecting to backend: {e}")
+                return redirect(url_for("index"))
+        
+        # For GET requests
         # Check if we're coming from face recognition by checking the referrer
         referrer = request.referrer or ""
         
@@ -305,7 +338,14 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
             except Exception as e:
                 logger.error(f"Error cleaning up resources: {e}")
         
-        return render_template('entry_options.html')
+        # Get recent recognition data from session if available
+        recent_recognition = None
+        if 'recent_recognition' in flask_session:
+            recent_recognition = flask_session.get('recent_recognition')
+            # Clear from session after retrieving
+            flask_session.pop('recent_recognition', None)
+            
+        return render_template('entry_options.html', recent_recognition=recent_recognition)
 
     @app.route('/verify', methods=['POST'])
     def verify():
@@ -360,91 +400,14 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
     
     @app.route('/door-entry', methods=['GET', 'POST'])
     def door_entry():
-        # Check schedule first
-        if check_schedule(door_controller, mqtt_handler, backend_session, backend_url):
-            return render_template("door_unlocked.html")
-
-        # For GET requests, show the entry form
-        if request.method == 'GET':
-            # Get recent recognition data from session if available
-            recent_recognition = None
-            if 'recent_recognition' in flask_session:
-                recent_recognition = flask_session.get('recent_recognition')
-                # Clear from session after retrieving
-                flask_session.pop('recent_recognition', None)
-            
-            return render_template('door_entry.html', 
-                                  recent_recognition=recent_recognition)
-
-        # If we get here, schedule check didn't unlock the door
-        if request.method == "POST":
-            # Handle POST request for OTP verification
-            phone_number = request.form.get('phone_number')
-            if not phone_number:
-                flash("Phone number is required for verification.", "danger")
-                return redirect(url_for("door_entry"))
-
-            try:
-                # Send request to door-entry endpoint
-                resp = backend_session.post(f"{backend_url}/door-entry", json={"phone_number": phone_number})
-                print(f"[DEBUG] Backend response: {resp.status_code} - {resp.text}")
-                data = resp.json()
-
-                if data.get("status") == "OTP sent":
-                    flash("OTP sent to your phone. Please enter the OTP.", "success")
-                    return render_template("otp.html", phone_number=phone_number)
-                elif data.get("status") == "pending":
-                    flash(data.get("message", "Access pending."), "warning")
-                    return render_template("pending.html", phone_number=phone_number)
-                else:
-                    flash(data.get("error", "An error occurred."), "danger")
-                    return redirect(url_for("door_entry"))
-
-            except Exception as e:
-                flash("Error connecting to backend.", "danger")
-                print(f"[DEBUG] Error connecting to backend: {e}")
-                return redirect(url_for("door_entry"))
-
-        return render_template("door_entry.html")
+        # Simply redirect to index route for consistency
+        return redirect(url_for('index'))
 
     @app.route('/phone-entry', methods=['GET', 'POST'])
     def phone_entry():
         """Handle the phone number entry flow"""
-        # Check schedule first
-        if check_schedule(door_controller, mqtt_handler, backend_session, backend_url):
-            return render_template("door_unlocked.html")
-
-        # If we get here, schedule check didn't unlock the door
-        if request.method == "POST":
-            # Handle POST request for OTP verification
-            phone_number = request.form.get('phone_number')
-            if not phone_number:
-                flash("Phone number is required for verification.", "danger")
-                return redirect(url_for("phone_entry"))
-
-            try:
-                # Send request to door-entry endpoint
-                resp = backend_session.post(f"{backend_url}/door-entry", json={"phone_number": phone_number})
-                print(f"[DEBUG] Backend response: {resp.status_code} - {resp.text}")
-                data = resp.json()
-
-                if data.get("status") == "OTP sent":
-                    flash("OTP sent to your phone. Please enter the OTP.", "success")
-                    return render_template("otp.html", phone_number=phone_number)
-                elif data.get("status") == "pending":
-                    flash(data.get("message", "Access pending."), "warning")
-                    return render_template("pending.html", phone_number=phone_number)
-                else:
-                    flash(data.get("error", "An error occurred."), "danger")
-                    return redirect(url_for("phone_entry"))
-
-            except Exception as e:
-                flash("Error connecting to backend.", "danger")
-                print(f"[DEBUG] Error connecting to backend: {e}")
-                return redirect(url_for("phone_entry"))
-
-        # Show the phone entry form
-        return render_template("door_entry.html")
+        # Simply redirect to index route for consistency
+        return redirect(url_for('index'))
 
     @app.route('/face-recognition', methods=['GET'])
     def face_recognition_page():
@@ -674,10 +637,19 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
             
             response["result"] = serializable_result
             
-            # If registration needed, mark this explicitly
-            if serializable_result.get("registration_needed"):
+            # Add explicit status based on result contents
+            if serializable_result.get("face_too_small"):
+                response["status"] = "face_too_small"
+            elif (serializable_result.get("face_detected") and 
+                  "is_live" in serializable_result and 
+                  serializable_result["is_live"] is False):
+                response["status"] = "liveness_failed"
+            elif serializable_result.get("registration_needed"):
                 response["registration_needed"] = True
-                
+                response["status"] = "registration_needed"
+            elif serializable_result.get("success"):
+                response["status"] = "complete"
+            
             # Reset the result after sending it once
             if not response["active"]:
                 recognition_state.face_recognition_result = None
@@ -750,8 +722,16 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                     except Exception as e:
                         logger.error(f"Error logging face access: {e}")
                     
-                    # Redirect to door entry page
-                    return redirect(url_for('door_entry'))
+                    # Store recognition data for display
+                    flask_session['recent_recognition'] = {
+                        'user': matched_phone,
+                        'confidence': confidence,
+                        'debug_frame': flask_session.get('debug_frame'),
+                        'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    }
+                    
+                    # Redirect to entry options page instead of door_entry
+                    return redirect(url_for('index'))
                 else:
                     # Face wasn't recognized - offer registration
                     logger.info("Face not recognized, redirecting to registration")
@@ -1186,6 +1166,23 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                 if not is_live:
                     result["error"] = "Face liveness check failed"
                     result["success"] = True  # Process completed successfully, just not a live face
+                    
+                    # Save a debug frame with the face box and liveness failure message
+                    debug_frame = rgb_frames[best_frame_index].copy()
+                    debug_frame = cv2.cvtColor(debug_frame, cv2.COLOR_RGB2BGR)
+                    top, right, bottom, left = best_face_location
+                    cv2.rectangle(debug_frame, (left, top), (right, bottom), (0, 0, 255), 2)
+                    cv2.putText(debug_frame, "Liveness check failed", 
+                               (left, top - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+                    
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    debug_filename = f"liveness_failed_{timestamp}.jpg"
+                    debug_path = os.path.join("static", "debug_frames", debug_filename)
+                    cv2.imwrite(debug_path, debug_frame)
+                    
+                    # Add debug frame info to the result
+                    result["debug_frame"] = debug_filename
+                    
                     recognition_state.face_recognition_result = result
                     return
                 

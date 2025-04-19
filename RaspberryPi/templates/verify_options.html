@@ -20,7 +20,7 @@
                     {% if user_recognized and face_recognized %}
                         <!-- User is recognized but needs additional verification -->
                         <p>Face recognized! Please verify with OTP to complete access.</p>
-                        <form action="{{ url_for('door_entry') }}" method="post">
+                        <form action="{{ url_for('index') }}" method="post">
                             <input type="hidden" name="phone_number" value="{{ phone_number }}">
                             <button type="submit" class="btn btn-primary btn-block mb-3">Get OTP</button>
                         </form>
@@ -38,7 +38,7 @@
                         </form>
                         
                         <p>Or verify with your phone number instead:</p>
-                        <form action="{{ url_for('door_entry') }}" method="post">
+                        <form action="{{ url_for('index') }}" method="post">
                             <div class="form-group mb-3">
                                 <label for="phone_number">Phone Number:</label>
                                 <input type="text" class="form-control" id="phone_number" name="phone_number" 
@@ -50,7 +50,7 @@
                         <!-- Fallback options -->
                         <p>Please choose a verification method:</p>
                         <a href="{{ url_for('face_recognition_page') }}" class="btn btn-primary btn-block mb-3">Try Face Recognition Again</a>
-                        <a href="{{ url_for('door_entry') }}" class="btn btn-secondary btn-block">Use Phone Number</a>
+                        <a href="{{ url_for('index') }}" class="btn btn-secondary btn-block">Use Phone Number</a>
                     {% endif %}
 
                     <div class="mt-3">

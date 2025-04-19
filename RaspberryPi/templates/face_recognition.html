@@ -211,7 +211,7 @@
         </form>
         
         <div class="mt-4">
-            <a href="{{ url_for('door_entry') }}" class="btn btn-secondary" id="backButton">
+            <a href="{{ url_for('index') }}" class="btn btn-secondary" id="backButton">
                 <i class="fas fa-arrow-left"></i> Back
             </a>
         </div>
@@ -559,7 +559,49 @@
                     document.getElementById('progressBar').style.width = '0%';
                     startFaceRecognition();
                 });
+            } else if (data.status === 'liveness_failed' || (data.result && data.result.face_detected && data.result.is_live === false)) {
+                // Face detected but liveness check failed
+                console.log("Face detected but liveness check failed:", data.result);
                 
+                // Show the debug frame if available
+                if (data.result && data.result.debug_frame) {
+                    try {
+                        document.getElementById('videoFeed').src = 
+                            `/static/debug_frames/${data.result.debug_frame}`;
+                    } catch (e) {
+                        console.error("Error displaying liveness-failed debug frame:", e);
+                    }
+                }
+                
+                // Update progress bar to show we're done but failed
+                clearInterval(progressInterval);
+                document.getElementById('progressBar').style.width = '100%';
+                document.getElementById('progressBar').classList.add('bg-danger');
+                
+                // Show liveness feedback
+                document.getElementById('statusText').innerHTML = 
+                    `<div class="distance-error"><i class="fas fa-exclamation-triangle"></i> Liveness check failed - Not a real face detected</div>`;
+                
+                // Display instructions
+                document.getElementById('processingText').innerHTML = 
+                    `<h4>Liveness check failed</h4>
+                     <p>The system detected a face but it doesn't appear to be a real person.</p>
+                     <p>This could be due to a photo, screen, or other non-live face.</p>
+                     <p><button id="retryButton" class="btn btn-primary mt-2">Try Again</button></p>`;
+                
+                // Make the processing text more visible
+                document.getElementById('processingText').style.display = 'block';
+                document.getElementById('processingText').style.backgroundColor = 'rgba(0,0,0,0.7)';
+                document.getElementById('processingText').style.padding = '20px';
+                
+                // Add event listener to the retry button
+                document.getElementById('retryButton').addEventListener('click', function() {
+                    // Reset UI and restart recognition
+                    document.getElementById('statusText').textContent = "Starting new recognition attempt...";
+                    document.getElementById('progressBar').classList.remove('bg-danger');
+                    document.getElementById('progressBar').style.width = '0%';
+                    startFaceRecognition();
+                });
             } else if (data.status === 'complete') {
                 // Recognition complete, get the final debug frame
                 console.log("Recognition complete with result:", data.result);
