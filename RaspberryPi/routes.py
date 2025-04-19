@@ -322,8 +322,22 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                 })
             except Exception as e:
                 print(f"[DEBUG] Error logging door access: {e}")
-                
-            return render_template("door_unlocked.html")
+            
+            # Check if we have recent recognition data to show (if from face recognition)
+            if 'recent_recognition' in flask_session and flask_session['recent_recognition'].get('debug_frame'):
+                # Keep the recognition data for display in the door_unlocked template
+                return render_template("door_unlocked.html")
+            elif 'debug_frame' in flask_session:
+                # Create basic recognition data if only debug frame is available
+                flask_session['recent_recognition'] = {
+                    'user': phone_number,
+                    'debug_frame': flask_session['debug_frame'],
+                    'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                }
+                return render_template("door_unlocked.html")
+            else:
+                # No recognition data available, just render the template
+                return render_template("door_unlocked.html")
         elif response.get("status") == "error":
             flash(response.get("message", "Incorrect OTP code. Please try again."), "danger")
             return render_template("otp.html", phone_number=phone_number)
@@ -882,10 +896,30 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                                             'user': matched_phone,
                                             'confidence': face_result['match']['confidence'],
                                             'debug_frame': flask_session['debug_frame'],
-                                            'timestamp': datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                                            'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                                         }
                                     
-                                    return redirect(url_for('door_entry'))
+                                    # Send OTP to the recognized user
+                                    try:
+                                        resp = backend_session.post(f"{backend_url}/door-entry", json={"phone_number": matched_phone})
+                                        data = resp.json()
+                                        
+                                        if data.get("status") == "OTP sent":
+                                            # Redirect to OTP verification page with the phone number
+                                            logger.info(f"OTP sent to recognized user: {matched_phone}")
+                                            return render_template("otp.html", phone_number=matched_phone)
+                                        elif data.get("status") == "pending":
+                                            # User is pending approval
+                                            logger.info(f"User {matched_phone} is pending approval")
+                                            return render_template("pending.html", phone_number=matched_phone)
+                                        else:
+                                            # Error or unknown status, redirect to door entry
+                                            logger.warning(f"Unexpected status from backend: {data.get('status')}")
+                                            return redirect(url_for('door_entry'))
+                                    except Exception as e:
+                                        logger.error(f"Error sending OTP after face recognition: {e}")
+                                        flash("Error sending OTP. Please try again or use phone entry.", "warning")
+                                        return redirect(url_for('door_entry'))
                                 else:
                                     # No match found
                                     flash('Face not recognized. Please register to gain access.', 'warning')
@@ -896,7 +930,7 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                                         if frame_name.startswith('frame_final_'):
                                             timestamp = frame_name.replace('frame_final_', '').replace('.jpg', '')
                                         else:
-                                            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+                                            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
                                         return redirect(url_for('register_face', timestamp=timestamp))
                                     return redirect(url_for('register_face'))
                             else:
@@ -1159,7 +1193,7 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
             os.makedirs(debug_dir, exist_ok=True)
             
             # Generate timestamp for the frame
-            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
             
             # Get camera instance
             curr_camera = get_camera()
