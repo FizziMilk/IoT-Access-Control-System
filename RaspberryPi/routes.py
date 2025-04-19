@@ -387,7 +387,7 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
 
         # Show the phone entry form
         return render_template("door_entry.html")
-    
+
     @app.route('/face-recognition', methods=['GET'])
     def face_recognition():
         """Display the face recognition page"""
@@ -846,7 +846,6 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                             flash("Face not recognized. Please verify identity or register.", "warning")
                             return render_template("verify_options.html", user_recognized=False,
                                                 face_recognized=False, has_face=True)
-                    
                     except Exception as e:
                         logger.error(f"Error identifying face: {e}")
                         logger.error(traceback.format_exc())
@@ -955,39 +954,47 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                 flash(data.get("error", "Error updating name"), "danger")
         except Exception as e:
             flash("Error connecting to backend.", "danger")
-        return redirect(url_for("door_entry"))
+        return redirect(url_for("door_entry")) 
     
-    # Global camera variable for simplified management
-    camera = None
+    # Global camera variable for simplified management - completely separate from the other camera instance
+    simple_camera = None
     
     def get_camera_simple():
-        """Get global camera instance or initialize a new one"""
-        nonlocal camera
+        """Get the simplified camera instance"""
+        nonlocal simple_camera
         
-        if camera is None or not camera.isOpened():
-            logger.info("Initializing camera at index 0")
-            camera = cv2.VideoCapture(0)
+        if simple_camera is None or not simple_camera.isOpened():
+            logger.info("Initializing simplified camera at index 0")
+            # Try to initialize camera
+            cam = cv2.VideoCapture(0)
             
-            # Set camera properties
-            if camera.isOpened():
-                camera.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-                camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-                camera.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-                logger.info("Camera initialization successful")
+            # Give camera time to initialize
+            time.sleep(0.5)
+            
+            # Check if camera opened successfully
+            if cam.isOpened():
+                # Set camera properties
+                cam.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+                cam.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+                cam.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                
+                # Set the global camera
+                simple_camera = cam
+                logger.info("Simplified camera initialized successfully")
             else:
-                logger.error("Failed to open camera")
+                logger.error("Failed to open simplified camera")
         
-        return camera
+        return simple_camera
     
     def release_camera_simple():
-        """Explicitly release the camera when requested"""
-        nonlocal camera
+        """Explicitly release the simplified camera when requested"""
+        nonlocal simple_camera
         
-        if camera is not None and camera.isOpened():
-            logger.info("Releasing camera resources")
-            camera.release()
-            camera = None
-            logger.info("Camera released successfully")
+        if simple_camera is not None and simple_camera.isOpened():
+            logger.info("Releasing simplified camera resources")
+            simple_camera.release()
+            simple_camera = None
+            logger.info("Simplified camera released successfully")
     
     @app.route('/start-camera', methods=['POST'])
     def start_camera():
@@ -998,14 +1005,14 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
         else:
             flash("Failed to start camera", "danger")
         
-        return redirect(url_for("face_recognition"))
+        return redirect(url_for("face_recognition_simple"))
     
     @app.route('/stop-camera', methods=['POST'])
     def stop_camera():
         """Stop the camera explicitly"""
         release_camera_simple()
         flash("Camera stopped", "info")
-        return redirect(url_for("face_recognition"))
+        return redirect(url_for("face_recognition_simple"))
     
     # Modified generate_frames to use the simplified camera approach
     def generate_frames_simple():
@@ -1027,21 +1034,48 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
             return
         
         # Normal frame generation loop
-        while True:
-            success, frame = cam.read()
-            if not success:
-                break
+        try:
+            while True:
+                success, frame = cam.read()
+                if not success:
+                    # Handle read failure
+                    error_frame = np.zeros((480, 640, 3), dtype=np.uint8)
+                    cv2.putText(error_frame, "Failed to read frame", (50, 240),
+                              cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+                    
+                    # Convert to jpeg
+                    _, buffer = cv2.imencode('.jpg', error_frame)
+                    error_bytes = buffer.tobytes()
+                    
+                    # Yield error frame
+                    yield (b'--frame\r\n'
+                          b'Content-Type: image/jpeg\r\n\r\n' + error_bytes + b'\r\n')
+                    
+                    # Short delay before next attempt
+                    time.sleep(0.1)
+                    continue
+                
+                # Process frame (e.g., face recognition) here
+                # For now, just add timestamp to show it's working
+                timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                cv2.putText(frame, timestamp, (10, 30), 
+                          cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                
+                # Convert to jpeg
+                ret, buffer = cv2.imencode('.jpg', frame)
+                frame_bytes = buffer.tobytes()
+                
+                # Yield the frame
+                yield (b'--frame\r\n'
+                      b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+                
+                # Control frame rate
+                time.sleep(0.033)  # ~30 FPS
+        except Exception as e:
+            logger.error(f"Error in simplified video feed: {e}")
+            logger.error(traceback.format_exc())
             
-            # Process frame (e.g., face recognition) here
-            # ...
-            
-            # Convert to jpeg
-            ret, buffer = cv2.imencode('.jpg', frame)
-            frame_bytes = buffer.tobytes()
-            
-            # Yield the frame
-            yield (b'--frame\r\n'
-                  b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+            # Don't release camera here - it should stay open until explicitly stopped
     
     @app.route('/video_feed_simple')
     def video_feed_simple():
@@ -1068,8 +1102,9 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
         """Clean up all resources when application context tears down"""
         logger.info("Cleaning up resources on app context teardown")
         
-        # Release camera and destroy windows
+        # Release both cameras and destroy windows
         release_camera()
+        release_camera_simple()
         
         # Explicitly destroy all OpenCV windows
         try:
