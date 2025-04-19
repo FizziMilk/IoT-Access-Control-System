@@ -772,6 +772,15 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                 liveness_results = []
                 frame_liveness_results = []
                 
+                # Helper function to sanitize values from arrays
+                def sanitize_value(value):
+                    if isinstance(value, np.ndarray):
+                        if value.size == 1:
+                            return value.item()
+                        else:
+                            return float(value.mean())
+                    return value
+                
                 if not skip_liveness:
                     logger.info("Performing liveness detection on all frames")
                     
@@ -779,27 +788,44 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                     for i, (frame, face_location) in enumerate(zip(frames, face_locations)):
                         if frame is not None and face_location is not None:
                             # Check liveness for this frame
-                            liveness_result = recognition.liveness_detector.check_face_liveness(frame, face_location)
-                            logger.info(f"Frame {i+1} liveness result: {liveness_result}")
-                            
-                            # Ensure is_live is a scalar boolean
-                            is_live = liveness_result.get("is_live", False)
-                            if isinstance(is_live, np.ndarray):
-                                if is_live.size == 1:
-                                    is_live = bool(is_live.item())
-                                else:
-                                    is_live = bool(is_live.any())  # Consider live if any element is True
-                            
-                            # Store the result with scalar values
-                            frame_liveness_results.append({
-                                "frame_index": i,
-                                "is_live": bool(is_live),
-                                "confidence": float(liveness_result.get("confidence", 0)),
-                                "texture_score": float(liveness_result.get("texture_score", 0))
-                            })
-                            
-                            # For debug frame visualization
-                            liveness_results.append(liveness_result)
+                            try:
+                                liveness_result = recognition.liveness_detector.check_face_liveness(frame, face_location)
+                                logger.info(f"Frame {i+1} liveness result: {liveness_result}")
+                                
+                                # Ensure is_live is a scalar boolean
+                                is_live = liveness_result.get("is_live", False)
+                                if isinstance(is_live, np.ndarray):
+                                    if is_live.size == 1:
+                                        is_live = bool(is_live.item())
+                                    else:
+                                        is_live = bool(is_live.any())  # Consider live if any element is True
+                                
+                                # Store the result with scalar values
+                                frame_liveness_results.append({
+                                    "frame_index": i,
+                                    "is_live": bool(is_live),
+                                    "confidence": float(sanitize_value(liveness_result.get("confidence", 0))),
+                                    "texture_score": float(sanitize_value(liveness_result.get("texture_score", 0)))
+                                })
+                                
+                                # For debug frame visualization
+                                liveness_results.append({
+                                    "is_live": bool(is_live),
+                                    "confidence": float(sanitize_value(liveness_result.get("confidence", 0))),
+                                    "texture_score": float(sanitize_value(liveness_result.get("texture_score", 0)))
+                                })
+                            except Exception as e:
+                                logger.error(f"Error in liveness detection for frame {i+1}: {e}")
+                                # Add a default result
+                                frame_liveness_results.append({
+                                    "frame_index": i,
+                                    "is_live": False,
+                                    "error": str(e)
+                                })
+                                liveness_results.append({
+                                    "is_live": False,
+                                    "error": str(e)
+                                })
                     
                     # Determine overall liveness using a voting system
                     live_votes = sum(1 for result in frame_liveness_results if result.get("is_live", False))
@@ -844,9 +870,29 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                 # Identify the face
                 match_results = []
                 for face_encoding in face_encodings:
-                    match_result = recognition.identify_face(face_encoding=face_encoding)
-                    if match_result and match_result.get("match"):
+                    try:
+                        match_result = recognition.identify_face(face_encoding=face_encoding)
+                        
+                        # Ensure all values in match are scalars
+                        if match_result and match_result.get("match"):
+                            match_data = match_result["match"]
+                            scalar_match = {
+                                "name": str(match_data.get("name", "")),
+                                "confidence": float(sanitize_value(match_data.get("confidence", 0))),
+                                "distance": float(sanitize_value(match_data.get("distance", 1.0)))
+                            }
+                            # Add other fields if present
+                            if "best_single_confidence" in match_data:
+                                scalar_match["best_single_confidence"] = float(sanitize_value(match_data.get("best_single_confidence", 0)))
+                            if "num_encodings" in match_data:
+                                scalar_match["num_encodings"] = int(match_data.get("num_encodings", 1))
+                                
+                            match_result["match"] = scalar_match
+                            
                         match_results.append(match_result)
+                    except Exception as e:
+                        logger.error(f"Error during face identification: {e}")
+                        match_results.append(None)
                 
                 # Find the best match
                 best_match = None

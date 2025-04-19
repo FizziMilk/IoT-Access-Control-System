@@ -169,8 +169,28 @@ class LivenessDetector:
         results = []
         
         for face_loc in face_locations:
-            result = self.check_face_liveness(frame, face_loc)
-            results.append(result)
+            try:
+                result = self.check_face_liveness(frame, face_loc)
+                
+                # Ensure all values are scalar for safe boolean operations
+                sanitized_result = {}
+                for key, value in result.items():
+                    if isinstance(value, np.ndarray):
+                        if value.size == 1:
+                            sanitized_result[key] = value.item()
+                        else:
+                            sanitized_result[key] = float(value.mean())
+                    else:
+                        sanitized_result[key] = value
+                
+                # Make sure is_live is a bool
+                if "is_live" in sanitized_result:
+                    sanitized_result["is_live"] = bool(sanitized_result["is_live"])
+                
+                results.append(sanitized_result)
+            except Exception as e:
+                logger.error(f"Error in liveness check: {e}")
+                results.append({"is_live": False, "error": str(e)})
         
         return results
 
@@ -379,7 +399,24 @@ class WebRecognition:
     
     def check_liveness(self, frame, face_location=None):
         """Check if a face is live"""
-        return self.liveness_detector.check_face_liveness(frame, face_location)
+        result = self.liveness_detector.check_face_liveness(frame, face_location)
+        
+        # Ensure all values in the result are scalar, not NumPy arrays
+        sanitized_result = {}
+        for key, value in result.items():
+            if isinstance(value, np.ndarray):
+                if value.size == 1:
+                    sanitized_result[key] = value.item()
+                else:
+                    sanitized_result[key] = float(value.mean())
+            else:
+                sanitized_result[key] = value
+                
+        # Ensure is_live is a boolean
+        if "is_live" in sanitized_result:
+            sanitized_result["is_live"] = bool(sanitized_result["is_live"])
+            
+        return sanitized_result
 
 
 def save_debug_frame(frame, filename, faces=None, liveness_results=None, matches=None):
