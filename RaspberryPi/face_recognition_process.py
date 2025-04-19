@@ -243,37 +243,112 @@ class WebRecognition:
         # Ensure all encodings are numpy arrays
         if isinstance(face_encoding, list):
             face_encoding = np.array(face_encoding)
+        
+        # Group encodings by person (based on name)
+        # This allows us to compare against all encodings for each person
+        person_encodings = {}
+        for i, name in enumerate(self.known_face_names):
+            if name not in person_encodings:
+                person_encodings[name] = []
+            person_encodings[name].append(self.known_face_encodings[i])
+        
+        # For each person, calculate the average distance across all their encodings
+        person_distances = {}
+        for name, encodings in person_encodings.items():
+            distances = []
+            for encoding in encodings:
+                # Calculate face distance for each encoding
+                distance = face_recognition.face_distance([encoding], face_encoding)[0]
+                distances.append(distance)
             
-        # Compare with known faces
-        face_distances = face_recognition.face_distance(self.known_face_encodings, face_encoding)
+            # Calculate the average distance for this person
+            # Use a weighted average that emphasizes the best matching encoding
+            if distances:
+                # Sort distances from best (lowest) to worst
+                sorted_distances = sorted(distances)
+                # Take weighted average - give more weight to better matches
+                # This rewards having at least one very good match
+                weights = [max(0.5, 1.0 - 0.1*i) for i in range(len(sorted_distances))]
+                total_weight = sum(weights)
+                avg_distance = sum(d * w for d, w in zip(sorted_distances, weights)) / total_weight
+                # Also track the best single match for this person
+                best_distance = min(distances)
+                person_distances[name] = {
+                    'avg_distance': avg_distance,
+                    'best_distance': best_distance,
+                    'num_encodings': len(encodings)
+                }
         
-        result = {
-            "encoding": face_encoding,
-            "location": face_location if 'face_location' in locals() else None,
-            "match": None
-        }
-        
-        if len(face_distances) > 0:
-            # Find best match
-            best_match_index = np.argmin(face_distances)
-            best_match_distance = face_distances[best_match_index]
+        # Find the best matching person
+        if person_distances:
+            # Sort by average distance
+            sorted_people = sorted(person_distances.items(), key=lambda x: x[1]['avg_distance'])
+            best_match_name, best_match_info = sorted_people[0]
+            best_match_distance = best_match_info['avg_distance']
+            best_single_distance = best_match_info['best_distance']
+            
+            result = {
+                "encoding": face_encoding,
+                "location": face_location if 'face_location' in locals() else None,
+                "match": None
+            }
             
             # Check if the match is close enough
             if best_match_distance <= self.detection_threshold:
-                match_name = self.known_face_names[best_match_index]
+                # Convert distance to confidence (0 distance = 100% confidence, 1 distance = 0% confidence)
                 match_confidence = 1.0 - best_match_distance
+                best_single_confidence = 1.0 - best_single_distance
                 
-                logger.info(f"Face matched with {match_name} (confidence: {match_confidence:.2f})")
+                logger.info(f"Face matched with {best_match_name} (confidence: {match_confidence:.2f}, " +
+                           f"best single confidence: {best_single_confidence:.2f}, " +
+                           f"using {best_match_info['num_encodings']} encodings)")
                 
                 result["match"] = {
-                    "name": match_name,
+                    "name": best_match_name,
                     "confidence": float(match_confidence),
-                    "distance": float(best_match_distance)
+                    "distance": float(best_match_distance),
+                    "best_single_confidence": float(best_single_confidence),
+                    "num_encodings": best_match_info['num_encodings']
                 }
             else:
                 logger.info(f"Best match too far ({best_match_distance:.2f} > {self.detection_threshold:.2f})")
-        
-        return result
+            
+            return result
+        else:
+            # Fallback to original logic - should never reach here if there are known encodings
+            logger.warning("No person encodings available despite having known face encodings")
+            face_distances = face_recognition.face_distance(self.known_face_encodings, face_encoding)
+            
+            result = {
+                "encoding": face_encoding,
+                "location": face_location if 'face_location' in locals() else None,
+                "match": None
+            }
+            
+            if len(face_distances) > 0:
+                # Find best match
+                best_match_index = np.argmin(face_distances)
+                best_match_distance = face_distances[best_match_index]
+                
+                # Check if the match is close enough (lower distance means better match)
+                # face_distance is a measure of difference, with 0 being a perfect match
+                # and values closer to 1 being poor matches
+                if best_match_distance <= self.detection_threshold:
+                    match_name = self.known_face_names[best_match_index]
+                    # Convert distance to confidence (0 distance = 100% confidence, 1 distance = 0% confidence)
+                    match_confidence = 1.0 - best_match_distance
+                    
+                    logger.info(f"Face matched with {match_name} (confidence: {match_confidence:.2f}, distance: {best_match_distance:.2f})")
+                    
+                    result["match"] = {
+                        "name": match_name,
+                        "confidence": float(match_confidence),
+                        "distance": float(best_match_distance)
+                    }
+                else:
+                    logger.info(f"Best match too far ({best_match_distance:.2f} > {self.detection_threshold:.2f})")
+            
+            return result
     
     def check_liveness(self, frame, face_location=None):
         """Check if a face is live"""
@@ -333,10 +408,10 @@ def save_debug_frame(frame, filename, faces=None, liveness_results=None, matches
             cv2.putText(debug_frame, is_live, (left, bottom + 20), 
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
     
-    # Add timestamp
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    cv2.putText(debug_frame, timestamp, (10, 30), 
-                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+    # Remove timestamp overlay
+    # timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    # cv2.putText(debug_frame, timestamp, (10, 30), 
+    #            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
     
     # Save the image
     os.makedirs(os.path.dirname(filename), exist_ok=True)

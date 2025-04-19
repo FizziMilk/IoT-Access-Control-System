@@ -16,6 +16,7 @@ import io
 import platform
 import copy
 import requests
+import face_recognition
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -584,119 +585,315 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
     
     @app.route('/start-face-recognition', methods=['POST'])
     def start_face_recognition():
-        """Start face recognition process on the video feed"""
-        nonlocal face_recognition_active, face_recognition_result, camera, camera_needs_cleanup
+        """Start the face recognition process"""
+        nonlocal camera, camera_needs_cleanup, face_recognition_active, face_recognition_result
         
-        logger.info("Starting face recognition process")
-        
-        # Reset result and set active flag
-        face_recognition_result = None
-        face_recognition_active = True
-        
-        # Set cleanup flag since we'll be using camera resources
-        camera_needs_cleanup = True
-        
-        # Force camera release before starting recognition
-        release_camera()
-        
-        # Shorter delay to ensure camera is released before face recognition starts
-        time.sleep(0.5)  # Reduced from 2.0 seconds
-        
-        # Skip liveness check if in testing mode
         skip_liveness = request.form.get('skip_liveness', 'false').lower() == 'true'
-        if skip_liveness:
-            logger.warning("Skipping liveness detection - TESTING MODE ONLY")
         
-        # Start recognition process in a background thread
-        debug_dir = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'static', 'debug_frames')
-        os.makedirs(debug_dir, exist_ok=True)
+        if face_recognition_active:
+            return jsonify({'status': 'error', 'message': 'Face recognition already in progress'})
         
+        # Set up threading event to signal completion
+        recognition_complete = threading.Event()
+        
+        # Define function to run in the background
         def run_recognition_background():
-            nonlocal face_recognition_result, face_recognition_active, camera, camera_needs_cleanup
+            nonlocal face_recognition_active, face_recognition_result
+            
+            # Mark as active
+            face_recognition_active = True
+            
             try:
-                # Import directly here for cleaner import structure
-                from face_recognition_process import run_face_recognition
-                from camera_config import CAMERA_INDEX
-                
-                # Double-check that camera is released before proceeding
-                with camera_lock:
-                    if camera is not None:
-                        logger.info("Ensuring camera is released before face recognition")
-                        release_camera()
-                
-                # Reduced safety delay to ensure camera is fully released
-                logger.info("Waiting for camera resources to be freed...")
-                time.sleep(1.0)  # Reduced from 5.0 seconds
-                
-                # Try to force device cleanup by executing system command on Linux
-                if platform.system() == 'Linux':
-                    try:
-                        os.system('ls -la /dev/video* > /dev/null 2>&1')
-                    except Exception as e:
-                        logger.error(f"Error executing system command: {e}")
-                
-                # On Windows, try additional cleanup steps
-                if platform.system() == 'Windows':
-                    try:
-                        # Force OpenCV to release any hanging resources
-                        cv2.destroyAllWindows()
-                        for i in range(3):  # Reduced from 5 calls
-                            cv2.waitKey(1)
-                    except Exception as e:
-                        logger.error(f"Error releasing Windows resources: {e}")
-                
-                # Log that we're starting face recognition
-                logger.info(f"Starting face recognition process with camera index {CAMERA_INDEX}")
-                
-                # Run face recognition (which will handle its own camera)
-                result = run_face_recognition(
-                    camera_index=CAMERA_INDEX, 
-                    backend_url=backend_url, 
-                    skip_liveness=skip_liveness,
-                    debug_dir=debug_dir
-                )
-                
-                # Store result
-                face_recognition_result = result
-                logger.info(f"Face recognition completed with result: {result.get('success')}")
-                
-                # Shorter delay before allowing video feed to reacquire the camera
-                time.sleep(1.0)  # Reduced from 3.0 seconds
-                
-                # Explicitly close any OpenCV windows that might be left open
+                # Get camera - we need to force camera creation here in the thread
+                # that will use it to avoid threading issues with OpenCV
+                local_camera = None
                 try:
-                    cv2.destroyAllWindows()
-                    for i in range(2):  # Reduced from 5 calls
-                        cv2.waitKey(1)
+                    with camera_lock:
+                        if camera is not None and hasattr(camera, 'isOpened') and camera.isOpened():
+                            # Use existing camera
+                            local_camera = camera
+                            logger.info("Using existing camera for recognition")
+                        else:
+                            # Create new camera
+                            logger.info("Creating new camera for recognition")
+                            local_camera = get_camera()
+                            camera = local_camera
+                            camera_needs_cleanup = True
                 except Exception as e:
-                    logger.error(f"Error destroying OpenCV windows: {e}")
+                    logger.error(f"Error getting camera: {e}")
+                    face_recognition_result = {"success": False, "error": f"Camera error: {str(e)}"}
+                    face_recognition_active = False
+                    recognition_complete.set()
+                    return
+                
+                # Set up debug directory for frame saving
+                debug_dir = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'static', 'debug_frames')
+                os.makedirs(debug_dir, exist_ok=True)
+                
+                # Import camera index from config
+                try:
+                    from camera_config import CAMERA_INDEX
+                except ImportError:
+                    CAMERA_INDEX = 0
+                
+                # Get backend URL
+                backend_url = os.getenv("BACKEND_URL", "http://localhost:5000")
+                
+                # Capture multiple frames at the beginning
+                frames = []
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                
+                try:
+                    # Capture 4 frames with small delays between them
+                    for i in range(4):
+                        ret, frame = local_camera.read()
+                        if ret and frame is not None:
+                            frames.append(frame)
+                            # Save debug frame
+                            cv2.imwrite(f"{debug_dir}/frame_capture_{i}_{timestamp}.jpg", frame)
+                            logger.info(f"Captured frame {i+1}/4")
+                        else:
+                            logger.warning(f"Failed to capture frame {i+1}")
+                        
+                        # Small delay between captures
+                        time.sleep(0.5)
+                
+                    # Release camera right after capturing frames
+                    try:
+                        logger.info("Releasing camera early to free resources")
+                        local_camera.release()
+                        logger.info("Camera released after frame capture")
+                    except Exception as e:
+                        logger.error(f"Error releasing camera after capture: {e}")
+                
+                except Exception as e:
+                    logger.error(f"Error during multi-frame capture: {e}")
+                    face_recognition_result = {"success": False, "error": f"Frame capture error: {str(e)}"}
+                    face_recognition_active = False
+                    recognition_complete.set()
+                    return
+                
+                # Check if we have enough frames
+                if not frames:
+                    logger.error("No frames captured")
+                    face_recognition_result = {"success": False, "error": "No frames captured"}
+                    face_recognition_active = False
+                    recognition_complete.set()
+                    return
+                
+                # Import face recognition modules
+                from face_recognition_process import WebRecognition, load_known_faces, save_debug_frame
+                import face_recognition
+                import numpy as np
+                from camera_config import MIN_FACE_WIDTH, MIN_FACE_HEIGHT
+                
+                # Initialize recognition system and load known faces
+                recognition = WebRecognition()
+                encodings, names = load_known_faces(backend_url)
+                if encodings and names:
+                    recognition.load_encodings(encodings, names)
+                else:
+                    logger.warning("No face encodings loaded from backend")
+                
+                # Process each frame to find the best one for recognition
+                best_frame = None
+                best_face_location = None
+                best_face_width = 0
+                best_face_height = 0
+                face_encodings = []
+                face_locations = []
+                
+                for i, frame in enumerate(frames):
+                    # Detect faces in the frame
+                    current_face_locations = face_recognition.face_locations(frame, number_of_times_to_upsample=2)
+                    
+                    if current_face_locations:
+                        face_location = current_face_locations[0]  # Take the first face
+                        top, right, bottom, left = face_location
+                        face_width = right - left
+                        face_height = bottom - top
+                        
+                        logger.info(f"Frame {i+1}: Face size {face_width}x{face_height}")
+                        
+                        # Check if this is the best frame so far
+                        if face_width > best_face_width and face_height > best_face_height:
+                            best_frame = frame
+                            best_face_location = face_location
+                            best_face_width = face_width
+                            best_face_height = face_height
+                        
+                        # Extract face encoding
+                        current_face_encodings = face_recognition.face_encodings(frame, current_face_locations)
+                        if current_face_encodings:
+                            face_encodings.append(current_face_encodings[0])
+                            face_locations.append(face_location)
+                
+                # Check if we found any usable faces
+                if not best_frame:
+                    logger.warning("No faces detected in any frame")
+                    face_recognition_result = {
+                        "success": False, 
+                        "error": "No faces detected",
+                        "face_detected": False
+                    }
+                    face_recognition_active = False
+                    recognition_complete.set()
+                    return
+                
+                # Check if the best face is large enough
+                if best_face_width < MIN_FACE_WIDTH or best_face_height < MIN_FACE_HEIGHT:
+                    logger.warning(f"Best face too small: {best_face_width}x{best_face_height}")
+                    
+                    # Prepare result with size feedback
+                    result = {
+                        "success": True,
+                        "face_detected": True,
+                        "face_recognized": False,
+                        "face_too_small": True
+                    }
+                    
+                    # Determine how far away the face is
+                    if best_face_width < MIN_FACE_WIDTH * 0.5 or best_face_height < MIN_FACE_HEIGHT * 0.5:
+                        result["distance_feedback"] = "much_too_far"
+                    else:
+                        result["distance_feedback"] = "too_far"
+                    
+                    # Save debug frame
+                    frame_filename = f"{debug_dir}/frame_face_too_small_{timestamp}.jpg"
+                    cv2.rectangle(best_frame, (best_face_location[3], best_face_location[0]), 
+                                 (best_face_location[1], best_face_location[2]), (0, 255, 255), 2)
+                    cv2.putText(best_frame, "Face too small - Please move closer", 
+                               (best_face_location[3], best_face_location[0] - 10),
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                    cv2.imwrite(frame_filename, best_frame)
+                    
+                    face_recognition_result = result
+                    face_recognition_active = False
+                    recognition_complete.set()
+                    return
+                
+                # Perform liveness check on all frames
+                liveness_results = []
+                frame_liveness_results = []
+                
+                if not skip_liveness:
+                    logger.info("Performing liveness detection on all frames")
+                    
+                    # Process each frame where we found a face
+                    for i, (frame, face_location) in enumerate(zip(frames, face_locations)):
+                        if frame is not None and face_location is not None:
+                            # Check liveness for this frame
+                            liveness_result = recognition.liveness_detector.check_face_liveness(frame, face_location)
+                            logger.info(f"Frame {i+1} liveness result: {liveness_result}")
+                            
+                            # Store the result
+                            frame_liveness_results.append({
+                                "frame_index": i,
+                                "is_live": liveness_result.get("is_live", False),
+                                "confidence": liveness_result.get("confidence", 0),
+                                "texture_score": liveness_result.get("texture_score", 0)
+                            })
+                            
+                            # For debug frame visualization
+                            liveness_results.append(liveness_result)
+                    
+                    # Determine overall liveness using a voting system
+                    live_votes = sum(1 for result in frame_liveness_results if result.get("is_live", False))
+                    total_votes = len(frame_liveness_results)
+                    
+                    # Calculate average confidence
+                    avg_confidence = 0
+                    if total_votes > 0:
+                        avg_confidence = sum(result.get("confidence", 0) for result in frame_liveness_results) / total_votes
+                    
+                    # Need majority of frames to show liveness
+                    is_live = (live_votes > total_votes / 2) if total_votes > 0 else False
+                    
+                    logger.info(f"Overall liveness result: {live_votes}/{total_votes} frames live, avg confidence {avg_confidence:.2f}")
+                    
+                    # Create combined liveness result
+                    combined_liveness_result = {
+                        "is_live": is_live,
+                        "confidence": avg_confidence,
+                        "live_frame_count": live_votes,
+                        "total_frame_count": total_votes,
+                        "frame_results": frame_liveness_results
+                    }
+                else:
+                    logger.info("Skipping liveness detection")
+                    # Create a dummy result for skipped liveness
+                    combined_liveness_result = {
+                        "is_live": True,
+                        "confidence": 1.0,
+                        "skipped": True
+                    }
+                
+                # Identify the face
+                match_results = []
+                for face_encoding in face_encodings:
+                    match_result = recognition.identify_face(face_encoding=face_encoding)
+                    if match_result and match_result.get("match"):
+                        match_results.append(match_result)
+                
+                # Find the best match
+                best_match = None
+                best_confidence = 0
+                for match in match_results:
+                    if match.get("match") and match["match"].get("confidence", 0) > best_confidence:
+                        best_match = match
+                        best_confidence = match["match"]["confidence"]
+                
+                # Save final debug frame
+                faces = [best_face_location] if best_face_location else []
+                matches = [{"match": best_match["match"] if best_match else None}] if faces else []
+                frame_filename = f"{debug_dir}/frame_final_{timestamp}.jpg"
+                
+                # Use the first liveness result for visualization, but the combined result for decision
+                visualization_liveness = liveness_results[0] if liveness_results else combined_liveness_result
+                
+                save_debug_frame(best_frame, frame_filename, 
+                               faces=faces, 
+                               liveness_results=[visualization_liveness] if visualization_liveness else None,
+                               matches=matches)
+                
+                # Prepare final result
+                result = {
+                    "success": True,
+                    "face_detected": True,
+                    "face_recognized": best_match is not None,
+                    "liveness_check_passed": combined_liveness_result.get("is_live", False),
+                    "face_too_small": False,
+                    "face_encodings": [encoding.tolist() for encoding in face_encodings],
+                    "face_locations": face_locations,
+                    "debug_frame": os.path.basename(frame_filename)
+                }
+                
+                # Add match information if found
+                if best_match and best_match.get("match"):
+                    result["match"] = best_match["match"]
+                
+                # Add liveness results
+                result["is_live"] = combined_liveness_result.get("is_live", False)
+                result["liveness_results"] = combined_liveness_result
+                
+                face_recognition_result = result
+                logger.info(f"Face recognition complete: recognized={result['face_recognized']}, is_live={result['is_live']}")
                 
             except Exception as e:
-                logger.error(f"Error running face recognition: {e}", exc_info=True)
+                logger.error(f"Error during face recognition: {e}")
                 face_recognition_result = {"success": False, "error": str(e)}
-            finally:
-                # Set recognition active flag to false
-                face_recognition_active = False
-                
-                # Explicitly set camera to None to force reinitialization
-                with camera_lock:
-                    if camera is not None:
-                        try:
-                            release_camera()
-                        except Exception as e:
-                            logger.error(f"Error releasing camera in finally block: {e}")
-                        finally:
-                            camera = None
-                
-                # Set cleanup flag to indicate we're done with camera resources
-                camera_needs_cleanup = False
-                
-                logger.info("Face recognition background process completed")
+            
+            # Mark as inactive
+            face_recognition_active = False
+            
+            # Signal that we're done
+            recognition_complete.set()
+            
+        # Start the background thread
+        threading.Thread(target=run_recognition_background).start()
         
-        # Start background thread
-        recognition_thread = threading.Thread(target=run_recognition_background)
-        recognition_thread.daemon = True
-        recognition_thread.start()
+        # Wait briefly to ensure the thread has started
+        time.sleep(0.1)
         
         return jsonify({'status': 'started'})
     
@@ -798,173 +995,57 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                 return redirect(url_for('face_recognition'))
             
             try:
-                # First check if this face already has access - use face encoding directly
-                # Send the face encoding to the backend for matching against registered users
+                # Check if face was detected
+                if not face_recognition_result.get('face_detected', False):
+                    logger.warning("No face detected in result")
+                    flash('No face was detected. Please try again.', 'error')
+                    return redirect(url_for('face_recognition'))
+                
+                # Check if face encodings are available
                 if 'face_encodings' not in face_recognition_result or not face_recognition_result['face_encodings']:
                     logger.warning("No face encodings found in result")
                     flash('No face encodings available', 'error')
                     return redirect(url_for('face_recognition'))
+                
+                # Store all the collected encodings in the session
+                # We'll use these for registration if needed
+                face_encodings = face_recognition_result['face_encodings']
+                flask_session['face_encodings'] = face_encodings
+                
+                # Also store the primary encoding
+                flask_session['face_encoding'] = face_encodings[0] if face_encodings else None
+                
+                # Check if the face was recognized
+                if face_recognition_result.get('face_recognized', False) and face_recognition_result.get('match'):
+                    match = face_recognition_result['match']
+                    matched_phone = match.get('name')
+                    confidence = match.get('confidence', 0)
                     
-                face_encoding = face_recognition_result['face_encodings'][0]
-                # Ensure we're working with a Python list, not a numpy array
-                if isinstance(face_encoding, np.ndarray):
-                    encoding_list = face_encoding.tolist()
-                else:
-                    encoding_list = face_encoding  # should already be a list
-                
-                # Log the type of encoding we're sending
-                logger.debug(f"Sending face encoding type: {type(encoding_list).__name__}")
-                
-                # Convert face encoding to JSON and then base64
-                encoding_json = json.dumps(encoding_list)
-                encoding_base64 = base64.b64encode(encoding_json.encode('utf-8')).decode('utf-8')
-                
-                # Check against backend for face identification
-                # Use the get-face-data endpoint to get known faces, then match locally if needed
-                resp = backend_session.get(f"{backend_url}/get-face-data")
-                
-                if resp.status_code == 200:
+                    logger.info(f"Face matched with {matched_phone} (confidence: {confidence:.2f})")
+                    flash(f"Face recognized! Welcome, {matched_phone}.", 'success')
+                    
+                    # Log the successful face recognition
                     try:
-                        data = resp.json()
-                        if data.get('face_data'):
-                            # There are registered faces - save this user's face data for possible registration
-                            flask_session['face_encoding'] = encoding_list
-                            
-                            # Check if any faces match the current one
-                            # This would typically be done by the backend, but we can do a local match
-                            from face_recognition_process import WebRecognition
-                            recognition = WebRecognition()
-                            
-                            # Process face data from the backend
-                            face_encodings = []
-                            phone_numbers = []
-                            
-                            for face_item in data['face_data']:
-                                phone_number = face_item['phone_number']
-                                face_b64 = face_item['face_encoding']
-                                
-                                try:
-                                    # Decode base64 to JSON string, then parse to list
-                                    face_json = base64.b64decode(face_b64).decode('utf-8')
-                                    face_encoding = json.loads(face_json)
-                                    
-                                    # Ensure face_encoding is a list
-                                    if not isinstance(face_encoding, list):
-                                        logger.warning(f"Face encoding not a list for {phone_number}, converting")
-                                        if isinstance(face_encoding, np.ndarray):
-                                            face_encoding = face_encoding.tolist()
-                                        else:
-                                            face_encoding = list(face_encoding) if hasattr(face_encoding, "__iter__") else [float(face_encoding)]
-                                    
-                                    face_encodings.append(face_encoding)
-                                    phone_numbers.append(phone_number)
-                                except Exception as e:
-                                    logger.error(f"Error processing face encoding for {phone_number}: {e}")
-                            
-                            # Load encodings into recognition system
-                            if face_encodings:
-                                recognition.load_encodings(face_encodings, phone_numbers)
-                                
-                                # Ensure the encoding_list is a list before passing it
-                                if not isinstance(encoding_list, list):
-                                    if isinstance(encoding_list, np.ndarray):
-                                        encoding_list = encoding_list.tolist()
-                                    else:
-                                        # Try to convert to list if possible
-                                        encoding_list = list(encoding_list) if hasattr(encoding_list, "__iter__") else [float(encoding_list)]
-                                
-                                # Debug logging
-                                logger.debug(f"Identifying face with encoding type: {type(encoding_list).__name__}, length: {len(encoding_list)}")
-                                
-                                # Identify face
-                                face_result = recognition.identify_face(
-                                    frame=None,  # We don't need the frame since we already have the encoding
-                                    face_encoding=encoding_list  # Pass the list - identify_face will convert to np.array
-                                )
-                                
-                                if face_result and face_result.get('match'):
-                                    # Face found - redirect to door entry
-                                    matched_phone = face_result['match']['name']
-                                    flash(f"Face recognized! Welcome, {matched_phone}.", 'success')
-                                    
-                                    # Log the successful face recognition
-                                    try:
-                                        backend_session.post(f"{backend_url}/log-door-access", json={
-                                            "user": matched_phone,
-                                            "method": "Face Recognition",
-                                            "status": "Successful",
-                                            "details": f"Face recognized with confidence {face_result['match']['confidence']:.2f}"
-                                        })
-                                    except Exception as e:
-                                        logger.error(f"Error logging face access: {e}")
-                                    
-                                    # Include debug frame in session for display on door entry page
-                                    if 'debug_frame' in flask_session:
-                                        flask_session['recent_recognition'] = {
-                                            'user': matched_phone,
-                                            'confidence': face_result['match']['confidence'],
-                                            'debug_frame': flask_session['debug_frame'],
-                                            'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                                        }
-                                    
-                                    # Send OTP to the recognized user
-                                    try:
-                                        resp = backend_session.post(f"{backend_url}/door-entry", json={"phone_number": matched_phone})
-                                        data = resp.json()
-                                        
-                                        if data.get("status") == "OTP sent":
-                                            # Redirect to OTP verification page with the phone number
-                                            logger.info(f"OTP sent to recognized user: {matched_phone}")
-                                            return render_template("otp.html", phone_number=matched_phone)
-                                        elif data.get("status") == "pending":
-                                            # User is pending approval
-                                            logger.info(f"User {matched_phone} is pending approval")
-                                            return render_template("pending.html", phone_number=matched_phone)
-                                        else:
-                                            # Error or unknown status, redirect to door entry
-                                            logger.warning(f"Unexpected status from backend: {data.get('status')}")
-                                            return redirect(url_for('door_entry'))
-                                    except Exception as e:
-                                        logger.error(f"Error sending OTP after face recognition: {e}")
-                                        flash("Error sending OTP. Please try again or use phone entry.", "warning")
-                                        return redirect(url_for('door_entry'))
-                                else:
-                                    # No match found
-                                    flash('Face not recognized. Please register to gain access.', 'warning')
-                                    # Pass debug frame timestamp to registration page
-                                    if 'debug_frame' in flask_session:
-                                        # Extract timestamp from frame name
-                                        frame_name = flask_session['debug_frame']
-                                        if frame_name.startswith('frame_final_'):
-                                            timestamp = frame_name.replace('frame_final_', '').replace('.jpg', '')
-                                        else:
-                                            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-                                        return redirect(url_for('register_face', timestamp=timestamp))
-                                    return redirect(url_for('register_face'))
-                            else:
-                                # No registered faces
-                                flash('No registered faces found. Please register to gain access.', 'warning')
-                                return redirect(url_for('register_face'))
-                        else:
-                            # No face data returned
-                            flash('No registered faces found. Please register to gain access.', 'warning')
-                            return redirect(url_for('register_face'))
-                    except json.JSONDecodeError as e:
-                        logger.error(f"Error decoding face data: {e}")
-                        flash('Error processing face data. Please try again.', 'error')
-                        return redirect(url_for('face_recognition'))
+                        backend_session.post(f"{backend_url}/log-door-access", json={
+                            "user": matched_phone,
+                            "method": "Face Recognition",
+                            "status": "Successful",
+                            "details": f"Face recognized with confidence {confidence:.2f}"
+                        })
+                    except Exception as e:
+                        logger.error(f"Error logging face access: {e}")
+                    
+                    # Redirect to door entry page
+                    return redirect(url_for('door_entry'))
                 else:
-                    logger.warning(f"Face data retrieval failed with status: {resp.status_code}")
-                    flash('Error communicating with the backend service. Please try again later.', 'error')
-                    return redirect(url_for('face_recognition'))
-            
-            except requests.exceptions.RequestException as e:
-                logger.error(f"Backend request error: {e}")
-                flash('Error connecting to backend service. Please try again later.', 'error')
-                return redirect(url_for('face_recognition'))
+                    # Face wasn't recognized - offer registration
+                    logger.info("Face not recognized, redirecting to registration")
+                    return redirect(url_for('register_face'))
                 
-            # If not recognized, offer registration
-            return redirect(url_for('register_face'))
+            except Exception as e:
+                logger.error(f"Error processing face match: {str(e)}", exc_info=True)
+                flash("An error occurred while processing your face. Please try again.", "error")
+                return redirect(url_for('face_recognition'))
                 
         except Exception as e:
             logger.error(f"Error processing face: {e}", exc_info=True)
@@ -1000,67 +1081,129 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
         
         # Get the face encoding from Flask session
         face_encoding = flask_session.get('face_encoding')
+        face_encodings = flask_session.get('face_encodings', [])
         
-        if not phone_number or not face_encoding:
-            flash("Phone number and face image required.", "danger")
+        if not phone_number:
+            flash("Phone number is required.", "danger")
+            return redirect(url_for("face_recognition"))
+            
+        if not face_encoding and not face_encodings:
+            flash("Face image required.", "danger")
             return redirect(url_for("face_recognition"))
             
         try:
-            # Convert face encoding to base64 string
-            # Make sure face_encoding is serializable (should be a list at this point)
-            if not isinstance(face_encoding, list):
-                try:
-                    # Try to convert if it's a numpy array
-                    if isinstance(face_encoding, np.ndarray):
-                        face_encoding = face_encoding.tolist()
-                    else:
-                        logger.warning(f"Unexpected face_encoding type: {type(face_encoding).__name__}")
-                        face_encoding = list(face_encoding) if hasattr(face_encoding, "__iter__") else [float(face_encoding)]
-                except Exception as e:
-                    logger.error(f"Error converting face encoding: {e}", exc_info=True)
-                    flash("Error processing face data.", "danger")
-                    return redirect(url_for("face_recognition"))
-            
-            try:
-                # Convert face encoding list to JSON string
-                encoding_json = json.dumps(face_encoding)
+            # If we have multiple encodings, use those
+            if face_encodings:
+                # Process all collected encodings
+                for i, current_encoding in enumerate(face_encodings):
+                    # Determine if this is an additional encoding (not the first one)
+                    is_additional = (i > 0)
+                    
+                    try:
+                        # Make sure encoding is serializable
+                        if not isinstance(current_encoding, list):
+                            if isinstance(current_encoding, np.ndarray):
+                                current_encoding = current_encoding.tolist()
+                            else:
+                                logger.warning(f"Unexpected encoding type: {type(current_encoding).__name__}")
+                                current_encoding = list(current_encoding) if hasattr(current_encoding, "__iter__") else [float(current_encoding)]
+                                
+                        # Convert to JSON and then base64
+                        encoding_json = json.dumps(current_encoding)
+                        encoding_base64 = base64.b64encode(encoding_json.encode('utf-8')).decode('utf-8')
+                        
+                        # Send to backend
+                        resp = backend_session.post(f"{backend_url}/register-face", json={
+                            "phone_number": phone_number,
+                            "face_encoding": encoding_base64,
+                            "is_additional": is_additional
+                        })
+                        
+                        # Process response for the first encoding only
+                        if i == 0:
+                            if resp.status_code not in (200, 201):
+                                logger.error(f"Registration failed with status: {resp.status_code}")
+                                flash("Error registering with backend service.", "danger")
+                                return redirect(url_for("face_recognition"))
+                    except Exception as e:
+                        logger.error(f"Error processing encoding {i}: {e}")
+                        # Continue with other encodings if one fails
                 
-                # Encode JSON string as base64
-                encoding_base64 = base64.b64encode(encoding_json.encode('utf-8')).decode('utf-8')
-            except (TypeError, json.JSONDecodeError) as e:
-                logger.error(f"JSON serialization error: {e}", exc_info=True)
-                flash("Error processing face data: invalid format.", "danger")
-                return redirect(url_for("face_recognition"))
-            
-            # Send the face encoding and phone number to the backend
-            resp = backend_session.post(f"{backend_url}/register-face", json={
-                "phone_number": phone_number,
-                "face_encoding": encoding_base64
-            })
-            
-            if resp.status_code == 200 or resp.status_code == 201:
+                # Clear session data
+                if 'face_encodings' in flask_session:
+                    flask_session.pop('face_encodings')
+                
+                # Only flash success and return after all encodings are processed
+                flash("Face registered successfully with multiple angles. Please wait for OTP or admin approval.", "success")
+                
+                # Try to send OTP
                 try:
+                    resp = backend_session.post(f"{backend_url}/door-entry", json={"phone_number": phone_number})
                     data = resp.json()
-                    if data.get("status") == "success":
-                        # Clear the session data
-                        if 'face_encoding' in flask_session:
-                            flask_session.pop('face_encoding')
-                        
-                        flash("Face registered successfully. Please wait for OTP or admin approval.", "success")
-                        # Try to send OTP to the newly registered user
-                        resp = backend_session.post(f"{backend_url}/door-entry", json={"phone_number": phone_number})
-                        data = resp.json()
-                        
-                        if data.get("status") == "OTP sent":
-                            return render_template("otp.html", phone_number=phone_number)
-                        else:
-                            return redirect(url_for("door_entry"))
+                    
+                    if data.get("status") == "OTP sent":
+                        return render_template("otp.html", phone_number=phone_number)
+                    else:
+                        return redirect(url_for("door_entry"))
                 except Exception as e:
-                    logger.error(f"Error processing registration response: {e}")
-                    flash("Error processing backend response.", "danger")
+                    logger.error(f"Error sending OTP: {e}")
+                    return redirect(url_for("door_entry"))
             else:
-                logger.error(f"Registration failed with status: {resp.status_code}")
-                flash("Error registering with backend service.", "danger")
+                # Legacy single encoding flow
+                # Convert face encoding to base64 string
+                if not isinstance(face_encoding, list):
+                    try:
+                        # Try to convert if it's a numpy array
+                        if isinstance(face_encoding, np.ndarray):
+                            face_encoding = face_encoding.tolist()
+                        else:
+                            logger.warning(f"Unexpected face_encoding type: {type(face_encoding).__name__}")
+                            face_encoding = list(face_encoding) if hasattr(face_encoding, "__iter__") else [float(face_encoding)]
+                    except Exception as e:
+                        logger.error(f"Error converting face encoding: {e}", exc_info=True)
+                        flash("Error processing face data.", "danger")
+                        return redirect(url_for("face_recognition"))
+                
+                try:
+                    # Convert face encoding list to JSON string
+                    encoding_json = json.dumps(face_encoding)
+                    
+                    # Encode JSON string as base64
+                    encoding_base64 = base64.b64encode(encoding_json.encode('utf-8')).decode('utf-8')
+                except (TypeError, json.JSONDecodeError) as e:
+                    logger.error(f"JSON serialization error: {e}", exc_info=True)
+                    flash("Error processing face data: invalid format.", "danger")
+                    return redirect(url_for("face_recognition"))
+                
+                # Send the face encoding and phone number to the backend
+                resp = backend_session.post(f"{backend_url}/register-face", json={
+                    "phone_number": phone_number,
+                    "face_encoding": encoding_base64
+                })
+                
+                if resp.status_code == 200 or resp.status_code == 201:
+                    try:
+                        data = resp.json()
+                        if data.get("status") == "success":
+                            # Clear the session data
+                            if 'face_encoding' in flask_session:
+                                flask_session.pop('face_encoding')
+                            
+                            flash("Face registered successfully. Please wait for OTP or admin approval.", "success")
+                            # Try to send OTP to the newly registered user
+                            resp = backend_session.post(f"{backend_url}/door-entry", json={"phone_number": phone_number})
+                            data = resp.json()
+                            
+                            if data.get("status") == "OTP sent":
+                                return render_template("otp.html", phone_number=phone_number)
+                            else:
+                                return redirect(url_for("door_entry"))
+                    except Exception as e:
+                        logger.error(f"Error processing registration response: {e}")
+                        flash("Error processing backend response.", "danger")
+                else:
+                    logger.error(f"Registration failed with status: {resp.status_code}")
+                    flash("Error registering with backend service.", "danger")
         except Exception as e:
             logger.error(f"Error connecting to backend: {e}")
             flash("Error connecting to backend.", "danger")

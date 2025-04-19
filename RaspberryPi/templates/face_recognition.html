@@ -318,8 +318,8 @@
         .then(data => {
             if (data.success) {
                 console.log("Preview frame captured successfully:", data.filename);
-                // Display the static preview frame
-                videoFeed.src = `/static/debug_frames/${data.filename}?t=${new Date().getTime()}`;
+                // Display the static preview frame without timestamp
+                videoFeed.src = `/static/debug_frames/${data.filename}`;
                 // Add a processing overlay to indicate system is working
                 document.getElementById('processingText').innerHTML = 
                     "<h4>Processing your face. Please wait...</h4>" +
@@ -502,7 +502,7 @@
                 if (data.result && data.result.debug_frame) {
                     try {
                         document.getElementById('videoFeed').src = 
-                            `/static/debug_frames/${data.result.debug_frame}?t=${new Date().getTime()}`;
+                            `/static/debug_frames/${data.result.debug_frame}`;
                     } catch (e) {
                         console.error("Error displaying face-too-small debug frame:", e);
                     }
@@ -562,7 +562,7 @@
                         console.log("Displaying final debug frame:", data.result.debug_frame);
                         try {
                             document.getElementById('videoFeed').src = 
-                                `/static/debug_frames/${data.result.debug_frame}?t=${new Date().getTime()}`;
+                                `/static/debug_frames/${data.result.debug_frame}`;
                         } catch (e) {
                             console.error("Error displaying final debug frame:", e);
                         }

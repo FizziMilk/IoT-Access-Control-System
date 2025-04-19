@@ -84,7 +84,8 @@ class User(db.Model):
     name = db.Column(db.String(50), nullable = True)
     phone_number = db.Column(db.String(20), unique=True, nullable=False)
     is_allowed = db.Column(db.Boolean, default=False)
-    face_data = db.Column(db.LargeBinary, nullable=True) # Face data stored as binary
+    face_data = db.Column(db.LargeBinary, nullable=True) # Legacy face data stored as binary
+    face_encodings = db.Column(db.Text, nullable=True) # Multiple face encodings stored as JSON
     face_registered = db.Column(db.Boolean, default=False) # Whether face has been registered
 
 ## Door schedule database model
@@ -848,40 +849,66 @@ class RegisterFaceAPI(Resource):
         data = request.get_json()
         phone_number = data.get("phone_number")
         face_encoding_base64 = data.get("face_encoding")
+        is_additional = data.get("is_additional", False) # Flag to indicate if this is an additional encoding
         
         if not phone_number or not face_encoding_base64:
             return {"error": "Phone number and face encoding required"}, 400
             
         try:
-            # Convert base64 string to binary
-            face_data = base64.b64decode(face_encoding_base64)
-            
             # Find or create user
             user = User.query.filter_by(phone_number=phone_number).first()
             
             if user:
                 # Update existing user
-                user.face_data = face_data
+                
+                # If this is legacy data, migrate it
+                if is_additional or user.face_encodings:
+                    # Handle multiple encodings case - store as JSON
+                    
+                    # Load existing encodings if any
+                    existing_encodings = []
+                    if user.face_encodings:
+                        try:
+                            existing_encodings = json.loads(user.face_encodings)
+                        except:
+                            # If data is corrupt, start fresh
+                            existing_encodings = []
+                    
+                    # Add the new encoding
+                    existing_encodings.append(face_encoding_base64)
+                    
+                    # Store as JSON
+                    user.face_encodings = json.dumps(existing_encodings)
+                    
+                    # Set legacy field to null if migrating
+                    if not is_additional and user.face_data:
+                        user.face_data = None
+                        
+                else:
+                    # For backward compatibility, continue storing in binary field if it's the first encoding
+                    user.face_data = base64.b64decode(face_encoding_base64)
+                    
                 user.face_registered = True
                 db.session.commit()
                 
                 # Log the update
+                status = "Updated (Added Face)" if is_additional else "Updated"
                 log = AccessLog(
                     user=phone_number,
                     user_name=user.name,
                     method="Face Registration",
-                    status="Updated"
+                    status=status
                 )
                 db.session.add(log)
                 db.session.commit()
                 
-                return {"status": "success", "message": "Face updated for existing user"}, 200
+                return {"status": "success", "message": "Face data updated for existing user"}, 200
             else:
-                # Create new user
+                # Create new user with multiple encodings support
                 new_user = User(
                     phone_number=phone_number,
                     is_allowed=False,  # Require admin approval
-                    face_data=face_data,
+                    face_encodings=json.dumps([face_encoding_base64]),  # Store as JSON array
                     face_registered=True
                 )
                 db.session.add(new_user)
@@ -910,8 +937,21 @@ class GetFaceDataAPI(Resource):
             
             face_data = []
             for user in users:
-                # Convert binary face data to base64 string
-                if user.face_data:
+                # Process multiple encodings if available
+                if user.face_encodings:
+                    try:
+                        # Parse JSON array of encodings
+                        encodings_list = json.loads(user.face_encodings)
+                        for encoding in encodings_list:
+                            face_data.append({
+                                "phone_number": user.phone_number,
+                                "face_encoding": encoding
+                            })
+                    except Exception as e:
+                        print(f"Error parsing face encodings for user {user.phone_number}: {e}")
+                
+                # Include legacy face_data for backward compatibility
+                elif user.face_data:
                     face_encoding_b64 = base64.b64encode(user.face_data).decode('utf-8')
                     face_data.append({
                         "phone_number": user.phone_number,
