@@ -164,6 +164,20 @@
                 },
                 complete: function() {
                     $('#resetCameraButton').prop('disabled', false).html('<i class="fas fa-sync"></i> Reset Camera');
+                    
+                    // Display a notification
+                    const notification = $('<div class="alert alert-success alert-dismissible fade show" role="alert">' +
+                        'Camera reset completed. If video still doesn\'t appear, try refreshing the page.' +
+                        '<button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>' +
+                        '</div>');
+                    
+                    // Insert notification at the top of the container
+                    $('.container').prepend(notification);
+                    
+                    // Auto-dismiss after 5 seconds
+                    setTimeout(function() {
+                        notification.alert('close');
+                    }, 5000);
                 }
             });
         }
@@ -178,6 +192,108 @@
                     videoFeed.src = videoFeed.src + '?t=' + new Date().getTime();
                 }
             }
+        }
+        
+        // Handle video feed errors with auto-reset after multiple failures
+        let videoErrorCount = 0;
+        function handleVideoError(img) {
+            videoErrorCount++;
+            console.log(`Video feed error #${videoErrorCount}`);
+            
+            // After 3 failures, try resetting camera automatically
+            if (videoErrorCount === 3) {
+                $('#statusText').text('Camera issues detected. Attempting auto-reset...');
+                resetCameraResources();
+                videoErrorCount = 0;
+                return;
+            }
+            
+            // If video feed fails to load, try again after a short delay
+            setTimeout(function() {
+                if (img.src.includes('?')) {
+                    img.src = img.src.split('?')[0] + '?t=' + new Date().getTime();
+                } else {
+                    img.src = img.src + '?t=' + new Date().getTime();
+                }
+            }, 1000);
+        }
+        
+        // Monitor for request timeouts on the status check
+        let timeoutErrorCount = 0;
+        function checkRecognitionStatus(progressInterval) {
+            const timeoutPromise = new Promise((_, reject) => {
+                setTimeout(() => reject(new Error('Request timeout')), 5000);
+            });
+            
+            Promise.race([
+                fetch("{{ url_for('check_face_recognition_status') }}"),
+                timeoutPromise
+            ])
+            .then(response => response.json())
+            .then(data => {
+                // Reset timeout error counter on successful response
+                timeoutErrorCount = 0;
+                
+                if (data.status === 'processing') {
+                    // Still processing, check again in a moment
+                    setTimeout(() => checkRecognitionStatus(progressInterval), 500);
+                } else if (data.status === 'complete') {
+                    // Recognition complete, submit form to process results
+                    document.getElementById('statusText').textContent = "Recognition complete!";
+                    clearInterval(progressInterval);
+                    document.getElementById('progressBar').style.width = '100%';
+                    
+                    // Check if the result contains face data
+                    if (data.result && data.result.face_detected) {
+                        // Generate a unique face ID
+                        const faceId = Date.now().toString(36) + Math.random().toString(36).substr(2);
+                        
+                        // Set the face ID in the hidden input
+                        document.getElementById('faceIdInput').value = faceId;
+                        
+                        // Set the form action with the face ID
+                        const form = document.getElementById('faceForm');
+                        form.action = "/process-face/" + faceId;
+                        
+                        // Give a moment to see the complete status before submitting
+                        setTimeout(() => {
+                            form.submit();
+                        }, 1000);
+                    } else {
+                        // No face detected
+                        document.getElementById('statusText').textContent = "No face detected. Please try again.";
+                        // Reset UI after a delay
+                        setTimeout(resetUI, 3000);
+                    }
+                } else {
+                    // Not started or error
+                    document.getElementById('statusText').textContent = "Recognition not active.";
+                    clearInterval(progressInterval);
+                    // Reset UI after a delay
+                    setTimeout(resetUI, 3000);
+                }
+            })
+            .catch(error => {
+                console.error('Error checking recognition status:', error);
+                clearInterval(progressInterval);
+                document.getElementById('statusText').textContent = "Error checking status. Retrying...";
+                
+                // Count timeout errors
+                timeoutErrorCount++;
+                
+                // After 3 timeouts, try resetting camera and restarting
+                if (timeoutErrorCount >= 3) {
+                    document.getElementById('statusText').textContent = "Connection issues. Resetting camera...";
+                    resetCameraResources();
+                    timeoutErrorCount = 0;
+                    
+                    // Reset UI after a delay
+                    setTimeout(resetUI, 5000);
+                } else {
+                    // Retry the status check after a short delay
+                    setTimeout(() => checkRecognitionStatus(progressInterval), 1000);
+                }
+            });
         }
         
         // Attach event listener to reset button
@@ -234,6 +350,10 @@
             var skipLivenessElement = document.getElementById('skipLivenessCheck');
             var skipLiveness = skipLivenessElement && skipLivenessElement.checked;
             
+            // Reset the error counters
+            videoErrorCount = 0;
+            timeoutErrorCount = 0;
+            
             // Start face recognition via AJAX
             fetch("{{ url_for('start_face_recognition') }}", {
                 method: 'POST',
@@ -250,63 +370,15 @@
             .catch(error => {
                 console.error('Error starting face recognition:', error);
                 clearInterval(progressInterval);
-                statusText.textContent = "Error starting face recognition.";
+                statusText.textContent = "Error starting face recognition. Resetting camera...";
+                
+                // Try resetting camera
+                resetCameraResources();
+                
                 // Show error and reset UI after a delay
-                setTimeout(resetUI, 3000);
+                setTimeout(resetUI, 5000);
             });
         });
-        
-        function checkRecognitionStatus(progressInterval) {
-            fetch("{{ url_for('check_face_recognition_status') }}")
-            .then(response => response.json())
-            .then(data => {
-                if (data.status === 'processing') {
-                    // Still processing, check again in a moment
-                    setTimeout(() => checkRecognitionStatus(progressInterval), 500);
-                } else if (data.status === 'complete') {
-                    // Recognition complete, submit form to process results
-                    document.getElementById('statusText').textContent = "Recognition complete!";
-                    clearInterval(progressInterval);
-                    document.getElementById('progressBar').style.width = '100%';
-                    
-                    // Check if the result contains face data
-                    if (data.result && data.result.face_detected) {
-                        // Generate a unique face ID
-                        const faceId = Date.now().toString(36) + Math.random().toString(36).substr(2);
-                        
-                        // Set the face ID in the hidden input
-                        document.getElementById('faceIdInput').value = faceId;
-                        
-                        // Set the form action with the face ID
-                        const form = document.getElementById('faceForm');
-                        form.action = "/process-face/" + faceId;
-                        
-                        // Give a moment to see the complete status before submitting
-                        setTimeout(() => {
-                            form.submit();
-                        }, 1000);
-                    } else {
-                        // No face detected
-                        document.getElementById('statusText').textContent = "No face detected. Please try again.";
-                        // Reset UI after a delay
-                        setTimeout(resetUI, 3000);
-                    }
-                } else {
-                    // Not started or error
-                    document.getElementById('statusText').textContent = "Recognition not active.";
-                    clearInterval(progressInterval);
-                    // Reset UI after a delay
-                    setTimeout(resetUI, 3000);
-                }
-            })
-            .catch(error => {
-                console.error('Error checking recognition status:', error);
-                clearInterval(progressInterval);
-                document.getElementById('statusText').textContent = "Error checking status.";
-                // Reset UI after a delay
-                setTimeout(resetUI, 3000);
-            });
-        }
         
         function resetUI() {
             // Reset the UI to initial state
@@ -318,18 +390,6 @@
             document.getElementById('loadingSpinner').style.display = 'none';
             document.getElementById('progressBar').style.width = '0%';
             document.getElementById('statusText').textContent = "Initializing camera...";
-        }
-        
-        // Handle video error
-        function handleVideoError(img) {
-            // If video feed fails to load, try again after a short delay
-            setTimeout(function() {
-                if (img.src.includes('?')) {
-                    img.src = img.src.split('?')[0] + '?t=' + new Date().getTime();
-                } else {
-                    img.src = img.src + '?t=' + new Date().getTime();
-                }
-            }, 1000);
         }
     </script>
 </body>

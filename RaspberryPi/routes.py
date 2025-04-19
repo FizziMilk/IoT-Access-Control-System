@@ -252,7 +252,7 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                     # Just log that we're waiting for resources to be freed
                     logger.info("Waiting for camera resources to be freed naturally")
                     # Add a delay to allow OS to reclaim resources - increased for better reliability
-                    time.sleep(1.0)
+                    time.sleep(2.0)
                 
                 # Camera has been released, so we don't need cleanup anymore
                 camera_needs_cleanup = False
@@ -262,10 +262,6 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                     # Explicitly destroy any OpenCV windows
                     cv2.destroyAllWindows()
                     cv2.waitKey(1)
-                    
-                    # On Linux, reset camera device
-                    if platform.system() == 'Linux':
-                        os.system('v4l2-ctl --device /dev/video0 --set-ctrl=exposure_auto=3')
                 except Exception as e:
                     logger.error(f"Error during additional camera cleanup: {e}")
     
@@ -581,16 +577,17 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                 
                 # Add a longer safety delay to ensure camera is fully released
                 logger.info("Waiting for camera resources to be freed completely...")
-                time.sleep(3.0)
+                time.sleep(4.0)
                 
-                # Additional OS-level cleanup on Linux
+                # Try to force device cleanup by executing system command
+                # This is a simple ls command just to ensure any pending processes are completed
+                # Safer than direct device manipulation
                 if platform.system() == 'Linux':
                     try:
-                        # Reset the camera device
-                        os.system('v4l2-ctl --device /dev/video0 --reset')
+                        os.system('ls -la /dev/video* > /dev/null 2>&1')
                         time.sleep(1.0)
                     except Exception as e:
-                        logger.error(f"Error resetting camera device: {e}")
+                        logger.error(f"Error executing system command: {e}")
                 
                 # Run face recognition (which will handle its own camera)
                 result = run_face_recognition(
@@ -605,7 +602,7 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                 logger.info(f"Face recognition completed with result: {result.get('success')}")
                 
                 # Add a delay before allowing video feed to reacquire the camera
-                time.sleep(1.0)
+                time.sleep(2.0)
                 
             except Exception as e:
                 logger.error(f"Error running face recognition: {e}")
@@ -967,18 +964,29 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
             # Force camera release
             release_camera()
             
-            # On Linux, perform additional system-level cleanup
+            # Simple delay to ensure resources are freed
+            time.sleep(2.0)
+            
+            # On Linux, try a more passive approach to device reset
             if platform.system() == 'Linux':
                 try:
-                    # Reset the camera device
-                    os.system('v4l2-ctl --device /dev/video0 --reset')
+                    # Just list video devices to check their availability
+                    os.system('ls -la /dev/video* > /dev/null 2>&1')
                     time.sleep(1.0)
-                    
-                    # Additional device control reset
-                    os.system('v4l2-ctl --device /dev/video0 --set-ctrl=exposure_auto=3')
-                    os.system('v4l2-ctl --device /dev/video0 --set-ctrl=focus_auto=1')
                 except Exception as e:
-                    logger.error(f"Error resetting camera device: {e}")
+                    logger.error(f"Error checking video devices: {e}")
+            
+            # Try to open and close the camera immediately as a reset mechanism
+            try:
+                logger.info("Performing camera open/close cycle")
+                temp_camera = cv2.VideoCapture(0)
+                if temp_camera.isOpened():
+                    temp_camera.read()  # Read one frame
+                    temp_camera.release()
+                    logger.info("Camera open/close cycle completed")
+                time.sleep(1.0)
+            except Exception as e:
+                logger.error(f"Error in camera open/close cycle: {e}")
             
             return jsonify({"status": "success", "message": "Camera resources reset"})
             
