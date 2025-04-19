@@ -651,45 +651,27 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
     
     @app.route('/check-face-recognition-status', methods=['GET'])
     def check_face_recognition_status():
-        """Check the status of face recognition process and return results"""
-        try:
-            # Get the current recognition result
-            result = {
-                "success": True,
-                "recognition_active": recognition_state.face_recognition_active,
-                "result": None,
-                "redirect": None
-            }
+        """Check the status of the face recognition process"""
+        
+        # Create a response with the current state
+        response = {
+            "active": recognition_state.face_recognition_active,
+            "result": None
+        }
+        
+        # If we have a result and it's not active, include it
+        if not recognition_state.face_recognition_active and recognition_state.face_recognition_result:
+            response["result"] = recognition_state.face_recognition_result
             
-            # If recognition is not active and we have a result
-            if not recognition_state.face_recognition_active and recognition_state.face_recognition_result:
-                result["result"] = recognition_state.face_recognition_result
+            # If registration needed, mark this explicitly
+            if recognition_state.face_recognition_result.get("registration_needed"):
+                response["registration_needed"] = True
                 
-                # Check if we have a face that passed liveness but was not recognized
-                if (result["result"].get("success") and 
-                    result["result"].get("face_detected") and 
-                    result["result"].get("is_live") and 
-                    not result["result"].get("face_recognized")):
-                    
-                    logger.info("Unknown live face detected - redirecting to registration")
-                    
-                    # Store face encoding in session for registration if available
-                    face_encodings = result["result"].get("face_encodings")
-                    if face_encodings:
-                        flask_session["pending_face_encoding"] = face_encodings
-                        logger.info("Face encoding stored in session for registration")
-                    
-                    # Add redirect information to the result
-                    result["redirect"] = "/register-face"
-                    result["message"] = "Unknown face detected - redirecting to registration"
-            
-            return jsonify(result)
-        except Exception as e:
-            logger.error(f"Error checking face recognition status: {str(e)}")
-            return jsonify({
-                "success": False,
-                "error": f"Error checking face recognition status: {str(e)}"
-            })
+            # Reset the result after sending it once
+            if not response["active"]:
+                recognition_state.face_recognition_result = None
+        
+        return jsonify(response)
     
     @app.route('/process-face/<face_id>', methods=['POST'])
     def process_face(face_id):
@@ -776,71 +758,79 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
     
     @app.route('/register-face', methods=['GET', 'POST'])
     def register_face():
-        """Handle face registration for unknown detected faces."""
-        if request.method == 'GET':
-            # Render the registration form
-            return render_template('register_face.html')
+        """Register a new face"""
+        nonlocal camera, camera_needs_cleanup
         
-        # For POST requests (form submission)
-        try:
+        # Use stored face encoding from the recognition process if available
+        face_encodings = None
+        if (recognition_state.face_recognition_result and 
+            recognition_state.face_recognition_result.get("face_encodings")):
+            face_encodings = recognition_state.face_recognition_result.get("face_encodings")
+            logger.info("Using face encoding from recognition process for registration")
+            # Store in session for the POST handler
+            flask_session['face_encoding'] = json.dumps(face_encodings)
+        
+        # Handle form submission for registration
+        if request.method == 'POST':
             # Get data from request
             data = request.json if request.is_json else request.form
             name = data.get('name')
-            device_id = data.get('device_id')
-            access_level = int(data.get('access_level', 1))
+            phone_number = data.get('phone_number')
             
-            if not name or not device_id:
-                return jsonify({'success': False, 'error': 'Missing required fields'})
+            if not name or not phone_number:
+                flash('Name and phone number are required', 'danger')
+                return render_template('register_face.html', encoding_available=face_encodings is not None)
             
             # Get face encoding from session
-            face_encoding = flask_session.get('face_encoding')
-            if face_encoding is None:
+            face_encoding_json = flask_session.get('face_encoding')
+            if face_encoding_json is None:
                 logger.error("No face encoding found in session")
-                return jsonify({'success': False, 'error': 'No face data available'})
+                flash('No face data available. Please try again.', 'danger')
+                return render_template('register_face.html', encoding_available=False)
             
-            # Convert face encoding from string to numpy array
+            # Convert face encoding from JSON to list or numpy array
             try:
-                face_encoding = np.fromstring(face_encoding, dtype=np.float64)
+                face_encoding = json.loads(face_encoding_json)
             except Exception as e:
                 logger.error(f"Error converting face encoding: {str(e)}")
-                return jsonify({'success': False, 'error': 'Invalid face data'})
+                flash('Invalid face data. Please try again.', 'danger')
+                return render_template('register_face.html', encoding_available=False)
             
-            # Save to database
+            # Registration API endpoint
+            register_url = f"{API_URL}/users/register"
+            
             try:
-                # Connect to database
-                conn = get_db_connection()
-                cursor = conn.cursor()
+                # Send to backend API
+                response = requests.post(register_url, json={
+                    "name": name,
+                    "phone_number": phone_number,
+                    "face_encoding": face_encoding
+                })
                 
-                # Insert new user
-                cursor.execute(
-                    "INSERT INTO users (name, face_encoding) VALUES (?, ?)",
-                    (name, face_encoding.tobytes())
-                )
-                user_id = cursor.lastrowid
-                
-                # Add access for the specified device
-                cursor.execute(
-                    "INSERT INTO access_rights (user_id, device_id, access_level) VALUES (?, ?, ?)",
-                    (user_id, device_id, access_level)
-                )
-                
-                # Commit changes
-                conn.commit()
-                conn.close()
-                
-                # Clear session data
-                flask_session.pop('face_encoding', None)
-                
-                logger.info(f"Successfully registered new user: {name} with access to device {device_id}")
-                return jsonify({'success': True, 'message': 'Face registered successfully'})
-                
+                if response.status_code == 201:
+                    # Success
+                    logger.info(f"Successfully registered new user: {name}")
+                    # Clear session data
+                    flask_session.pop('face_encoding', None)
+                    flash('Face registered successfully!', 'success')
+                    return redirect(url_for('index'))
+                else:
+                    # Error from API
+                    error_msg = response.json().get('error', 'Unknown error')
+                    logger.error(f"API error during registration: {error_msg}")
+                    flash(f'Error: {error_msg}', 'danger')
+                    return render_template('register_face.html', encoding_available=True)
+                    
             except Exception as e:
-                logger.error(f"Database error during registration: {str(e)}")
-                return jsonify({'success': False, 'error': f'Database error: {str(e)}'})
-                
-        except Exception as e:
-            logger.error(f"Error in face registration: {str(e)}")
-            return jsonify({'success': False, 'error': str(e)})
+                logger.error(f"Error in face registration: {str(e)}")
+                flash(f'Error: {str(e)}', 'danger')
+                return render_template('register_face.html', encoding_available=True)
+            
+        # For GET requests, render the registration form
+        # Reset recognition state since we've either used the data or don't need it
+        recognition_state.face_recognition_result = None
+        
+        return render_template('register_face.html', encoding_available=face_encodings is not None)
     
     @app.route('/update-name', methods=['POST'])
     def update_name():
@@ -1214,7 +1204,15 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                 # Load known face encodings from backend
                 try:
                     known_faces_response = requests.get(f"{API_URL}/users/encodings")
-                    if known_faces_response.status_code != 200:
+                    if known_faces_response.status_code == 404:
+                        logger.info("No registered users found (404 response). Recommending registration.")
+                        result["success"] = True
+                        result["face_detected"] = True
+                        result["registration_needed"] = True
+                        result["message"] = "No users registered in the system. Please register first."
+                        recognition_state.face_recognition_result = result
+                        return
+                    elif known_faces_response.status_code != 200:
                         logger.error(f"Failed to get known faces: {known_faces_response.status_code}")
                         result["error"] = "Failed to retrieve registered users"
                         recognition_state.face_recognition_result = result
