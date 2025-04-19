@@ -665,14 +665,14 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                 flash('No face recognition results available', 'error')
                 return redirect(url_for('face_recognition'))
             
-            # Check access permissions - use the backend_url from the outer scope
-            # instead of trying to get it from current_app.config
-            # backend_url is already available from the function parameter of setup_routes
-            # backend_session is also available from the outer scope
-            
             try:
                 # First check if this face already has access - use face encoding directly
                 # Send the face encoding to the backend for matching against registered users
+                if 'face_encodings' not in face_recognition_result or not face_recognition_result['face_encodings']:
+                    logger.warning("No face encodings found in result")
+                    flash('No face encodings available', 'error')
+                    return redirect(url_for('face_recognition'))
+                    
                 face_encoding = face_recognition_result['face_encodings'][0]
                 # Ensure we're working with a Python list, not a numpy array
                 if isinstance(face_encoding, np.ndarray):
@@ -711,21 +711,43 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                                 phone_number = face_item['phone_number']
                                 face_b64 = face_item['face_encoding']
                                 
-                                # Decode base64 to JSON string, then parse to list
-                                face_json = base64.b64decode(face_b64).decode('utf-8')
-                                face_encoding = json.loads(face_json)
-                                
-                                face_encodings.append(face_encoding)
-                                phone_numbers.append(phone_number)
+                                try:
+                                    # Decode base64 to JSON string, then parse to list
+                                    face_json = base64.b64decode(face_b64).decode('utf-8')
+                                    face_encoding = json.loads(face_json)
+                                    
+                                    # Ensure face_encoding is a list
+                                    if not isinstance(face_encoding, list):
+                                        logger.warning(f"Face encoding not a list for {phone_number}, converting")
+                                        if isinstance(face_encoding, np.ndarray):
+                                            face_encoding = face_encoding.tolist()
+                                        else:
+                                            face_encoding = list(face_encoding) if hasattr(face_encoding, "__iter__") else [float(face_encoding)]
+                                    
+                                    face_encodings.append(face_encoding)
+                                    phone_numbers.append(phone_number)
+                                except Exception as e:
+                                    logger.error(f"Error processing face encoding for {phone_number}: {e}")
                             
                             # Load encodings into recognition system
                             if face_encodings:
                                 recognition.load_encodings(face_encodings, phone_numbers)
                                 
+                                # Ensure the encoding_list is a list before passing it
+                                if not isinstance(encoding_list, list):
+                                    if isinstance(encoding_list, np.ndarray):
+                                        encoding_list = encoding_list.tolist()
+                                    else:
+                                        # Try to convert to list if possible
+                                        encoding_list = list(encoding_list) if hasattr(encoding_list, "__iter__") else [float(encoding_list)]
+                                
+                                # Debug logging
+                                logger.debug(f"Identifying face with encoding type: {type(encoding_list).__name__}, length: {len(encoding_list)}")
+                                
                                 # Identify face
                                 face_result = recognition.identify_face(
                                     frame=None,  # We don't need the frame since we already have the encoding
-                                    face_encoding=encoding_list
+                                    face_encoding=encoding_list  # Pass the list - identify_face will convert to np.array
                                 )
                                 
                                 if face_result and face_result.get('match'):

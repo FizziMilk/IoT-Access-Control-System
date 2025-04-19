@@ -137,7 +137,8 @@ class WebRecognition:
             logger.error(f"Mismatch between encodings ({len(encodings)}) and names ({len(names)})")
             return False
             
-        self.known_face_encodings = encodings
+        # Convert all encodings to numpy arrays
+        self.known_face_encodings = [np.array(e) if isinstance(e, list) else e for e in encodings]
         self.known_face_names = names
         logger.info(f"Loaded {len(encodings)} encodings with names")
         return True
@@ -156,8 +157,9 @@ class WebRecognition:
         """
         # If face_encoding is provided directly, use it
         if face_encoding is not None:
-            # No need to detect or encode the face
-            pass
+            # Convert to numpy array if it's a list
+            if isinstance(face_encoding, list):
+                face_encoding = np.array(face_encoding)
         elif frame is not None:
             # Convert to RGB (face_recognition uses RGB)
             rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -193,6 +195,10 @@ class WebRecognition:
                 "match": None
             }
         
+        # Ensure all encodings are numpy arrays
+        if isinstance(face_encoding, list):
+            face_encoding = np.array(face_encoding)
+            
         # Compare with known faces
         face_distances = face_recognition.face_distance(self.known_face_encodings, face_encoding)
         
