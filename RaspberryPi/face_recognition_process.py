@@ -15,9 +15,7 @@ import numpy as np
 import face_recognition
 import base64
 import requests
-from Web_Recognition.web_face_service import WebFaceService
-from Web_Recognition.recognition import WebRecognition
-from Web_Recognition.camera import WebCamera
+from datetime import datetime
 
 # Configure logging
 logging.basicConfig(
