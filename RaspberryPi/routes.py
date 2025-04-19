@@ -15,6 +15,8 @@ import subprocess
 import io
 import platform
 import copy
+import requests
+import datetime
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -602,10 +604,7 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
         
         if face_recognition_result:
             # Fix potential JSON serialization issues by ensuring all values are serializable
-            result = face_recognition_result
-            
-            # Deep copy the result to avoid modifying the original
-            serializable_result = copy.deepcopy(result)
+            result = copy.deepcopy(face_recognition_result)
             
             # Function to make all values JSON serializable
             def make_serializable(obj):
@@ -614,168 +613,133 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                 elif isinstance(obj, list):
                     return [make_serializable(item) for item in obj]
                 elif isinstance(obj, (np.ndarray, np.generic)):
-                    return obj.tolist()
+                    try:
+                        return obj.tolist()
+                    except Exception as e:
+                        logger.error(f"Failed to convert numpy array to list: {e}")
+                        return []
+                elif isinstance(obj, datetime.datetime):
+                    return obj.isoformat()
                 elif isinstance(obj, (bool, int, float, str)) or obj is None:
                     return obj
                 else:
+                    logger.warning(f"Converting non-serializable type {type(obj).__name__} to string")
                     return str(obj)
             
-            # Convert all values to be JSON serializable
-            serializable_result = make_serializable(serializable_result)
-            
-            return jsonify({'status': 'complete', 'result': serializable_result})
+            try:
+                # Convert all values to be JSON serializable
+                serializable_result = make_serializable(result)
+                
+                # Log that we're returning results
+                logger.debug(f"Returning face recognition results: {serializable_result.get('success')}")
+                
+                return jsonify({'status': 'complete', 'result': serializable_result})
+            except Exception as e:
+                logger.error(f"Error serializing face recognition result: {e}", exc_info=True)
+                # Return a simplified result
+                return jsonify({
+                    'status': 'complete', 
+                    'result': {
+                        'success': face_recognition_result.get('success', False),
+                        'error': 'Error serializing result data'
+                    }
+                })
         
         return jsonify({'status': 'not_started'})
     
-    @app.route('/process-face', methods=['POST'])
-    def process_face():
-        """Process facial recognition using the integrated video feed"""
-        nonlocal face_recognition_result, camera_needs_cleanup
-        
-        # Set cleanup flag since we'll be working with camera resources
-        camera_needs_cleanup = True
-        
+    @app.route('/process-face/<face_id>', methods=['POST'])
+    def process_face(face_id):
+        """Process a detected face and check access rights"""
         try:
-            # Skip liveness check if in testing mode
-            skip_liveness = request.form.get('skip_liveness', 'false').lower() == 'true'
+            nonlocal face_recognition_result, camera_needs_cleanup
             
-            # Check if we have results from the video feed
+            if not face_id:
+                logger.warning("No face ID provided")
+                flash('No face ID provided', 'error')
+                return redirect(url_for('face_recognition'))
+            
+            logger.info(f"Processing face with ID: {face_id}")
+            
             if not face_recognition_result:
-                flash("No face recognition results. Please try again.", "danger")
-                return redirect(url_for("door_entry"))
+                logger.warning("No face recognition results available")
+                flash('No face recognition results available', 'error')
+                return redirect(url_for('face_recognition'))
             
-            # Process results
-            results = face_recognition_result
+            # Check access permissions
+            backend_url = current_app.config['BACKEND_SERVICE_URL']
+            backend_session = get_backend_session()
             
-            # Clear results
-            face_recognition_result = None
-            
-            # Process the results (same logic as before)
-            if results['success']:
-                if results['face_detected'] and 'face_encodings' in results and results['face_encodings']:
-                    # Check if face passed liveness detection
-                    if 'is_live' in results and not results['is_live'] and not skip_liveness:
-                        logger.warning("Face failed liveness detection")
-                        flash("Could not verify that this is a real face. Please try again with better lighting.", "warning")
-                        return redirect(url_for("door_entry"))
-                    
-                    # We captured a live face, check if it was directly matched
-                    if 'match' in results and results['match']:
-                        # We have a direct match
-                        match = results['match']
-                        phone_number = match['name']  # Name field actually contains phone number
-                        confidence = match['confidence']
-                        
-                        logger.info(f"Face directly matched with {phone_number}, confidence: {confidence:.2f}")
-                        
-                        # Check if this user is allowed direct access
-                        resp = backend_session.get(f"{backend_url}/check-face-access/{phone_number}")
-                        access_data = resp.json()
-                        
-                        if access_data.get("status") == "approved":
-                            # Unlock door and log access
-                            door_controller.unlock_door()
-                            
-                            # Log door unlock via facial recognition
-                            try:
-                                backend_session.post(f"{backend_url}/log-door-access", json={
-                                    "user": phone_number,
-                                    "method": "Facial Recognition",
-                                    "status": "Unlocked",
-                                    "details": f"Door unlocked via facial recognition, confidence: {confidence:.2f}"
-                                })
-                            except Exception as e:
-                                logger.error(f"Error logging door access: {e}")
-                                
-                            flash("Face recognized! Door unlocked.", "success")
-                            return render_template("door_unlocked.html")
-                        else:
-                            # No direct access - provide options
-                            flash("Face recognized but additional verification needed.", "warning")
-                            return render_template("verify_options.html", phone_number=phone_number,
-                                                user_recognized=True, face_recognized=True)
-                    
-                    # No direct match, try to identify using backend
-                    face_encoding = results['face_encodings'][0]  # Use the first face if multiple detected
-                    
+            try:
+                # First check if this face already has access
+                resp = backend_session.get(f"{backend_url}/api/face-access/{face_id}")
+                logger.debug(f"Face access check response: Status {resp.status_code}")
+                
+                if resp.status_code == 200:
                     try:
-                        # Send the face encoding to backend for identification
-                        encoding_json = json.dumps(face_encoding)
-                        encoding_base64 = base64.b64encode(encoding_json.encode('utf-8')).decode('utf-8')
-                        
-                        resp = backend_session.post(f"{backend_url}/identify-face", json={
-                            "face_encoding": encoding_base64
-                        })
-                        data = resp.json()
-                        
-                        if data.get("identified") and data.get("user"):
-                            # User recognized
-                            phone_number = data.get("user").get("phone_number")
-                            confidence = data.get("confidence", "N/A")
-                            
-                            # Check if this user is allowed direct access
-                            resp = backend_session.get(f"{backend_url}/check-face-access/{phone_number}")
-                            access_data = resp.json()
-                            
-                            if access_data.get("status") == "approved":
-                                # Unlock door and log access
-                                door_controller.unlock_door()
-                                
-                                # Log door unlock via facial recognition
-                                try:
-                                    backend_session.post(f"{backend_url}/log-door-access", json={
-                                        "user": phone_number,
-                                        "method": "Facial Recognition",
-                                        "status": "Unlocked",
-                                        "details": f"Door unlocked via facial recognition, confidence: {confidence}"
-                                    })
-                                except Exception as e:
-                                    logger.error(f"Error logging door access: {e}")
-                                    
-                                flash("Face recognized! Door unlocked.", "success")
-                                return render_template("door_unlocked.html")
-                            else:
-                                # No direct access - provide options
-                                flash("Face recognized but additional verification needed.", "warning")
-                                return render_template("verify_options.html", phone_number=phone_number,
-                                                    user_recognized=True, face_recognized=True)
-                        else:
-                            # Face not recognized, allow registration
-                            flask_session['face_encoding'] = face_encoding
-                            flask_session['has_temp_face'] = True
-                            
-                            flash("Face not recognized. Please verify identity or register.", "warning")
-                            return render_template("verify_options.html", user_recognized=False,
-                                                face_recognized=False, has_face=True)
-                    except Exception as e:
-                        logger.error(f"Error identifying face: {e}")
-                        logger.error(traceback.format_exc())
-                        flash("Error identifying face. Please try again.", "danger")
-                        return redirect(url_for("door_entry"))
-                else:
-                    # No face detected
-                    flash("No face detected. Please try again and ensure good lighting.", "warning")
-                    return redirect(url_for("door_entry"))
-            else:
-                # Error during face recognition
-                error_msg = results.get('error', "Face recognition failed. Please try again.")
-                logger.warning(f"Face recognition error: {error_msg}")
-                
-                # Provide more helpful error messages
-                if "liveness" in error_msg.lower():
-                    flash("Couldn't verify this is a real face. Please try with better lighting or enable testing mode.", "warning")
-                elif "timeout" in error_msg.lower():
-                    flash("Face recognition took too long. Please try again in better lighting conditions.", "warning")
-                else:
-                    flash(error_msg, "danger")
+                        face_access = resp.json()
+                        logger.info(f"Face access check: {face_access}")
                     
-                return redirect(url_for("door_entry"))
+                        if face_access.get('has_access', False):
+                            flash('Face recognized! Welcome back.', 'success')
+                            return redirect(url_for('door_entry', face_id=face_id))
+                    except json.JSONDecodeError as e:
+                        logger.warning(f"Failed to decode face access response: {e}")
+                        # Continue to identification as fallback
+                else:
+                    logger.warning(f"Face access check failed with status: {resp.status_code}")
                 
+                # If not, try to identify the face
+                face_encoding = face_recognition_result['face_encodings'][0]
+                # Ensure we're working with a Python list, not a numpy array
+                if isinstance(face_encoding, np.ndarray):
+                    encoding_list = face_encoding.tolist()
+                else:
+                    encoding_list = face_encoding  # should already be a list
+                
+                # Log the type of encoding we're sending
+                logger.debug(f"Sending face encoding type: {type(encoding_list).__name__}")
+                
+                resp = backend_session.post(
+                    f"{backend_url}/api/users/identify-face",
+                    json={'face_encoding': encoding_list, 'tolerance': 0.6}
+                )
+                
+                logger.debug(f"Face identification response: Status {resp.status_code}")
+                
+                if resp.status_code == 200:
+                    try:
+                        data = resp.json()
+                        logger.info(f"Face identification result: {data}")
+                        
+                        if data['success']:
+                            flash(f"Face recognized! Welcome, {data['user']['name']}.", 'success')
+                            return redirect(url_for('door_entry', face_id=face_id))
+                        else:
+                            # If face is not recognized, capture it for potential registration
+                            flash('Face not recognized. Please register to gain access.', 'warning')
+                            # Save the face encoding for registration
+                            return redirect(url_for('register_face'))
+                    except json.JSONDecodeError as e:
+                        logger.error(f"Error identifying face: {e}")
+                        flash('Error identifying face. Please try again.', 'error')
+                        return redirect(url_for('face_recognition'))
+                else:
+                    logger.warning(f"Face identification failed with status: {resp.status_code}")
+                    flash('Error communicating with the backend service. Please try again later.', 'error')
+                    return redirect(url_for('face_recognition'))
+            
+            except requests.exceptions.RequestException as e:
+                logger.error(f"Backend request error: {e}")
+                flash('Error connecting to backend service. Please try again later.', 'error')
+                return redirect(url_for('face_recognition'))
+                
+            # If not recognized, offer registration
+            return redirect(url_for('register_face'))
+            
         except Exception as e:
-            logger.error(f"Error processing face recognition: {e}")
-            logger.error(traceback.format_exc())
-            flash("An error occurred during face recognition.", "danger")
-            return redirect(url_for("door_entry"))
+            logger.error(f"Error processing face: {e}", exc_info=True)
+            flash('An unexpected error occurred. Please try again.', 'error')
+            return redirect(url_for('face_recognition'))
     
     @app.route('/register-face', methods=['POST'])
     def register_face():
@@ -797,16 +761,24 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                     # Try to convert if it's a numpy array
                     if isinstance(face_encoding, np.ndarray):
                         face_encoding = face_encoding.tolist()
+                    else:
+                        logger.warning(f"Unexpected face_encoding type: {type(face_encoding).__name__}")
+                        face_encoding = list(face_encoding) if hasattr(face_encoding, "__iter__") else [float(face_encoding)]
                 except Exception as e:
-                    logger.error(f"Error converting face encoding: {e}")
+                    logger.error(f"Error converting face encoding: {e}", exc_info=True)
                     flash("Error processing face data.", "danger")
                     return redirect(url_for("door_entry"))
             
-            # Convert face encoding list to JSON string
-            encoding_json = json.dumps(face_encoding)
-            
-            # Encode JSON string as base64
-            encoding_base64 = base64.b64encode(encoding_json.encode('utf-8')).decode('utf-8')
+            try:
+                # Convert face encoding list to JSON string
+                encoding_json = json.dumps(face_encoding)
+                
+                # Encode JSON string as base64
+                encoding_base64 = base64.b64encode(encoding_json.encode('utf-8')).decode('utf-8')
+            except (TypeError, json.JSONDecodeError) as e:
+                logger.error(f"JSON serialization error: {e}", exc_info=True)
+                flash("Error processing face data: invalid format.", "danger")
+                return redirect(url_for("door_entry"))
             
             # Send the face encoding and phone number to the backend
             resp = backend_session.post(f"{backend_url}/register-face", json={
