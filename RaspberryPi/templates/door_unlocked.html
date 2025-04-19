@@ -57,7 +57,7 @@
             countdown--;
             
             if (countdown <= 0) {
-                window.location.href = "{{ url_for('index') }}";
+            window.location.href = "{{ url_for('index') }}";
             } else {
                 countdownElement.textContent = countdown;
                 setTimeout(updateCountdown, 1000);

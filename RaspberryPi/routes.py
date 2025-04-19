@@ -1172,34 +1172,44 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                     return redirect(url_for("face_recognition"))
                 
                 # Send the face encoding and phone number to the backend
-                resp = backend_session.post(f"{backend_url}/register-face", json={
-                    "phone_number": phone_number,
-                    "face_encoding": encoding_base64
-                })
-                
-                if resp.status_code == 200 or resp.status_code == 201:
-                    try:
-                        data = resp.json()
-                        if data.get("status") == "success":
-                            # Clear the session data
-                            if 'face_encoding' in flask_session:
-                                flask_session.pop('face_encoding')
-                            
-                            flash("Face registered successfully. Please wait for OTP or admin approval.", "success")
-                            # Try to send OTP to the newly registered user
-                            resp = backend_session.post(f"{backend_url}/door-entry", json={"phone_number": phone_number})
+                try:
+                    resp = backend_session.post(f"{backend_url}/register-face", json={
+                        "phone_number": phone_number,
+                        "face_encoding": encoding_base64
+                    })
+                    
+                    if resp.status_code == 200 or resp.status_code == 201:
+                        try:
                             data = resp.json()
-                            
-                            if data.get("status") == "OTP sent":
-                                return render_template("otp.html", phone_number=phone_number)
-                            else:
-                                return redirect(url_for("door_entry"))
-                    except Exception as e:
-                        logger.error(f"Error processing registration response: {e}")
-                        flash("Error processing backend response.", "danger")
-                else:
-                    logger.error(f"Registration failed with status: {resp.status_code}")
-                    flash("Error registering with backend service.", "danger")
+                            if data.get("status") == "success":
+                                # Clear the session data
+                                if 'face_encoding' in flask_session:
+                                    flask_session.pop('face_encoding')
+                                
+                                flash("Face registered successfully. Please wait for OTP or admin approval.", "success")
+                                # Try to send OTP to the newly registered user
+                                try:
+                                    resp = backend_session.post(f"{backend_url}/door-entry", json={"phone_number": phone_number})
+                                    data = resp.json()
+                                    
+                                    if data.get("status") == "OTP sent":
+                                        return render_template("otp.html", phone_number=phone_number)
+                                    else:
+                                        return redirect(url_for("door_entry"))
+                                except Exception as e:
+                                    logger.error(f"Error sending OTP: {e}")
+                                    return redirect(url_for("door_entry"))
+                        except Exception as e:
+                            logger.error(f"Error processing registration response: {e}")
+                            flash("Error processing backend response.", "danger")
+                    else:
+                        logger.error(f"Registration failed with status: {resp.status_code}")
+                        flash("Error registering with backend service.", "danger")
+                except Exception as e:
+                    logger.error(f"Error connecting to backend: {e}")
+                    flash("Error connecting to backend.", "danger")
+                
+                return redirect(url_for("face_recognition"))
         except Exception as e:
             logger.error(f"Error connecting to backend: {e}")
             flash("Error connecting to backend.", "danger")
@@ -1327,7 +1337,7 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
     @app.route('/capture-preview-frame', methods=['POST'])
     def capture_preview_frame():
         """Capture a single frame to display during processing"""
-        nonlocal camera
+        nonlocal camera, camera_needs_cleanup
         
         try:
             logger.info("Capturing preview frame before facial recognition")
@@ -1339,17 +1349,21 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
             # Generate timestamp for the frame
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
             
-            # Get camera instance
-            curr_camera = get_camera()
-            if curr_camera is None or not hasattr(curr_camera, 'read'):
-                logger.error("Camera not available for preview capture")
-                return jsonify({"success": False, "error": "Camera not available"}), 500
+            # Get camera instance with proper lock
+            with camera_lock:
+                if camera is None or not hasattr(camera, 'isOpened') or not camera.isOpened():
+                    camera = get_camera()
+                    camera_needs_cleanup = True
                 
-            # Read frame
-            ret, frame = curr_camera.read()
-            if not ret or frame is None:
-                logger.error("Failed to capture preview frame")
-                return jsonify({"success": False, "error": "Failed to capture frame"}), 500
+                if camera is None or not hasattr(camera, 'read'):
+                    logger.error("Camera not available for preview capture")
+                    return jsonify({"success": False, "error": "Camera not available"}), 500
+                    
+                # Read frame while still holding the lock
+                ret, frame = camera.read()
+                if not ret or frame is None:
+                    logger.error("Failed to capture preview frame")
+                    return jsonify({"success": False, "error": "Failed to capture frame"}), 500
             
             # Add timestamp to the frame
             cv2.putText(

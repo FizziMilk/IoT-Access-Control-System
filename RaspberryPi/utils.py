@@ -37,13 +37,13 @@ def create_backend_session(max_retries=3, backoff_factor=0.3):
         status_forcelist=[429, 500, 502, 503, 504],
         allowed_methods=["HEAD", "GET", "POST", "PUT", "DELETE", "OPTIONS", "TRACE"]
     )
-    
+
     # Create session with retry adapter
     adapter = HTTPAdapter(max_retries=retry_strategy)
     session = requests.Session()
     session.mount("http://", adapter)
     session.mount("https://", adapter)
-    
+
     logger.info(f"Backend session created for URL: {backend_url}")
     return session, backend_url
 

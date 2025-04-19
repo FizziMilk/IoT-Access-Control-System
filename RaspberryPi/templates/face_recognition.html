@@ -175,9 +175,9 @@
         </div>
         
         <div class="button-group">
-            <button id="startButton" class="btn btn-primary btn-lg">
-                <i class="fas fa-camera"></i> Start Face Recognition
-            </button>
+        <button id="startButton" class="btn btn-primary btn-lg">
+            <i class="fas fa-camera"></i> Start Face Recognition
+        </button>
             <button id="resetCameraButton" class="btn btn-secondary">
                 <i class="fas fa-sync"></i> Reset Camera
             </button>
@@ -281,17 +281,17 @@
     function startFaceRecognition() {
         console.log("Starting face recognition at: " + new Date().toISOString());
         
-        // Hide the instructions and button
-        document.getElementById('instructions').style.display = 'none';
-        document.getElementById('startButton').style.display = 'none';
+            // Hide the instructions and button
+            document.getElementById('instructions').style.display = 'none';
+            document.getElementById('startButton').style.display = 'none';
         document.getElementById('resetCameraButton').style.display = 'none';
-        document.getElementById('backButton').style.display = 'none';
+            document.getElementById('backButton').style.display = 'none';
         
         // Show the processing text
         document.getElementById('processingText').style.display = 'block';
             
-        // Show the loading spinner
-        document.getElementById('loadingSpinner').style.display = 'block';
+            // Show the loading spinner
+            document.getElementById('loadingSpinner').style.display = 'block';
             
         // Save the current video src to restore it later if needed
         const videoFeed = document.getElementById('videoFeed');
@@ -685,7 +685,7 @@
             // Start the countdown automatically after camera warm-up
             startCountdown();
         }, 1500); // 1.5 second delay for camera warm-up
-    });
+        });
     </script>
 </body>
 </html> 
