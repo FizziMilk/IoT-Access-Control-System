@@ -228,7 +228,7 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
         return camera
     
     def release_camera():
-        """Release camera resources safely"""
+        """Release camera resources safely and thoroughly"""
         nonlocal camera, camera_needs_cleanup
         
         with camera_lock:
@@ -238,7 +238,11 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                     if hasattr(camera, 'isOpened') and camera.isOpened():
                         # Try to read any remaining frames to clear buffer
                         for _ in range(5):
-                            camera.read()
+                            try:
+                                camera.read()
+                            except Exception:
+                                # Ignore errors during buffer clearing
+                                pass
                         camera.release()
                         logger.info("Camera released successfully")
                 except Exception as e:
@@ -246,24 +250,39 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                 finally:
                     camera = None
                     
-                # On Linux, we won't forcibly kill processes - it's too aggressive
-                # and can crash the application
+                # Platform-specific cleanup for more reliable camera release
                 if platform.system() == 'Linux':
                     # Just log that we're waiting for resources to be freed
-                    logger.info("Waiting for camera resources to be freed naturally")
-                    # Add a delay to allow OS to reclaim resources - increased for better reliability
+                    logger.info("Linux: Waiting for camera resources to be freed naturally")
+                    # Add a delay to allow OS to reclaim resources
                     time.sleep(2.0)
+                elif platform.system() == 'Windows':
+                    # Windows often needs more aggressive cleanup
+                    logger.info("Windows: Performing additional cleanup steps")
+                    time.sleep(1.0)
+                    try:
+                        # Force OpenCV to release any hanging resources
+                        cv2.destroyAllWindows()
+                        # Multiple waitKey calls needed for better cleanup
+                        for _ in range(5):
+                            cv2.waitKey(1)
+                    except Exception as e:
+                        logger.error(f"Error during Windows camera cleanup: {e}")
                 
-                # Camera has been released, so we don't need cleanup anymore
+                # Camera has been released, update the cleanup flag
                 camera_needs_cleanup = False
                 
-                # Add additional cleanup to ensure resources are properly released
+                # Additional cleanup to ensure resources are properly released
                 try:
                     # Explicitly destroy any OpenCV windows
                     cv2.destroyAllWindows()
                     cv2.waitKey(1)
                 except Exception as e:
                     logger.error(f"Error during additional camera cleanup: {e}")
+                
+                # Call garbage collection to help free up resources
+                import gc
+                gc.collect()
     
     @app.route('/')
     def index():
@@ -545,12 +564,20 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
         """Start face recognition process on the video feed"""
         nonlocal face_recognition_active, face_recognition_result, camera, camera_needs_cleanup
         
-        # Reset result
+        logger.info("Starting face recognition process")
+        
+        # Reset result and set active flag
         face_recognition_result = None
         face_recognition_active = True
         
         # Set cleanup flag since we'll be using camera resources
         camera_needs_cleanup = True
+        
+        # Force camera release before starting recognition
+        release_camera()
+        
+        # Add a longer delay to ensure camera is fully released before face recognition starts
+        time.sleep(2.0)
         
         # Skip liveness check if in testing mode
         skip_liveness = request.form.get('skip_liveness', 'false').lower() == 'true'
@@ -568,26 +595,36 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                 from face_recognition_process import run_face_recognition
                 from camera_config import CAMERA_INDEX
                 
-                # Set a flag to stop the video feed
+                # Double-check that camera is released before proceeding
                 with camera_lock:
                     if camera is not None:
-                        logger.info("Releasing camera for face recognition")
-                        # Release camera here before passing to face recognition process
+                        logger.info("Ensuring camera is released before face recognition")
                         release_camera()
                 
-                # Add a longer safety delay to ensure camera is fully released
+                # Add an even longer safety delay to ensure camera is fully released
                 logger.info("Waiting for camera resources to be freed completely...")
-                time.sleep(4.0)
+                time.sleep(5.0)
                 
-                # Try to force device cleanup by executing system command
-                # This is a simple ls command just to ensure any pending processes are completed
-                # Safer than direct device manipulation
+                # Try to force device cleanup by executing system command on Linux
                 if platform.system() == 'Linux':
                     try:
                         os.system('ls -la /dev/video* > /dev/null 2>&1')
                         time.sleep(1.0)
                     except Exception as e:
                         logger.error(f"Error executing system command: {e}")
+                
+                # On Windows, try additional cleanup steps
+                if platform.system() == 'Windows':
+                    try:
+                        # Force OpenCV to release any hanging resources
+                        cv2.destroyAllWindows()
+                        for i in range(5):  # Multiple waitKey calls sometimes needed
+                            cv2.waitKey(1)
+                    except Exception as e:
+                        logger.error(f"Error releasing Windows resources: {e}")
+                
+                # Log that we're starting face recognition
+                logger.info(f"Starting face recognition process with camera index {CAMERA_INDEX}")
                 
                 # Run face recognition (which will handle its own camera)
                 result = run_face_recognition(
@@ -602,15 +639,37 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                 logger.info(f"Face recognition completed with result: {result.get('success')}")
                 
                 # Add a delay before allowing video feed to reacquire the camera
-                time.sleep(2.0)
+                time.sleep(3.0)
+                
+                # Explicitly close any OpenCV windows that might be left open
+                try:
+                    cv2.destroyAllWindows()
+                    for i in range(5):  # Multiple waitKey calls for thorough cleanup
+                        cv2.waitKey(1)
+                except Exception as e:
+                    logger.error(f"Error destroying OpenCV windows: {e}")
                 
             except Exception as e:
-                logger.error(f"Error running face recognition: {e}")
+                logger.error(f"Error running face recognition: {e}", exc_info=True)
                 face_recognition_result = {"success": False, "error": str(e)}
             finally:
+                # Set recognition active flag to false
                 face_recognition_active = False
-                # Set cleanup flag to false since we're done with camera resources
+                
+                # Explicitly set camera to None to force reinitialization
+                with camera_lock:
+                    if camera is not None:
+                        try:
+                            release_camera()
+                        except Exception as e:
+                            logger.error(f"Error releasing camera in finally block: {e}")
+                        finally:
+                            camera = None
+                
+                # Set cleanup flag to indicate we're done with camera resources
                 camera_needs_cleanup = False
+                
+                logger.info("Face recognition background process completed")
         
         # Start background thread
         recognition_thread = threading.Thread(target=run_recognition_background)
@@ -961,37 +1020,88 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
             # Set cleanup flag
             camera_needs_cleanup = True
             
-            # Force camera release
+            # Force camera release - this will also destroy OpenCV windows
             release_camera()
             
-            # Simple delay to ensure resources are freed
-            time.sleep(2.0)
+            # Longer delay to ensure resources are freed
+            time.sleep(3.0)
             
-            # On Linux, try a more passive approach to device reset
+            # Platform-specific cleanup approaches
             if platform.system() == 'Linux':
                 try:
-                    # Just list video devices to check their availability
+                    # List video devices to check their availability
                     os.system('ls -la /dev/video* > /dev/null 2>&1')
                     time.sleep(1.0)
                 except Exception as e:
                     logger.error(f"Error checking video devices: {e}")
+            elif platform.system() == 'Windows':
+                try:
+                    # Windows-specific cleanup
+                    logger.info("Windows: Performing additional resource cleanup")
+                    # Force destroy all windows multiple times
+                    for _ in range(3):
+                        cv2.destroyAllWindows()
+                        cv2.waitKey(1)
+                    # Force garbage collection
+                    import gc
+                    gc.collect()
+                    time.sleep(1.0)
+                except Exception as e:
+                    logger.error(f"Error during Windows cleanup: {e}")
             
-            # Try to open and close the camera immediately as a reset mechanism
-            try:
-                logger.info("Performing camera open/close cycle")
-                temp_camera = cv2.VideoCapture(0)
-                if temp_camera.isOpened():
-                    temp_camera.read()  # Read one frame
-                    temp_camera.release()
-                    logger.info("Camera open/close cycle completed")
-                time.sleep(1.0)
-            except Exception as e:
-                logger.error(f"Error in camera open/close cycle: {e}")
+            # Try to open and close the camera multiple times as a reset mechanism
+            attempts = 0
+            max_attempts = 3
+            success = False
             
-            return jsonify({"status": "success", "message": "Camera resources reset"})
+            while attempts < max_attempts and not success:
+                try:
+                    logger.info(f"Performing camera open/close cycle (attempt {attempts+1}/{max_attempts})")
+                    # Import camera index from config
+                    from camera_config import CAMERA_INDEX
+                    
+                    # Try configured index first, then fallback to 0
+                    for idx in [CAMERA_INDEX, 0]:
+                        try:
+                            temp_camera = cv2.VideoCapture(idx)
+                            if temp_camera.isOpened():
+                                # Read a few frames to clear buffers
+                                for _ in range(3):
+                                    temp_camera.read()
+                                temp_camera.release()
+                                logger.info(f"Camera open/close cycle completed successfully with index {idx}")
+                                success = True
+                                break
+                        except Exception as e:
+                            logger.error(f"Error in camera cycle with index {idx}: {e}")
+                    
+                    # If we didn't succeed with any index, wait before retrying
+                    if not success:
+                        time.sleep(1.0)
+                    
+                except Exception as e:
+                    logger.error(f"Error in camera open/close cycle: {e}")
+                    time.sleep(1.0)
+                
+                attempts += 1
+            
+            # Final cleanup
+            cv2.destroyAllWindows()
+            for _ in range(5):
+                cv2.waitKey(1)
+            
+            # Force camera to None to ensure full reinitialization on next access
+            with camera_lock:
+                camera = None
+            
+            return jsonify({
+                "status": "success", 
+                "message": "Camera resources reset",
+                "success": success
+            })
             
         except Exception as e:
-            logger.error(f"Error resetting camera resources: {e}")
+            logger.error(f"Error resetting camera resources: {e}", exc_info=True)
             return jsonify({"status": "error", "message": str(e)}), 500
     
     # Clean up resources when app exits
