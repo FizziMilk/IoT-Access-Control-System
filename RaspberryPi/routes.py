@@ -390,7 +390,7 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
         Video streaming route for face recognition.
         """
         def generate_frames():
-            nonlocal camera, camera_lock
+            nonlocal camera, camera_lock, face_recognition_active
             
             # Initialize camera if needed
             with camera_lock:
@@ -412,46 +412,56 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                     frame = None
                     current_time = time.time()
                     
-                    with camera_lock:
-                        # Only try to reconnect camera after delay
-                        if (camera is None or (hasattr(camera, 'isOpened') and not camera.isOpened())) and \
-                           (current_time - last_camera_attempt > reconnect_delay):
-                            logger.info("Attempting to reconnect to camera")
-                            last_camera_attempt = current_time
-                            try:
-                                # If we already have a camera object that failed, try to release it first
-                                if camera is not None and hasattr(camera, 'release'):
-                                    try:
-                                        camera.release()
-                                    except:
-                                        pass
-                                
-                                # Get a new camera
-                                camera = get_camera()
-                            except Exception as e:
-                                logger.error(f"Error reconnecting to camera: {e}")
-                                camera = None
-                        
-                        # Try to get a frame if camera exists and is open
-                        if camera is not None and hasattr(camera, 'isOpened') and camera.isOpened():
-                            try:
-                                success, frame = camera.read()
-                                if not success or frame is None:
-                                    frame = np.zeros((480, 640, 3), dtype=np.uint8)
-                                    cv2.putText(frame, "Failed to read frame", (50, 240), 
-                                               font, font_scale, font_color, line_type)
-                            except Exception as e:
-                                logger.error(f"Error reading frame: {e}")
-                                frame = None
-                        else:
-                            # No valid camera
-                            frame = None
-                    
-                    # If frame is None, create a placeholder
-                    if frame is None:
+                    # If face recognition is active, don't try to use the camera
+                    if face_recognition_active:
+                        # Create a placeholder frame showing face recognition is in progress
                         frame = np.zeros((480, 640, 3), dtype=np.uint8)
-                        cv2.putText(frame, "Camera not available", (50, 240), 
-                                   font, font_scale, font_color, line_type)
+                        cv2.putText(frame, "Face Recognition in Progress...", (50, 240), 
+                                  font, font_scale, (0, 255, 0), line_type)
+                        cv2.putText(frame, "Please look at the camera and keep still", (50, 280), 
+                                  font, font_scale, font_color, line_type)
+                    else:
+                        # Normal camera operation when face recognition is not active
+                        with camera_lock:
+                            # Only try to reconnect camera after delay
+                            if (camera is None or (hasattr(camera, 'isOpened') and not camera.isOpened())) and \
+                               (current_time - last_camera_attempt > reconnect_delay):
+                                logger.info("Attempting to reconnect to camera")
+                                last_camera_attempt = current_time
+                                try:
+                                    # If we already have a camera object that failed, try to release it first
+                                    if camera is not None and hasattr(camera, 'release'):
+                                        try:
+                                            camera.release()
+                                        except:
+                                            pass
+                                    
+                                    # Get a new camera
+                                    camera = get_camera()
+                                except Exception as e:
+                                    logger.error(f"Error reconnecting to camera: {e}")
+                                    camera = None
+                            
+                            # Try to get a frame if camera exists and is open
+                            if camera is not None and hasattr(camera, 'isOpened') and camera.isOpened():
+                                try:
+                                    success, frame = camera.read()
+                                    if not success or frame is None:
+                                        frame = np.zeros((480, 640, 3), dtype=np.uint8)
+                                        cv2.putText(frame, "Failed to read frame", (50, 240), 
+                                                   font, font_scale, font_color, line_type)
+                                except Exception as e:
+                                    logger.error(f"Error reading frame: {e}")
+                                    frame = None
+                            else:
+                                # No valid camera
+                                frame = None
+                        
+                        # If frame is None, create a placeholder
+                        if frame is None:
+                            frame = np.zeros((480, 640, 3), dtype=np.uint8)
+                            cv2.putText(frame, "Camera not available", (50, 240), 
+                                       font, font_scale, font_color, line_type)
                     
                     # Add timestamp
                     cv2.putText(frame, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), 
@@ -482,7 +492,7 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
     @app.route('/start-face-recognition', methods=['POST'])
     def start_face_recognition():
         """Start face recognition process on the video feed"""
-        nonlocal face_recognition_active, face_recognition_result
+        nonlocal face_recognition_active, face_recognition_result, camera
         
         # Reset result
         face_recognition_result = None
@@ -498,17 +508,22 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
         os.makedirs(debug_dir, exist_ok=True)
         
         def run_recognition_background():
-            nonlocal face_recognition_result, face_recognition_active
+            nonlocal face_recognition_result, face_recognition_active, camera
             try:
                 # Import directly here for cleaner import structure
                 from face_recognition_process import run_face_recognition
                 from camera_config import CAMERA_INDEX
                 
-                # Release camera here before passing to face recognition process
-                release_camera()
+                # Set a flag to stop the video feed
+                with camera_lock:
+                    if camera is not None:
+                        logger.info("Releasing camera for face recognition")
+                        # Release camera here before passing to face recognition process
+                        release_camera()
                 
-                # Add a safety delay to ensure camera is fully released
-                time.sleep(1.0)
+                # Add a longer safety delay to ensure camera is fully released
+                logger.info("Waiting for camera resources to be freed completely...")
+                time.sleep(3.0)
                 
                 # Run face recognition (which will handle its own camera)
                 result = run_face_recognition(
@@ -520,6 +535,11 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                 
                 # Store result
                 face_recognition_result = result
+                logger.info(f"Face recognition completed with result: {result.get('success')}")
+                
+                # Add a delay before allowing video feed to reacquire the camera
+                time.sleep(1.0)
+                
             except Exception as e:
                 logger.error(f"Error running face recognition: {e}")
                 face_recognition_result = {"success": False, "error": str(e)}

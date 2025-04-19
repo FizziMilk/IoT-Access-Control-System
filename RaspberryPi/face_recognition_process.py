@@ -409,22 +409,53 @@ def run_face_recognition(camera_index=0, backend_url=None, skip_liveness=False, 
     camera = None
     
     try:
-        # Initialize camera
-        logger.info(f"Opening camera at index {camera_index}")
-        camera = cv2.VideoCapture(camera_index)
+        # Initialize camera with retries
+        max_camera_retries = 5
+        retry_count = 0
+        retry_delay = 2.0  # seconds
         
-        # Set camera properties
-        camera.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-        camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-        camera.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        while retry_count < max_camera_retries:
+            logger.info(f"Opening camera at index {camera_index} (attempt {retry_count + 1}/{max_camera_retries})")
+            camera = cv2.VideoCapture(camera_index)
+            
+            # Give camera time to initialize
+            time.sleep(1.0)
+            
+            # Set camera properties
+            if camera.isOpened():
+                camera.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+                camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+                camera.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                
+                # Test if camera works by reading a frame
+                ret, test_frame = camera.read()
+                if ret and test_frame is not None:
+                    logger.info(f"Successfully opened camera at index {camera_index}")
+                    break
+                else:
+                    logger.warning(f"Camera opened but could not read frame, retrying...")
+                    camera.release()
+            
+            # If we get here, camera failed to open or read frames
+            logger.warning(f"Failed to open camera on attempt {retry_count + 1}, retrying in {retry_delay} seconds...")
+            retry_count += 1
+            
+            # Release any partial camera resources
+            if camera is not None:
+                try:
+                    camera.release()
+                except:
+                    pass
+            
+            # Wait before retry
+            time.sleep(retry_delay)
         
-        # Give camera time to initialize
-        time.sleep(1.0)
+        # If we exhausted all retries
+        if retry_count >= max_camera_retries:
+            logger.error(f"Failed to open camera after {max_camera_retries} attempts")
+            return {"success": False, "error": "Failed to open camera after multiple attempts"}
         
-        # Check if camera opened successfully
-        if not camera.isOpened():
-            logger.error(f"Failed to open camera at index {camera_index}")
-            return {"success": False, "error": "Failed to open camera"}
+        # At this point, we have a working camera
         
         # Initialize recognition system
         recognition = WebRecognition()
