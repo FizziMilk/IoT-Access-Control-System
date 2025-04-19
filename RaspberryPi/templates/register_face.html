@@ -4,87 +4,116 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Register Face</title>
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.3/css/all.min.css">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
     <style>
         .container {
-            max-width: 500px;
-            margin-top: 2rem;
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+        input[type="text"],
+        input[type="tel"] {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 16px;
+        }
+        button {
+            background-color: #4CAF50;
+            color: white;
+            padding: 12px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        .alert {
+            padding: 15px;
+            margin-bottom: 20px;
+            border-radius: 4px;
+        }
+        .alert-success {
+            background-color: #dff0d8;
+            color: #3c763d;
+        }
+        .alert-error {
+            background-color: #f2dede;
+            color: #a94442;
+        }
+        .alert-warning {
+            background-color: #fcf8e3;
+            color: #8a6d3b;
         }
         .face-preview {
+            margin: 20px auto;
+            max-width: 300px;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
             text-align: center;
-            margin-bottom: 1rem;
         }
         .face-preview img {
             max-width: 100%;
-            max-height: 300px;
-            border-radius: 8px;
-            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+            height: auto;
+            border-radius: 4px;
+            margin-bottom: 10px;
         }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1 class="mb-4 text-center">Register Your Face</h1>
+        <h1>Register Your Face</h1>
         
         {% with messages = get_flashed_messages(with_categories=true) %}
             {% if messages %}
                 {% for category, message in messages %}
-                    <div class="alert alert-{{ category }}">{{ message }}</div>
+                    <div class="alert alert-{{ category }}">
+                        {{ message }}
+                    </div>
                 {% endfor %}
             {% endif %}
         {% endwith %}
         
-        <div class="card">
-            <div class="card-body">
-                <p class="lead text-center mb-4">Your face was captured successfully. Please enter your phone number to complete registration.</p>
-                
-                <div class="face-preview mb-4">
-                    <img src="{{ url_for('static', filename='debug_frames/frame_final_' + timestamp + '.jpg') }}" 
-                         alt="Captured Face" class="img-fluid" id="facePreview">
+        {% if has_face_encoding %}
+            <div class="face-preview">
+                <img src="{{ url_for('static', filename='debug_frames/' + (session.get('debug_frame', 'frame_final_latest.jpg'))) }}" alt="Your face">
+                <p>Your face was detected but not recognized. Please register to continue.</p>
+            </div>
+            
+            <form method="POST" action="{{ url_for('register_face') }}">
+                <div class="form-group">
+                    <label for="name">Full Name:</label>
+                    <input type="text" id="name" name="name" required>
                 </div>
                 
-                <form action="{{ url_for('register_face') }}" method="POST">
-                    <div class="mb-3">
-                        <label for="phone_number" class="form-label">Phone Number</label>
-                        <div class="input-group">
-                            <span class="input-group-text"><i class="fas fa-phone"></i></span>
-                            <input type="tel" class="form-control" id="phone_number" name="phone_number" 
-                                placeholder="+44XXXXXXXXXX" required>
-                        </div>
-                        <div class="form-text">Enter your phone number in international format (e.g., +447XXXXXXXXX)</div>
-                    </div>
-                    
-                    <div class="d-grid gap-2">
-                        <button type="submit" class="btn btn-primary btn-lg">
-                            <i class="fas fa-user-plus"></i> Register
-                        </button>
-                        
-                        <a href="{{ url_for('face_recognition') }}" class="btn btn-secondary">
-                            <i class="fas fa-arrow-left"></i> Back to Face Recognition
-                        </a>
-                    </div>
-                </form>
+                <div class="form-group">
+                    <label for="phone">Phone Number:</label>
+                    <input type="tel" id="phone" name="phone" required>
+                </div>
+                
+                <div class="form-group">
+                    <button type="submit">Register</button>
+                    <a href="{{ url_for('index') }}" class="btn btn-secondary">Cancel</a>
+                </div>
+            </form>
+        {% else %}
+            <div class="alert alert-warning">
+                No face data available. Please complete the face recognition process first.
             </div>
-        </div>
+            <a href="{{ url_for('face_recognition') }}" class="btn">Go to Face Recognition</a>
+        {% endif %}
     </div>
-    
-    <script>
-        // Get the latest debug frame image if available
-        function updateFacePreview() {
-            const img = document.getElementById('facePreview');
-            if (img.src && img.src.includes('frame_final_')) {
-                const timestamp = new Date().getTime();
-                if (img.src.includes('?')) {
-                    img.src = img.src.split('?')[0] + '?t=' + timestamp;
-                } else {
-                    img.src = img.src + '?t=' + timestamp;
-                }
-            }
-        }
-        
-        // Update on page load
-        document.addEventListener('DOMContentLoaded', updateFacePreview);
-    </script>
 </body>
 </html> 

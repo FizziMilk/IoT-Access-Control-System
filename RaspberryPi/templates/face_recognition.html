@@ -686,6 +686,85 @@
             startCountdown();
         }, 1500); // 1.5 second delay for camera warm-up
         });
+
+    // Add code to handle redirect in the checkStatus function
+    function checkStatus() {
+        fetch('/check-face-recognition-status')
+            .then(response => response.json())
+            .then(data => {
+                console.log("Status check response:", data);
+                
+                // If the response contains a redirect, navigate to that page
+                if (data.redirect) {
+                    console.log("Redirecting to:", data.redirect);
+                    window.location.href = data.redirect;
+                    return;
+                }
+                
+                // Update UI based on status
+                if (data.status === "processing") {
+                    statusElement.textContent = "Processing...";
+                    statusElement.className = "processing";
+                    setTimeout(checkStatus, 500);
+                } else if (data.face_too_small) {
+                    statusElement.textContent = "Your face is too small. Please move closer to the camera.";
+                    statusElement.className = "error";
+                    // Re-enable start button after delay
+                    setTimeout(() => {
+                        startButton.disabled = false;
+                        guideElement.style.display = "block";
+                    }, 3000);
+                } else if (data.face_detected === false) {
+                    statusElement.textContent = "No face detected. Please ensure your face is visible to the camera.";
+                    statusElement.className = "error";
+                    // Re-enable start button after delay
+                    setTimeout(() => {
+                        startButton.disabled = false;
+                        guideElement.style.display = "block";
+                    }, 3000);
+                } else if (data.success === false) {
+                    statusElement.textContent = data.error || "Error during face recognition.";
+                    statusElement.className = "error";
+                    // Re-enable start button after delay
+                    setTimeout(() => {
+                        startButton.disabled = false;
+                        guideElement.style.display = "block";
+                    }, 3000);
+                } else if (data.face_recognized === true) {
+                    // Face was recognized
+                    let message = `Welcome, ${data.match?.name || 'User'}!`;
+                    statusElement.textContent = message;
+                    statusElement.className = "success";
+                    
+                    // Redirect to home page after a delay
+                    setTimeout(() => {
+                        window.location.href = "/";
+                    }, 2000);
+                } else if (data.is_live === false) {
+                    // Failed liveness check
+                    statusElement.textContent = "Liveness check failed. Please try again with a real face.";
+                    statusElement.className = "error";
+                    // Re-enable start button after delay
+                    setTimeout(() => {
+                        startButton.disabled = false;
+                        guideElement.style.display = "block";
+                    }, 3000);
+                } else {
+                    // Check again after a delay
+                    setTimeout(checkStatus, 500);
+                }
+            })
+            .catch(error => {
+                console.error("Error checking status:", error);
+                statusElement.textContent = "Error checking status. Please try again.";
+                statusElement.className = "error";
+                // Re-enable start button after delay
+                setTimeout(() => {
+                    startButton.disabled = false;
+                    guideElement.style.display = "block";
+                }, 3000);
+            });
+    }
     </script>
 </body>
 </html> 
