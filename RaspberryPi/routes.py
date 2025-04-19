@@ -1053,8 +1053,6 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                         
                         if data.get("status") == "OTP sent":
                             return render_template("otp.html", phone_number=phone_number)
-                        elif data.get("status") == "pending":
-                            return render_template("pending.html", phone_number=phone_number)
                         else:
                             return redirect(url_for("door_entry"))
                 except Exception as e:

@@ -1,22 +1,75 @@
-import requests
-from requests.adapters import HTTPAdapter
-from urllib3.util.ssl_ import create_urllib3_context
+"""
+Utility functions for the IoT Access Control System.
+These functions provide common utilities used across the application.
+"""
 import os
+import requests
+import logging
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
-def create_backend_session():
+# Configure logging
+logger = logging.getLogger("Utils")
+
+def create_backend_session(max_retries=3, backoff_factor=0.3):
+    """
+    Create a session for connecting to the backend with retry capabilities.
+    
+    Args:
+        max_retries: Maximum number of retries for failed requests
+        backoff_factor: Backoff factor for retry delay calculation
+        
+    Returns:
+        tuple: (requests.Session, backend_url) - configured session and backend URL
+    """
+    logger.info("Creating backend session with retry capabilities")
+    
+    # Get backend URL from environment
     backend_url = os.getenv("BACKEND_URL")
-    backend_ca_cert = os.getenv("CA_CERT")
-
-    # Create a custom SSL context that trusts the backend cert
-    ctx = create_urllib3_context()
-    ctx.load_verify_locations(backend_ca_cert)
-
-    # Create a persistent session
+    if not backend_url:
+        logger.warning("BACKEND_URL environment variable not set")
+        backend_url = "http://localhost:5000"
+    
+    # Set up retries for robustness
+    retry_strategy = Retry(
+        total=max_retries,
+        backoff_factor=backoff_factor,
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods=["HEAD", "GET", "POST", "PUT", "DELETE", "OPTIONS", "TRACE"]
+    )
+    
+    # Create session with retry adapter
+    adapter = HTTPAdapter(max_retries=retry_strategy)
     session = requests.Session()
-    session.mount("https://", HTTPAdapter(max_retries=3, pool_connections=10, pool_maxsize=100))
-    session.verify = backend_ca_cert
-
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+    
+    logger.info(f"Backend session created for URL: {backend_url}")
     return session, backend_url
+
+
+def is_valid_phone_number(phone_number):
+    """
+    Validate a phone number format.
+    Currently enforces simple length validation, can be extended for more complex validation.
+    
+    Args:
+        phone_number: String containing the phone number to validate
+        
+    Returns:
+        bool: True if phone number is valid, False otherwise
+    """
+    if not phone_number:
+        return False
+    
+    # Strip any non-numeric characters
+    digits_only = ''.join(c for c in phone_number if c.isdigit())
+    
+    # Check length (adjust as needed for your locale)
+    if len(digits_only) < 10 or len(digits_only) > 15:
+        return False
+        
+    return True
 
 def verify_otp_rest(session, backend_url, phone_number, otp_code):
     try:

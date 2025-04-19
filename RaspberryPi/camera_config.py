@@ -1,9 +1,15 @@
 """
-Camera configuration file for the face recognition system.
+Camera configuration for face recognition system.
+This file contains settings related to the camera setup.
 """
 
-# Default camera index (standard webcam is usually 0)
+# The camera index to use (0 is usually the built-in webcam)
+# This value might need adjustment based on your specific hardware setup
 CAMERA_INDEX = 0
+
+# Define minimum face size for reliable recognition
+MIN_FACE_WIDTH = 100  # Minimum width in pixels
+MIN_FACE_HEIGHT = 100  # Minimum height in pixels
 
 # Camera resolution for face recognition
 CAMERA_WIDTH = 640
