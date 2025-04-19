@@ -251,11 +251,23 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                 if platform.system() == 'Linux':
                     # Just log that we're waiting for resources to be freed
                     logger.info("Waiting for camera resources to be freed naturally")
-                    # Add a small delay to allow OS to reclaim resources
-                    time.sleep(0.5)
+                    # Add a delay to allow OS to reclaim resources - increased for better reliability
+                    time.sleep(1.0)
                 
                 # Camera has been released, so we don't need cleanup anymore
                 camera_needs_cleanup = False
+                
+                # Add additional cleanup to ensure resources are properly released
+                try:
+                    # Explicitly destroy any OpenCV windows
+                    cv2.destroyAllWindows()
+                    cv2.waitKey(1)
+                    
+                    # On Linux, reset camera device
+                    if platform.system() == 'Linux':
+                        os.system('v4l2-ctl --device /dev/video0 --set-ctrl=exposure_auto=3')
+                except Exception as e:
+                    logger.error(f"Error during additional camera cleanup: {e}")
     
     @app.route('/')
     def index():
@@ -396,17 +408,24 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
     @app.route('/face-recognition', methods=['GET'])
     def face_recognition():
         """Display the face recognition page"""
-        nonlocal camera_needs_cleanup
+        nonlocal camera, camera_needs_cleanup, face_recognition_active, face_recognition_result
         
         logger.info("Face recognition page requested")
+        
+        # Reset recognition state
+        face_recognition_active = False
+        face_recognition_result = None
         
         # Set the cleanup flag since we're initializing camera resources
         camera_needs_cleanup = True
         
-        # Clean up any existing OpenCV windows and force camera release
+        # Force camera release and cleanup
+        release_camera()
+        
+        # Clean up any existing OpenCV windows
         try:
-            import cv2
             cv2.destroyAllWindows()
+            cv2.waitKey(1)
         except Exception as e:
             logger.error(f"Error cleaning up CV resources: {e}")
         
@@ -563,6 +582,15 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                 # Add a longer safety delay to ensure camera is fully released
                 logger.info("Waiting for camera resources to be freed completely...")
                 time.sleep(3.0)
+                
+                # Additional OS-level cleanup on Linux
+                if platform.system() == 'Linux':
+                    try:
+                        # Reset the camera device
+                        os.system('v4l2-ctl --device /dev/video0 --reset')
+                        time.sleep(1.0)
+                    except Exception as e:
+                        logger.error(f"Error resetting camera device: {e}")
                 
                 # Run face recognition (which will handle its own camera)
                 result = run_face_recognition(
@@ -918,6 +946,45 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
         except Exception as e:
             flash("Error connecting to backend.", "danger")
         return redirect(url_for("door_entry")) 
+    
+    @app.route('/reset-camera-resources', methods=['POST'])
+    def reset_camera_resources():
+        """
+        Endpoint to force reset camera resources - useful when camera gets stuck
+        """
+        nonlocal camera, camera_needs_cleanup, face_recognition_active, face_recognition_result
+        
+        try:
+            logger.info("Manually resetting camera resources")
+            
+            # Reset recognition state
+            face_recognition_active = False
+            face_recognition_result = None
+            
+            # Set cleanup flag
+            camera_needs_cleanup = True
+            
+            # Force camera release
+            release_camera()
+            
+            # On Linux, perform additional system-level cleanup
+            if platform.system() == 'Linux':
+                try:
+                    # Reset the camera device
+                    os.system('v4l2-ctl --device /dev/video0 --reset')
+                    time.sleep(1.0)
+                    
+                    # Additional device control reset
+                    os.system('v4l2-ctl --device /dev/video0 --set-ctrl=exposure_auto=3')
+                    os.system('v4l2-ctl --device /dev/video0 --set-ctrl=focus_auto=1')
+                except Exception as e:
+                    logger.error(f"Error resetting camera device: {e}")
+            
+            return jsonify({"status": "success", "message": "Camera resources reset"})
+            
+        except Exception as e:
+            logger.error(f"Error resetting camera resources: {e}")
+            return jsonify({"status": "error", "message": str(e)}), 500
     
     # Clean up resources when app exits
     @app.teardown_appcontext

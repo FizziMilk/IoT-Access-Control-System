@@ -4,6 +4,7 @@
     <title>Face Recognition</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
     <style>
         body {
             min-height: 100vh;
@@ -62,6 +63,15 @@
             margin: 20px auto;
             max-width: 640px;
         }
+        .button-group {
+            display: flex;
+            justify-content: center;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+        #resetCameraButton {
+            padding: 10px 15px;
+        }
     </style>
 </head>
 <body>
@@ -81,9 +91,14 @@
             <p>Look directly at the camera and keep your face visible.</p>
         </div>
         
-        <button id="startButton" class="btn btn-primary btn-lg">
-            <i class="fas fa-camera"></i> Start Face Recognition
-        </button>
+        <div class="button-group">
+            <button id="startButton" class="btn btn-primary btn-lg">
+                <i class="fas fa-camera"></i> Start Face Recognition
+            </button>
+            <button id="resetCameraButton" class="btn btn-secondary">
+                <i class="fas fa-sync"></i> Reset Camera
+            </button>
+        </div>
         
         <div class="video-container">
             <img id="videoFeed" src="{{ url_for('video_feed') }}" alt="Face Recognition Feed" onerror="handleVideoError(this)">
@@ -128,10 +143,51 @@
     </div>
     
     <script>
+        // Reset camera resources function
+        function resetCameraResources() {
+            $('#resetCameraButton').prop('disabled', true).html('<i class="fas fa-spinner fa-spin"></i> Resetting...');
+            
+            $.ajax({
+                url: '/reset-camera-resources',
+                method: 'POST',
+                success: function(response) {
+                    console.log('Camera reset successful:', response);
+                    
+                    // Reload the video feed
+                    reloadVideoFeed();
+                    
+                    $('#statusText').text('Camera reset successful');
+                },
+                error: function(xhr, status, error) {
+                    console.error('Error resetting camera:', error);
+                    $('#statusText').text('Error resetting camera: ' + error);
+                },
+                complete: function() {
+                    $('#resetCameraButton').prop('disabled', false).html('<i class="fas fa-sync"></i> Reset Camera');
+                }
+            });
+        }
+        
+        // Reload video feed
+        function reloadVideoFeed() {
+            const videoFeed = document.getElementById('videoFeed');
+            if (videoFeed) {
+                if (videoFeed.src.includes('?')) {
+                    videoFeed.src = videoFeed.src.split('?')[0] + '?t=' + new Date().getTime();
+                } else {
+                    videoFeed.src = videoFeed.src + '?t=' + new Date().getTime();
+                }
+            }
+        }
+        
+        // Attach event listener to reset button
+        document.getElementById('resetCameraButton').addEventListener('click', resetCameraResources);
+
         document.getElementById('startButton').addEventListener('click', function() {
             // Hide the instructions and button
             document.getElementById('instructions').style.display = 'none';
             document.getElementById('startButton').style.display = 'none';
+            document.getElementById('resetCameraButton').style.display = 'none';
             document.getElementById('backButton').style.display = 'none';
             
             // Show the processing text
@@ -256,6 +312,7 @@
             // Reset the UI to initial state
             document.getElementById('instructions').style.display = 'block';
             document.getElementById('startButton').style.display = 'inline-block';
+            document.getElementById('resetCameraButton').style.display = 'inline-block';
             document.getElementById('backButton').style.display = 'inline-block';
             document.getElementById('processingText').style.display = 'none';
             document.getElementById('loadingSpinner').style.display = 'none';
