@@ -237,7 +237,7 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                     logger.info("Releasing camera resources")
                     if hasattr(camera, 'isOpened') and camera.isOpened():
                         # Try to read any remaining frames to clear buffer
-                        for _ in range(5):
+                        for _ in range(3):  # Reduced from 5
                             try:
                                 camera.read()
                             except Exception:
@@ -255,16 +255,16 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                     # Just log that we're waiting for resources to be freed
                     logger.info("Linux: Waiting for camera resources to be freed naturally")
                     # Add a delay to allow OS to reclaim resources
-                    time.sleep(2.0)
+                    time.sleep(0.5)  # Reduced from 2.0
                 elif platform.system() == 'Windows':
                     # Windows often needs more aggressive cleanup
                     logger.info("Windows: Performing additional cleanup steps")
-                    time.sleep(1.0)
+                    time.sleep(0.3)  # Reduced from 1.0
                     try:
                         # Force OpenCV to release any hanging resources
                         cv2.destroyAllWindows()
                         # Multiple waitKey calls needed for better cleanup
-                        for _ in range(5):
+                        for _ in range(3):  # Reduced from 5
                             cv2.waitKey(1)
                     except Exception as e:
                         logger.error(f"Error during Windows camera cleanup: {e}")
@@ -567,8 +567,8 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                     yield (b'--frame\r\n'
                            b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
                     
-                    # Slight delay to reduce CPU usage
-                    time.sleep(0.04)  # ~25 FPS
+                    # Slight delay to reduce CPU usage - adjusted for better responsiveness
+                    time.sleep(0.02)  # ~50 FPS (reduced from 0.04 which was ~25 FPS)
                     
             except Exception as e:
                 logger.error(f"Error in video feed: {e}")
@@ -599,8 +599,8 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
         # Force camera release before starting recognition
         release_camera()
         
-        # Add a longer delay to ensure camera is fully released before face recognition starts
-        time.sleep(2.0)
+        # Shorter delay to ensure camera is released before face recognition starts
+        time.sleep(0.5)  # Reduced from 2.0 seconds
         
         # Skip liveness check if in testing mode
         skip_liveness = request.form.get('skip_liveness', 'false').lower() == 'true'
@@ -624,15 +624,14 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                         logger.info("Ensuring camera is released before face recognition")
                         release_camera()
                 
-                # Add an even longer safety delay to ensure camera is fully released
-                logger.info("Waiting for camera resources to be freed completely...")
-                time.sleep(5.0)
+                # Reduced safety delay to ensure camera is fully released
+                logger.info("Waiting for camera resources to be freed...")
+                time.sleep(1.0)  # Reduced from 5.0 seconds
                 
                 # Try to force device cleanup by executing system command on Linux
                 if platform.system() == 'Linux':
                     try:
                         os.system('ls -la /dev/video* > /dev/null 2>&1')
-                        time.sleep(1.0)
                     except Exception as e:
                         logger.error(f"Error executing system command: {e}")
                 
@@ -641,7 +640,7 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                     try:
                         # Force OpenCV to release any hanging resources
                         cv2.destroyAllWindows()
-                        for i in range(5):  # Multiple waitKey calls sometimes needed
+                        for i in range(3):  # Reduced from 5 calls
                             cv2.waitKey(1)
                     except Exception as e:
                         logger.error(f"Error releasing Windows resources: {e}")
@@ -661,13 +660,13 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                 face_recognition_result = result
                 logger.info(f"Face recognition completed with result: {result.get('success')}")
                 
-                # Add a delay before allowing video feed to reacquire the camera
-                time.sleep(3.0)
+                # Shorter delay before allowing video feed to reacquire the camera
+                time.sleep(1.0)  # Reduced from 3.0 seconds
                 
                 # Explicitly close any OpenCV windows that might be left open
                 try:
                     cv2.destroyAllWindows()
-                    for i in range(5):  # Multiple waitKey calls for thorough cleanup
+                    for i in range(2):  # Reduced from 5 calls
                         cv2.waitKey(1)
                 except Exception as e:
                     logger.error(f"Error destroying OpenCV windows: {e}")
@@ -1099,15 +1098,14 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
             # Force camera release - this will also destroy OpenCV windows
             release_camera()
             
-            # Longer delay to ensure resources are freed
-            time.sleep(3.0)
+            # Reduced delay to ensure resources are freed
+            time.sleep(1.0)  # Reduced from 3.0 seconds
             
             # Platform-specific cleanup approaches
             if platform.system() == 'Linux':
                 try:
                     # List video devices to check their availability
                     os.system('ls -la /dev/video* > /dev/null 2>&1')
-                    time.sleep(1.0)
                 except Exception as e:
                     logger.error(f"Error checking video devices: {e}")
             elif platform.system() == 'Windows':
@@ -1115,19 +1113,19 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                     # Windows-specific cleanup
                     logger.info("Windows: Performing additional resource cleanup")
                     # Force destroy all windows multiple times
-                    for _ in range(3):
+                    for _ in range(2):  # Reduced from 3
                         cv2.destroyAllWindows()
                         cv2.waitKey(1)
                     # Force garbage collection
                     import gc
                     gc.collect()
-                    time.sleep(1.0)
+                    time.sleep(0.3)  # Reduced from 1.0
                 except Exception as e:
                     logger.error(f"Error during Windows cleanup: {e}")
             
             # Try to open and close the camera multiple times as a reset mechanism
             attempts = 0
-            max_attempts = 3
+            max_attempts = 2  # Reduced from 3
             success = False
             
             while attempts < max_attempts and not success:
@@ -1142,7 +1140,7 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                             temp_camera = cv2.VideoCapture(idx)
                             if temp_camera.isOpened():
                                 # Read a few frames to clear buffers
-                                for _ in range(3):
+                                for _ in range(2):  # Reduced from 3
                                     temp_camera.read()
                                 temp_camera.release()
                                 logger.info(f"Camera open/close cycle completed successfully with index {idx}")
@@ -1153,17 +1151,17 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                     
                     # If we didn't succeed with any index, wait before retrying
                     if not success:
-                        time.sleep(1.0)
+                        time.sleep(0.3)  # Reduced from 1.0
                     
                 except Exception as e:
                     logger.error(f"Error in camera open/close cycle: {e}")
-                    time.sleep(1.0)
+                    time.sleep(0.3)  # Reduced from 1.0
                 
                 attempts += 1
             
             # Final cleanup
             cv2.destroyAllWindows()
-            for _ in range(5):
+            for _ in range(2):  # Reduced from 5
                 cv2.waitKey(1)
             
             # Force camera to None to ensure full reinitialization on next access
@@ -1257,8 +1255,8 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                 try:
                     logger.info("Releasing camera resources")
                     if hasattr(camera, 'isOpened') and camera.isOpened():
-                        # Try to read any remaining frames to clear buffer
-                        for _ in range(5):
+                        # Try to read any remaining frames to clear buffer - reduced read count
+                        for _ in range(2):  # Reduced from 5
                             camera.read()
                         camera.release()
                         logger.info("Camera released successfully")
@@ -1272,8 +1270,8 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                 if platform.system() == 'Linux':
                     # Just log that we're waiting for resources to be freed
                     logger.info("Waiting for camera resources to be freed naturally")
-                    # Add a small delay to allow OS to reclaim resources
-                    time.sleep(0.5)
+                    # Add a small delay to allow OS to reclaim resources - reduced wait time
+                    time.sleep(0.3)  # Reduced from 0.5
                 
                 # Reset the cleanup flag
                 camera_needs_cleanup = False

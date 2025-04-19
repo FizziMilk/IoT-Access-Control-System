@@ -324,7 +324,7 @@
             setTimeout(() => {
                 console.log("Starting recognition status checks");
                 checkRecognitionStatus(progressInterval, originalVideoSrc);
-            }, 2000); // 2 second delay to avoid race condition
+            }, 1000); // 1 second delay (reduced from 2 seconds) to avoid race condition
         })
         .catch(error => {
             console.error('Error starting face recognition:', error);
@@ -406,7 +406,7 @@
             
             if (data.status === 'processing') {
                 // Still processing, check again in a moment
-                window.statusCheckTimer = setTimeout(() => checkRecognitionStatus(progressInterval, originalVideoSrc), 1000); // Increased delay to 1000ms
+                window.statusCheckTimer = setTimeout(() => checkRecognitionStatus(progressInterval, originalVideoSrc), 500); // Reduced from 1000ms for more responsive feedback
             } else if (data.status === 'complete') {
                 // Recognition complete, get the final debug frame
                 console.log("Recognition complete with result:", data.result);
@@ -490,7 +490,7 @@
                 setTimeout(resetUI, 5000);
             } else {
                 // Retry the status check after a short delay
-                window.statusCheckTimer = setTimeout(() => checkRecognitionStatus(progressInterval, originalVideoSrc), 2000); // Increased delay for retries
+                window.statusCheckTimer = setTimeout(() => checkRecognitionStatus(progressInterval, originalVideoSrc), 1000); // Reduced from 2000ms for faster recovery
             }
         });
     }
