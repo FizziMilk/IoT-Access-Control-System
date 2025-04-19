@@ -222,18 +222,13 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                 finally:
                     camera = None
                     
-                # Try to make sure system releases camera at OS level
-                try:
-                    # On Raspberry Pi, we can forcibly release the camera device
-                    if platform.system() == 'Linux':
-                        # Use fuser to kill processes using video device
-                        subprocess.run('sudo fuser -k /dev/video0 2>/dev/null', shell=True)
-                        subprocess.run('sudo fuser -k /dev/video1 2>/dev/null', shell=True)
-                        subprocess.run('sudo fuser -k /dev/video2 2>/dev/null', shell=True)
-                        time.sleep(1.0)  # Give OS time to fully release resources
-                        logger.info("Attempted OS-level camera release")
-                except Exception as e:
-                    logger.error(f"Error during OS-level camera release: {e}")
+                # On Linux, we won't forcibly kill processes - it's too aggressive
+                # and can crash the application
+                if platform.system() == 'Linux':
+                    # Just log that we're waiting for resources to be freed
+                    logger.info("Waiting for camera resources to be freed naturally")
+                    # Add a small delay to allow OS to reclaim resources
+                    time.sleep(0.5)
     
     @app.route('/')
     def index():
@@ -408,24 +403,55 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
             font_color = (255, 255, 255)
             line_type = 2
             
+            # Track camera reconnection attempts
+            last_camera_attempt = time.time()
+            reconnect_delay = 3.0  # seconds
+            
             try:
                 while True:
+                    frame = None
+                    current_time = time.time()
+                    
                     with camera_lock:
-                        if camera is None or (hasattr(camera, 'isOpened') and not camera.isOpened()):
-                            camera = get_camera()
+                        # Only try to reconnect camera after delay
+                        if (camera is None or (hasattr(camera, 'isOpened') and not camera.isOpened())) and \
+                           (current_time - last_camera_attempt > reconnect_delay):
+                            logger.info("Attempting to reconnect to camera")
+                            last_camera_attempt = current_time
+                            try:
+                                # If we already have a camera object that failed, try to release it first
+                                if camera is not None and hasattr(camera, 'release'):
+                                    try:
+                                        camera.release()
+                                    except:
+                                        pass
+                                
+                                # Get a new camera
+                                camera = get_camera()
+                            except Exception as e:
+                                logger.error(f"Error reconnecting to camera: {e}")
+                                camera = None
                         
-                        if camera is None:
-                            # If no camera, create placeholder frame
-                            frame = np.zeros((480, 640, 3), dtype=np.uint8)
-                            cv2.putText(frame, "Camera not available", (50, 240), 
-                                       font, font_scale, font_color, line_type)
+                        # Try to get a frame if camera exists and is open
+                        if camera is not None and hasattr(camera, 'isOpened') and camera.isOpened():
+                            try:
+                                success, frame = camera.read()
+                                if not success or frame is None:
+                                    frame = np.zeros((480, 640, 3), dtype=np.uint8)
+                                    cv2.putText(frame, "Failed to read frame", (50, 240), 
+                                               font, font_scale, font_color, line_type)
+                            except Exception as e:
+                                logger.error(f"Error reading frame: {e}")
+                                frame = None
                         else:
-                            # Read frame from camera
-                            success, frame = camera.read()
-                            if not success:
-                                frame = np.zeros((480, 640, 3), dtype=np.uint8)
-                                cv2.putText(frame, "Failed to read frame", (50, 240), 
-                                           font, font_scale, font_color, line_type)
+                            # No valid camera
+                            frame = None
+                    
+                    # If frame is None, create a placeholder
+                    if frame is None:
+                        frame = np.zeros((480, 640, 3), dtype=np.uint8)
+                        cv2.putText(frame, "Camera not available", (50, 240), 
+                                   font, font_scale, font_color, line_type)
                     
                     # Add timestamp
                     cv2.putText(frame, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), 
@@ -480,6 +506,9 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                 
                 # Release camera here before passing to face recognition process
                 release_camera()
+                
+                # Add a safety delay to ensure camera is fully released
+                time.sleep(1.0)
                 
                 # Run face recognition (which will handle its own camera)
                 result = run_face_recognition(
@@ -757,18 +786,10 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
         # Explicitly destroy all OpenCV windows
         try:
             cv2.destroyAllWindows()
-            # Force window cleanup with multiple waitKey calls
+            # Force window cleanup
             cv2.waitKey(1)
         except Exception as e:
             logger.error(f"Error destroying windows: {e}")
-            
-        # Try one more time to ensure cameras are released at OS level
-        try:
-            if platform.system() == 'Linux':
-                subprocess.run('sudo fuser -k /dev/video* 2>/dev/null', shell=True)
-                logger.info("Final OS-level camera release completed")
-        except Exception as e:
-            logger.error(f"Error during final OS-level camera release: {e}")
             
         logger.info("Resource cleanup completed")
 

@@ -406,24 +406,26 @@ def run_face_recognition(camera_index=0, backend_url=None, skip_liveness=False, 
     Returns:
         dict: Recognition results
     """
-    # Initialize camera
-    logger.info(f"Opening camera at index {camera_index}")
-    camera = cv2.VideoCapture(camera_index)
-    
-    # Set camera properties
-    camera.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-    camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-    camera.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-    
-    # Give camera time to initialize
-    time.sleep(1.0)
-    
-    # Check if camera opened successfully
-    if not camera.isOpened():
-        logger.error(f"Failed to open camera at index {camera_index}")
-        return {"success": False, "error": "Failed to open camera"}
+    camera = None
     
     try:
+        # Initialize camera
+        logger.info(f"Opening camera at index {camera_index}")
+        camera = cv2.VideoCapture(camera_index)
+        
+        # Set camera properties
+        camera.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+        camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+        camera.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        
+        # Give camera time to initialize
+        time.sleep(1.0)
+        
+        # Check if camera opened successfully
+        if not camera.isOpened():
+            logger.error(f"Failed to open camera at index {camera_index}")
+            return {"success": False, "error": "Failed to open camera"}
+        
         # Initialize recognition system
         recognition = WebRecognition()
         
@@ -434,7 +436,10 @@ def run_face_recognition(camera_index=0, backend_url=None, skip_liveness=False, 
         
         # Read multiple frames to stabilize camera
         for _ in range(5):
-            camera.read()
+            ret, _ = camera.read()
+            if not ret:
+                logger.warning("Failed to read warmup frame")
+            time.sleep(0.1)
         
         # Capture and process frame
         ret, frame = camera.read()
@@ -561,8 +566,18 @@ def run_face_recognition(camera_index=0, backend_url=None, skip_liveness=False, 
     
     finally:
         # Release camera
-        camera.release()
-        logger.info("Camera released")
+        if camera is not None:
+            try:
+                # Try to read any remaining frames to clear buffer
+                for _ in range(3):
+                    camera.read()
+                camera.release()
+                logger.info("Camera released")
+            except Exception as e:
+                logger.error(f"Error releasing camera: {e}")
+                
+        # Sleep briefly to ensure camera resources are freed
+        time.sleep(0.5)
 
 
 def main():
