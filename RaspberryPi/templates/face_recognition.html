@@ -28,14 +28,6 @@
             width: 3rem;
             height: 3rem;
         }
-        .debug-info {
-            font-size: 0.8rem;
-            color: #666;
-            margin-top: 20px;
-            text-align: left;
-            border-top: 1px solid #eee;
-            padding-top: 10px;
-        }
         #startButton {
             padding: 15px 30px;
             font-size: 1.2rem;
@@ -87,7 +79,6 @@
         <div id="instructions">
             <p class="lead">Click the button below to start facial recognition.</p>
             <p>Look directly at the camera and keep your face visible.</p>
-            <p><strong>Important:</strong> Ensure your face is well-lit from the front.</p>
         </div>
         
         <button id="startButton" class="btn btn-primary btn-lg">
@@ -122,28 +113,17 @@
             </a>
         </div>
         
-        <div class="debug-info">
-            <p>Camera initialization may take a moment. Please be patient.</p>
-            <p>If you have issues with facial recognition, try the following:</p>
-            <ul>
-                <li>Ensure good lighting on your face</li>
-                <li>Look directly at the camera</li>
-                <li>Hold still during the process</li>
-                <li>Make sure your face is completely visible</li>
-            </ul>
-            
-            {% if testing_mode %}
-            <div class="mt-3 alert alert-warning">
-                <strong>Testing Mode Enabled</strong>
-                <div class="form-check mt-2">
-                    <input class="form-check-input" type="checkbox" id="skipLivenessCheck">
-                    <label class="form-check-label" for="skipLivenessCheck">
-                        Skip liveness detection (for testing only)
-                    </label>
-                </div>
+        {% if testing_mode %}
+        <div class="mt-3 alert alert-warning">
+            <strong>Testing Mode Enabled</strong>
+            <div class="form-check mt-2">
+                <input class="form-check-input" type="checkbox" id="skipLivenessCheck">
+                <label class="form-check-label" for="skipLivenessCheck">
+                    Skip liveness detection (for testing only)
+                </label>
             </div>
-            {% endif %}
         </div>
+        {% endif %}
     </div>
     
     <script>
