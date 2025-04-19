@@ -962,7 +962,7 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
     
     def get_camera_simple():
         """Get global camera instance or initialize a new one"""
-        global camera
+        nonlocal camera
         
         if camera is None or not camera.isOpened():
             logger.info("Initializing camera at index 0")
@@ -981,7 +981,7 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
     
     def release_camera_simple():
         """Explicitly release the camera when requested"""
-        global camera
+        nonlocal camera
         
         if camera is not None and camera.isOpened():
             logger.info("Releasing camera resources")
