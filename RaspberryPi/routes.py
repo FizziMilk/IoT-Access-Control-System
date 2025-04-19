@@ -697,25 +697,41 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                 best_face_height = 0
                 
                 try:
-                    for i, (frame, face_location) in enumerate(zip(frames, face_recognition.face_locations(frames, number_of_times_to_upsample=2))):
-                        if face_location is not None:
-                            _, right, bottom, left = face_location
-                            face_width = right - left
-                            face_height = bottom - top
+                    # Process each frame individually
+                    for i, frame in enumerate(frames):
+                        # Get face locations for this specific frame
+                        face_locations = face_recognition.face_locations(frame, number_of_times_to_upsample=2)
+                        
+                        # Skip if no faces found in this frame
+                        if not face_locations:
+                            continue
                             
-                            # Handle potential array types
-                            if isinstance(face_width, np.ndarray):
-                                face_width = float(face_width.item()) if face_width.size == 1 else float(face_width.mean())
-                            if isinstance(face_height, np.ndarray):
-                                face_height = float(face_height.item()) if face_height.size == 1 else float(face_height.mean())
+                        # Use the first (largest) face in the frame
+                        face_location = face_locations[0]
+                        
+                        # Extract coordinates (top, right, bottom, left)
+                        top, right, bottom, left = face_location
+                        
+                        # Calculate face dimensions
+                        face_width = right - left
+                        face_height = bottom - top
+                        
+                        # Handle potential array types
+                        if isinstance(face_width, np.ndarray):
+                            face_width = float(face_width.item()) if face_width.size == 1 else float(face_width.mean())
+                        if isinstance(face_height, np.ndarray):
+                            face_height = float(face_height.item()) if face_height.size == 1 else float(face_height.mean())
+                        
+                        # Compare as scalars - find the largest face
+                        if float(face_width) > float(best_face_width) or float(face_height) > float(best_face_height):
+                            best_frame_index = i
+                            best_face_width = face_width
+                            best_face_height = face_height
                             
-                            # Compare as scalars
-                            if float(face_width) > float(best_face_width) or float(face_height) > float(best_face_height):
-                                best_frame_index = i
-                                best_face_width = face_width
-                                best_face_height = face_height
+                        logger.info(f"Frame {i}: Face dimensions {face_width}x{face_height}")
                 except Exception as e:
                     logger.error(f"Error finding best frame: {e}")
+                    import traceback
                     logger.error(f"Best frame selection traceback: {traceback.format_exc()}")
                 
                 logger.info(f"Best frame index: {best_frame_index}")
