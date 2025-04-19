@@ -478,7 +478,32 @@
             // Reset timeout error counter on successful response
             timeoutErrorCount = 0;
             
-            if (data.status === 'processing') {
+            console.log("Recognition status response:", data);
+            
+            // Check if we need to register a new user
+            if (data.registration_needed || (data.result && data.result.registration_needed)) {
+                console.log("No registered users - redirecting to registration page");
+                clearInterval(progressInterval);
+                document.getElementById('progressBar').style.width = '100%';
+                document.getElementById('statusText').textContent = "No registered users found. Redirecting to registration...";
+                
+                // Show notification before redirecting
+                const container = document.querySelector('.container');
+                const notification = document.createElement('div');
+                notification.className = 'alert alert-info mt-3';
+                notification.innerHTML = '<h4>No registered users found</h4>' +
+                    '<p>You appear to be a new user. Redirecting to registration page...</p>';
+                container.prepend(notification);
+                
+                // Redirect to registration after a short delay
+                setTimeout(() => {
+                    window.location.href = "/register-face";
+                }, 2000);
+                return;
+            }
+            
+            // Continue with normal status checking
+            if (data.active) {
                 // Still processing, check again in a moment
                 window.statusCheckTimer = setTimeout(() => checkRecognitionStatus(progressInterval, originalVideoSrc), 500); // Reduced from 1000ms for more responsive feedback
             } else if (data.status === 'face_too_small') {
@@ -686,63 +711,6 @@
             startCountdown();
         }, 1500); // 1.5 second delay for camera warm-up
         });
-
-    // Add code to handle redirect in the checkStatus function
-    function checkStatus() {
-        fetch('/check-face-recognition-status')
-            .then(response => response.json())
-            .then(data => {
-                console.log("Status check response:", data);
-                
-                // If recognition is still active, check again later
-                if (data.active) {
-                    console.log("Recognition still active, checking again soon...");
-                    setTimeout(checkStatus, 500);
-                    return;
-                }
-                
-                // Hide processing elements
-                $('#loadingSpinner').hide();
-                $('#processingText').hide();
-                
-                // Check if we have a result
-                if (data.result) {
-                    const result = data.result;
-                    
-                    // If registration is needed, redirect to registration page
-                    if (data.registration_needed || result.registration_needed) {
-                        console.log("No registered users - redirecting to registration page");
-                        // Show message before redirecting
-                        const notification = $('<div class="alert alert-info">' +
-                            '<h4>No registered users found</h4>' +
-                            '<p>You appear to be a new user. Redirecting to registration page...</p>' +
-                            '</div>');
-                        $('.container').prepend(notification);
-                        
-                        // Redirect to registration after a short delay
-                        setTimeout(() => {
-                            window.location.href = "/register-face";
-                        }, 2000);
-                        return;
-                    }
-                    
-                    // Handle other result cases
-                    // ... rest of the result handling logic ...
-                }
-                
-                // If we got here with no result, check again after a delay
-                setTimeout(checkStatus, 500);
-            })
-            .catch(error => {
-                console.error("Error checking status:", error);
-                // Handle error
-                const notification = $('<div class="alert alert-danger">' +
-                    '<h4>Error</h4>' +
-                    '<p>An error occurred while checking recognition status: ' + error + '</p>' +
-                    '</div>');
-                $('.container').prepend(notification);
-            });
-    }
     </script>
 </body>
 </html> 
