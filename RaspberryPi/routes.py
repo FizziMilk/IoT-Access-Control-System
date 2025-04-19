@@ -16,7 +16,8 @@ import io
 import platform
 import copy
 import requests
-import face_recognition
+# Rename this import to avoid shadowing with a potential function
+import face_recognition as face_recog
 from recognition_state import recognition_state
 
 # Configure logging
@@ -446,7 +447,7 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
         return render_template("door_entry.html")
 
     @app.route('/face-recognition', methods=['GET'])
-    def face_recognition():
+    def face_recognition_page():
         """Display the face recognition page"""
         nonlocal camera, camera_needs_cleanup
         
@@ -699,7 +700,7 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
             if not face_id:
                 logger.warning("No face ID provided")
                 flash('No face ID provided', 'error')
-                return redirect(url_for('face_recognition'))
+                return redirect(url_for('face_recognition_page'))
             
             logger.info(f"Processing face with ID: {face_id}")
             
@@ -713,20 +714,20 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
             if not recognition_state.face_recognition_result:
                 logger.warning("No face recognition results available")
                 flash('No face recognition results available', 'error')
-                return redirect(url_for('face_recognition'))
+                return redirect(url_for('face_recognition_page'))
             
             try:
                 # Check if face was detected
                 if not recognition_state.face_recognition_result.get('face_detected', False):
                     logger.warning("No face detected in result")
                     flash('No face was detected. Please try again.', 'error')
-                    return redirect(url_for('face_recognition'))
+                    return redirect(url_for('face_recognition_page'))
                 
                 # Check if face encodings are available
                 if 'face_encodings' not in recognition_state.face_recognition_result or not recognition_state.face_recognition_result['face_encodings']:
                     logger.warning("No face encodings found in result")
                     flash('No face encodings available', 'error')
-                    return redirect(url_for('face_recognition'))
+                    return redirect(url_for('face_recognition_page'))
                 
                 # Store all the collected encodings in the session
                 # We'll use these for registration if needed
@@ -766,12 +767,12 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
             except Exception as e:
                 logger.error(f"Error processing face match: {str(e)}", exc_info=True)
                 flash("An error occurred while processing your face. Please try again.", "error")
-                return redirect(url_for('face_recognition'))
+                return redirect(url_for('face_recognition_page'))
                 
         except Exception as e:
             logger.error(f"Error processing face: {e}", exc_info=True)
             flash('An unexpected error occurred. Please try again.', 'error')
-            return redirect(url_for('face_recognition'))
+            return redirect(url_for('face_recognition_page'))
     
     @app.route('/register-face', methods=['GET', 'POST'])
     def register_face():
@@ -1028,7 +1029,7 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
             # Check if we're in a request context before accessing request.endpoint
             from flask import has_request_context
             if not has_request_context() or request.endpoint not in [
-                'face_recognition', 'start_face_recognition', 'process_face'
+                'face_recognition_page', 'start_face_recognition', 'process_face'
             ]:
                 return
         
@@ -1063,7 +1064,7 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                 
         # Only destroy windows on specific endpoints if in request context
         from flask import has_request_context
-        if has_request_context() and request.endpoint in ['face_recognition', 'process_face']:
+        if has_request_context() and request.endpoint in ['face_recognition_page', 'process_face']:
             try:
                 cv2.destroyAllWindows()
                 # Force window cleanup
@@ -1106,7 +1107,7 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                     rgb_frame = frame  # Already RGB
                 
                 # Detect faces in this frame (using HOG which is faster than CNN)
-                locations = face_recognition.face_locations(rgb_frame, model="hog")
+                locations = face_recog.face_locations(rgb_frame, model="hog")
                 
                 if locations:
                     rgb_frames.append(rgb_frame)
@@ -1197,7 +1198,7 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                 
                 # Extract face encodings from best frame (only encode the best face)
                 encoding_start = time.time()
-                face_encodings = face_recognition.face_encodings(best_frame, [best_face_location])
+                face_encodings = face_recog.face_encodings(best_frame, [best_face_location])
                 encoding_time = time.time() - encoding_start
                 logger.info(f"Face encoding extracted in {encoding_time:.2f} seconds")
                 
@@ -1247,8 +1248,8 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                         return
                     
                     # Compare faces
-                    matches = face_recognition.compare_faces(known_face_encodings, face_encodings[0], tolerance=0.6)
-                    face_distances = face_recognition.face_distance(known_face_encodings, face_encodings[0])
+                    matches = face_recog.compare_faces(known_face_encodings, face_encodings[0], tolerance=0.6)
+                    face_distances = face_recog.face_distance(known_face_encodings, face_encodings[0])
                     
                     if not any(matches):
                         logger.info("Face not recognized - no matches found")
