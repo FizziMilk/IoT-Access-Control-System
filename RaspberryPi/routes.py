@@ -380,14 +380,8 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
         try:
             import cv2
             cv2.destroyAllWindows()
-            cv2.waitKey(1)
-            
-            # Try to force release camera at OS level
-            import subprocess
-            subprocess.run('sudo fuser -k /dev/video0 2>/dev/null || true', 
-                           shell=True, timeout=2)
         except Exception as e:
-            logger.error(f"Error cleaning up resources: {e}")
+            logger.error(f"Error cleaning up CV resources: {e}")
         
         # Check if testing mode - pass this to the template
         testing_mode = request.args.get('testing', 'false').lower() == 'true'
@@ -401,11 +395,12 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
         Video streaming route for face recognition.
         """
         def generate_frames():
-            nonlocal face_recognition_active, face_recognition_result
+            nonlocal camera, camera_lock
             
-            # Set up face recognition if needed
-            recognition = None
-            known_faces_loaded = False
+            # Initialize camera if needed
+            with camera_lock:
+                if camera is None:
+                    camera = get_camera()
             
             # Create placeholder when needed
             font = cv2.FONT_HERSHEY_SIMPLEX
@@ -413,270 +408,50 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
             font_color = (255, 255, 255)
             line_type = 2
             
-            # Track camera failure count and last attempt time
-            camera_failure_count = 0
-            last_camera_attempt = time.time()
-            camera_retry_interval = 5.0  # Seconds between camera open attempts
-            
-            # Initialize camera outside the loop
-            cam = get_camera()
-            
             try:
                 while True:
-                    frame = None
-                    
-                    # Check if we should try to reinitialize camera
-                    current_time = time.time()
-                    should_try_camera = (cam is None or (not hasattr(cam, 'isOpened') or not cam.isOpened())) and \
-                                       (current_time - last_camera_attempt > camera_retry_interval)
-                    
-                    # Acquire lock only for the camera operations
                     with camera_lock:
-                        if should_try_camera:
-                            # Update last attempt time
-                            last_camera_attempt = current_time
-                            logger.info("Attempting to reconnect to camera")
-                            
-                            # Limit retries to avoid log spam
-                            camera_failure_count += 1
-                            if camera_failure_count > 5:
-                                camera_retry_interval = 30.0  # Slow down retries after multiple failures
-                            
-                            # Try to reinitialize camera
-                            cam = get_camera()
-                            
-                        # Read frame from camera or use placeholder
-                        if hasattr(cam, 'read'):
-                            success, frame = cam.read()
-                            if not success:
-                                # Create a placeholder frame
-                                frame = np.zeros((480, 640, 3), dtype=np.uint8)
-                                cv2.putText(frame, "Failed to read frame", 
-                                          (50, 240), font, font_scale, font_color, line_type)
-                        else:
-                            # Create a placeholder frame
+                        if camera is None or (hasattr(camera, 'isOpened') and not camera.isOpened()):
+                            camera = get_camera()
+                        
+                        if camera is None:
+                            # If no camera, create placeholder frame
                             frame = np.zeros((480, 640, 3), dtype=np.uint8)
-                            cv2.putText(frame, "Camera not available", 
-                                      (50, 240), font, font_scale, font_color, line_type)
+                            cv2.putText(frame, "Camera not available", (50, 240), 
+                                       font, font_scale, font_color, line_type)
+                        else:
+                            # Read frame from camera
+                            success, frame = camera.read()
+                            if not success:
+                                frame = np.zeros((480, 640, 3), dtype=np.uint8)
+                                cv2.putText(frame, "Failed to read frame", (50, 240), 
+                                           font, font_scale, font_color, line_type)
                     
-                    # Process frame outside the lock to minimize lock time
-                    if frame is not None:
-                        # Process face recognition if active
-                        if face_recognition_active:
-                            # Add status text
-                            cv2.putText(frame, "Processing face recognition...", 
-                                      (10, 30), font, font_scale, (0, 255, 0), line_type)
-                            
-                            # Initialize recognition system if needed
-                            if recognition is None:
-                                try:
-                                    # Import directly here to avoid circular imports
-                                    from face_recognition_process import WebRecognition as FaceRecognition
-                                    recognition = FaceRecognition()
-                                    logger.info("Face recognition initialized")
-                                except ImportError:
-                                    # Fallback to local implementation
-                                    try:
-                                        # Try to directly use the face_recognition module first
-                                        class WebRecognition:
-                                            """Simple face recognition class"""
-                                            def __init__(self):
-                                                self.known_face_encodings = []
-                                                self.known_face_names = []
-                                                self.detection_threshold = 0.6
-                                                logger.info("WebRecognition initialized")
-                                                
-                                            def load_encodings(self, encodings, names):
-                                                self.known_face_encodings = encodings
-                                                self.known_face_names = names
-                                                return True
-                                                
-                                            def identify_face(self, frame, face_location=None):
-                                                if not self.known_face_encodings:
-                                                    return None
-                                                    
-                                                # Convert to RGB for face_recognition
-                                                rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                                                
-                                                # Get face locations if not provided
-                                                if face_location is None:
-                                                    import face_recognition
-                                                    face_locations = face_recognition.face_locations(rgb_frame)
-                                                    if not face_locations:
-                                                        return None
-                                                    face_location = face_locations[0]
-                                                else:
-                                                    face_locations = [face_location]
-                                                    
-                                                # Get face encodings
-                                                import face_recognition
-                                                face_encodings = face_recognition.face_encodings(rgb_frame, face_locations)
-                                                
-                                                if not face_encodings:
-                                                    return None
-                                                    
-                                                face_encoding = face_encodings[0]
-                                                
-                                                # Compare with known faces
-                                                face_distances = face_recognition.face_distance(self.known_face_encodings, face_encoding)
-                                                
-                                                if len(face_distances) > 0:
-                                                    # Find best match
-                                                    best_match_index = np.argmin(face_distances)
-                                                    best_match_distance = face_distances[best_match_index]
-                                                    
-                                                    # Check if match is close enough
-                                                    if best_match_distance <= self.detection_threshold:
-                                                        match_name = self.known_face_names[best_match_index]
-                                                        match_confidence = 1.0 - best_match_distance
-                                                        
-                                                        return {
-                                                            "name": match_name,
-                                                            "confidence": float(match_confidence),
-                                                            "distance": float(best_match_distance)
-                                                        }
-                                                
-                                                return None
-                                        
-                                        recognition = WebRecognition()
-                                        logger.info("Face recognition initialized")
-                                    except Exception as e:
-                                        logger.error(f"Error initializing face recognition: {e}")
-                                        face_recognition_active = False
-                                        face_recognition_result = {
-                                            'success': False,
-                                            'error': f"Error initializing face recognition: {str(e)}"
-                                        }
-                            
-                            # Load known faces if not already loaded
-                            if not known_faces_loaded and backend_url and recognition:
-                                try:
-                                    from face_recognition_process import load_known_faces
-                                    encodings, names = load_known_faces(backend_url)
-                                    if encodings:
-                                        recognition.load_encodings(encodings, names)
-                                        known_faces_loaded = True
-                                        logger.info(f"Loaded {len(encodings)} face encodings")
-                                except Exception as e:
-                                    logger.error(f"Error loading known faces: {e}")
-                            
-                            # Process face recognition
-                            try:
-                                # Convert to RGB for face_recognition
-                                rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                                
-                                # Find faces
-                                import face_recognition
-                                face_locations = face_recognition.face_locations(rgb_frame)
-                                
-                                # Process faces
-                                if face_locations:
-                                    # Draw rectangles around faces
-                                    for top, right, bottom, left in face_locations:
-                                        cv2.rectangle(frame, (left, top), (right, bottom), (0, 255, 0), 2)
-                                    
-                                    # Process the first face
-                                    face_location = face_locations[0]
-                                    top, right, bottom, left = face_location
-                                    
-                                    # Extract face area
-                                    face_image = frame[top:bottom, left:right]
-                                    
-                                    # Perform liveness check
-                                    from face_recognition_process import perform_liveness_check
-                                    liveness_result = perform_liveness_check(face_image)
-                                    
-                                    # Add liveness status to frame
-                                    if liveness_result['is_live']:
-                                        cv2.putText(frame, "LIVE", (left, top - 10), 
-                                                  font, font_scale, (0, 255, 0), line_type)
-                                    else:
-                                        cv2.putText(frame, "FAKE", (left, top - 10), 
-                                                  font, font_scale, (0, 0, 255), line_type)
-                                    
-                                    # Only continue if liveness check passed
-                                    if liveness_result['is_live']:
-                                        # Get face encodings
-                                        face_encodings = face_recognition.face_encodings(rgb_frame, face_locations)
-                                        
-                                        # Identify face if we have encodings
-                                        if face_encodings and recognition and recognition.known_face_encodings:
-                                            match = recognition.identify_face(frame, face_location)
-                                            
-                                            if match:
-                                                # Display match
-                                                name = match['name']
-                                                confidence = match['confidence']
-                                                text = f"{name} ({confidence:.2f})"
-                                                cv2.putText(frame, text, (left, bottom + 25), 
-                                                          font, font_scale, (0, 255, 0), line_type)
-                                                
-                                                # Complete recognition
-                                                face_recognition_result = {
-                                                    'success': True,
-                                                    'face_detected': True,
-                                                    'is_live': True,
-                                                    'match': match,
-                                                    'face_encodings': [e.tolist() for e in face_encodings]
-                                                }
-                                                # Change flag after saving result
-                                                face_recognition_active = False
-                                            else:
-                                                # No match found
-                                                cv2.putText(frame, "Unknown", (left, bottom + 25), 
-                                                          font, font_scale, (0, 0, 255), line_type)
-                                                
-                                                # Complete recognition with no match
-                                                face_recognition_result = {
-                                                    'success': True,
-                                                    'face_detected': True,
-                                                    'is_live': True,
-                                                    'match': None,
-                                                    'face_encodings': [e.tolist() for e in face_encodings]
-                                                }
-                                                # Change flag after saving result
-                                                face_recognition_active = False
-                                else:
-                                    # No faces detected, keep searching
-                                    cv2.putText(frame, "No face detected", (10, 60), 
-                                              font, font_scale, (0, 0, 255), line_type)
-                                    
-                            except Exception as e:
-                                logger.error(f"Error in face recognition: {e}")
-                                logger.error(traceback.format_exc())
-                                face_recognition_active = False
-                                face_recognition_result = {
-                                    'success': False,
-                                    'error': f"Error processing face: {str(e)}"
-                                }
-                        
-                        # Convert frame to JPEG for streaming
-                        ret, buffer = cv2.imencode('.jpg', frame)
-                        frame_bytes = buffer.tobytes()
-                        
-                        # Yield the frame in the MJPEG format
-                        yield (b'--frame\r\n'
-                               b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
-                        
-                    # Add a small delay to control frame rate
-                    time.sleep(0.033)  # ~30 FPS
+                    # Add timestamp
+                    cv2.putText(frame, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), 
+                               (10, 30), font, font_scale, font_color, 1)
+                    
+                    # Convert to JPEG
+                    ret, buffer = cv2.imencode('.jpg', frame)
+                    frame_bytes = buffer.tobytes()
+                    
+                    # Yield the frame in HTTP multipart response
+                    yield (b'--frame\r\n'
+                           b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+                    
+                    # Slight delay to reduce CPU usage
+                    time.sleep(0.04)  # ~25 FPS
                     
             except Exception as e:
                 logger.error(f"Error in video feed: {e}")
-                logger.error(traceback.format_exc())
+                
             finally:
-                # Clean up - only release the camera at the end of the generator
-                with camera_lock:
-                    if cam is not None and hasattr(cam, 'release'):
-                        cam.release()
-                        logger.info("Camera released at end of video feed")
-                # Clean up recognition object
-                if recognition:
-                    del recognition
-        
-        # Return the streaming response
+                # Don't release the camera here as it's shared
+                pass
+                        
+        # Return the response
         return Response(generate_frames(),
-                        mimetype='multipart/x-mixed-replace; boundary=frame')
+                       mimetype='multipart/x-mixed-replace; boundary=frame')
     
     @app.route('/start-face-recognition', methods=['POST'])
     def start_face_recognition():
@@ -685,14 +460,47 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
         
         # Reset result
         face_recognition_result = None
+        face_recognition_active = True
         
         # Skip liveness check if in testing mode
         skip_liveness = request.form.get('skip_liveness', 'false').lower() == 'true'
         if skip_liveness:
             logger.warning("Skipping liveness detection - TESTING MODE ONLY")
         
-        # Start recognition process without touching the camera, which is handled by video_feed
-        face_recognition_active = True
+        # Start recognition process in a background thread
+        debug_dir = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'static', 'debug_frames')
+        os.makedirs(debug_dir, exist_ok=True)
+        
+        def run_recognition_background():
+            nonlocal face_recognition_result, face_recognition_active
+            try:
+                # Import directly here for cleaner import structure
+                from face_recognition_process import run_face_recognition
+                from camera_config import CAMERA_INDEX
+                
+                # Release camera here before passing to face recognition process
+                release_camera()
+                
+                # Run face recognition (which will handle its own camera)
+                result = run_face_recognition(
+                    camera_index=CAMERA_INDEX, 
+                    backend_url=backend_url, 
+                    skip_liveness=skip_liveness,
+                    debug_dir=debug_dir
+                )
+                
+                # Store result
+                face_recognition_result = result
+            except Exception as e:
+                logger.error(f"Error running face recognition: {e}")
+                face_recognition_result = {"success": False, "error": str(e)}
+            finally:
+                face_recognition_active = False
+        
+        # Start background thread
+        recognition_thread = threading.Thread(target=run_recognition_background)
+        recognition_thread.daemon = True
+        recognition_thread.start()
         
         return jsonify({'status': 'started'})
     
@@ -700,8 +508,6 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
     def check_face_recognition_status():
         """Check if face recognition is complete and get results"""
         nonlocal face_recognition_active, face_recognition_result
-        
-        # No camera operations here, so no need to use camera_lock
         
         if face_recognition_active:
             return jsonify({'status': 'processing'})
@@ -945,15 +751,14 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
         """Clean up all resources when application context tears down"""
         logger.info("Cleaning up resources on app context teardown")
         
-        # Release camera and destroy windows
+        # Release camera resources
         release_camera()
         
         # Explicitly destroy all OpenCV windows
         try:
             cv2.destroyAllWindows()
             # Force window cleanup with multiple waitKey calls
-            for _ in range(5):
-                cv2.waitKey(1)
+            cv2.waitKey(1)
         except Exception as e:
             logger.error(f"Error destroying windows: {e}")
             
