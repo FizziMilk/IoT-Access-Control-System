@@ -99,7 +99,7 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
     
     def get_camera():
         """Get or initialize camera with proper error handling and fallbacks"""
-        nonlocal camera
+        nonlocal camera, camera_needs_cleanup
         
         # If we already have a valid camera, return it
         if camera is not None and hasattr(camera, 'isOpened') and camera.isOpened():
@@ -110,10 +110,28 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                     return camera
                 else:
                     logger.warning("Existing camera failed test read, will reinitialize")
-                    release_camera()
+                    # Only release_camera internally, not setting cleanup flag
+                    with camera_lock:
+                        if camera is not None:
+                            try:
+                                if hasattr(camera, 'isOpened') and camera.isOpened():
+                                    camera.release()
+                            except Exception as e:
+                                logger.error(f"Error releasing camera: {e}")
+                            finally:
+                                camera = None
             except Exception as e:
                 logger.error(f"Error testing existing camera: {e}")
-                release_camera()
+                # Only release_camera internally, not setting cleanup flag
+                with camera_lock:
+                    if camera is not None:
+                        try:
+                            if hasattr(camera, 'isOpened') and camera.isOpened():
+                                camera.release()
+                        except Exception as e:
+                            logger.error(f"Error releasing camera: {e}")
+                        finally:
+                            camera = None
             
         # Import the camera index from config
         from camera_config import CAMERA_INDEX
@@ -206,7 +224,8 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
     
     def release_camera():
         """Release camera resources safely"""
-        nonlocal camera
+        nonlocal camera, camera_needs_cleanup
+        
         with camera_lock:
             if camera is not None:
                 try:
@@ -229,6 +248,9 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                     logger.info("Waiting for camera resources to be freed naturally")
                     # Add a small delay to allow OS to reclaim resources
                     time.sleep(0.5)
+                
+                # Camera has been released, so we don't need cleanup anymore
+                camera_needs_cleanup = False
     
     @app.route('/')
     def index():
@@ -369,7 +391,12 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
     @app.route('/face-recognition', methods=['GET'])
     def face_recognition():
         """Display the face recognition page"""
+        nonlocal camera_needs_cleanup
+        
         logger.info("Face recognition page requested")
+        
+        # Set the cleanup flag since we're initializing camera resources
+        camera_needs_cleanup = True
         
         # Clean up any existing OpenCV windows and force camera release
         try:
@@ -390,9 +417,10 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
         Video streaming route for face recognition.
         """
         def generate_frames():
-            nonlocal camera, camera_lock, face_recognition_active
+            nonlocal camera, camera_lock, face_recognition_active, camera_needs_cleanup
             
-            # Initialize camera if needed
+            # Initialize camera if needed, but don't set cleanup flag
+            # as the video feed will manage its own resources
             with camera_lock:
                 if camera is None:
                     camera = get_camera()
@@ -433,6 +461,7 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                                     if camera is not None and hasattr(camera, 'release'):
                                         try:
                                             camera.release()
+                                            # Don't set cleanup flag here as we're managing our own resources
                                         except:
                                             pass
                                     
@@ -483,6 +512,7 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                 
             finally:
                 # Don't release the camera here as it's shared
+                # Also don't set cleanup flag as this is a streaming endpoint
                 pass
                         
         # Return the response
@@ -492,11 +522,14 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
     @app.route('/start-face-recognition', methods=['POST'])
     def start_face_recognition():
         """Start face recognition process on the video feed"""
-        nonlocal face_recognition_active, face_recognition_result, camera
+        nonlocal face_recognition_active, face_recognition_result, camera, camera_needs_cleanup
         
         # Reset result
         face_recognition_result = None
         face_recognition_active = True
+        
+        # Set cleanup flag since we'll be using camera resources
+        camera_needs_cleanup = True
         
         # Skip liveness check if in testing mode
         skip_liveness = request.form.get('skip_liveness', 'false').lower() == 'true'
@@ -508,7 +541,7 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
         os.makedirs(debug_dir, exist_ok=True)
         
         def run_recognition_background():
-            nonlocal face_recognition_result, face_recognition_active, camera
+            nonlocal face_recognition_result, face_recognition_active, camera, camera_needs_cleanup
             try:
                 # Import directly here for cleaner import structure
                 from face_recognition_process import run_face_recognition
@@ -545,6 +578,8 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                 face_recognition_result = {"success": False, "error": str(e)}
             finally:
                 face_recognition_active = False
+                # Set cleanup flag to false since we're done with camera resources
+                camera_needs_cleanup = False
         
         # Start background thread
         recognition_thread = threading.Thread(target=run_recognition_background)
@@ -570,7 +605,10 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
     @app.route('/process-face', methods=['POST'])
     def process_face():
         """Process facial recognition using the integrated video feed"""
-        nonlocal face_recognition_result
+        nonlocal face_recognition_result, camera_needs_cleanup
+        
+        # Set cleanup flag since we'll be working with camera resources
+        camera_needs_cleanup = True
         
         try:
             # Skip liveness check if in testing mode
@@ -794,23 +832,59 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
             flash("Error connecting to backend.", "danger")
         return redirect(url_for("door_entry")) 
     
+    # Add a flag to track if cleanup is needed
+    camera_needs_cleanup = False
+    
     # Clean up resources when app exits
     @app.teardown_appcontext
     def cleanup_resources(exception=None):
         """Clean up all resources when application context tears down"""
+        nonlocal camera, camera_needs_cleanup
+        
+        # Skip full cleanup on regular requests
+        if not camera_needs_cleanup and request.endpoint not in [
+            'face_recognition', 'start_face_recognition', 'process_face'
+        ]:
+            return
+        
         logger.info("Cleaning up resources on app context teardown")
         
-        # Release camera resources
-        release_camera()
-        
-        # Explicitly destroy all OpenCV windows
-        try:
-            cv2.destroyAllWindows()
-            # Force window cleanup
-            cv2.waitKey(1)
-        except Exception as e:
-            logger.error(f"Error destroying windows: {e}")
-            
+        # Release camera only if it exists and we're in a critical endpoint
+        with camera_lock:
+            if camera is not None and camera_needs_cleanup:
+                try:
+                    logger.info("Releasing camera resources")
+                    if hasattr(camera, 'isOpened') and camera.isOpened():
+                        # Try to read any remaining frames to clear buffer
+                        for _ in range(5):
+                            camera.read()
+                        camera.release()
+                        logger.info("Camera released successfully")
+                except Exception as e:
+                    logger.error(f"Error releasing camera: {e}")
+                finally:
+                    camera = None
+                    
+                # On Linux, we won't forcibly kill processes - it's too aggressive
+                # and can crash the application
+                if platform.system() == 'Linux':
+                    # Just log that we're waiting for resources to be freed
+                    logger.info("Waiting for camera resources to be freed naturally")
+                    # Add a small delay to allow OS to reclaim resources
+                    time.sleep(0.5)
+                
+                # Reset the cleanup flag
+                camera_needs_cleanup = False
+                
+        # Only destroy windows on specific endpoints
+        if request.endpoint in ['face_recognition', 'process_face']:
+            try:
+                cv2.destroyAllWindows()
+                # Force window cleanup
+                cv2.waitKey(1)
+            except Exception as e:
+                logger.error(f"Error destroying windows: {e}")
+                
         logger.info("Resource cleanup completed")
 
     return app 
