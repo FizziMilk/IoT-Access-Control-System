@@ -3,11 +3,13 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Register Face</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
+    <title>Register New Face</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
     <style>
-        .container {
-            max-width: 600px;
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
             margin: 0 auto;
             padding: 20px;
         }
@@ -19,101 +21,136 @@
             margin-bottom: 5px;
             font-weight: bold;
         }
-        input[type="text"],
-        input[type="tel"] {
+        input[type="text"], select {
             width: 100%;
-            padding: 10px;
+            padding: 8px;
             border: 1px solid #ddd;
             border-radius: 4px;
-            font-size: 16px;
         }
         button {
             background-color: #4CAF50;
             color: white;
-            padding: 12px 20px;
+            padding: 10px 15px;
             border: none;
             border-radius: 4px;
             cursor: pointer;
-            font-size: 16px;
         }
         button:hover {
             background-color: #45a049;
         }
-        .alert {
-            padding: 15px;
-            margin-bottom: 20px;
-            border-radius: 4px;
-        }
-        .alert-success {
-            background-color: #dff0d8;
-            color: #3c763d;
-        }
-        .alert-error {
-            background-color: #f2dede;
-            color: #a94442;
-        }
-        .alert-warning {
-            background-color: #fcf8e3;
-            color: #8a6d3b;
-        }
-        .face-preview {
-            margin: 20px auto;
-            max-width: 300px;
+        .status {
+            margin-top: 20px;
             padding: 10px;
-            border: 1px solid #ddd;
             border-radius: 4px;
-            text-align: center;
         }
-        .face-preview img {
-            max-width: 100%;
-            height: auto;
-            border-radius: 4px;
-            margin-bottom: 10px;
+        .success {
+            background-color: #d4edda;
+            color: #155724;
+        }
+        .error {
+            background-color: #f8d7da;
+            color: #721c24;
         }
     </style>
 </head>
 <body>
-    <div class="container">
-        <h1>Register Your Face</h1>
+    <h1>Register New Face</h1>
+    <p>An unrecognized face was detected. Please register it to allow access in the future.</p>
+    
+    <div id="registration-form">
+        <div class="form-group">
+            <label for="name">Full Name:</label>
+            <input type="text" id="name" name="name" required>
+        </div>
         
-        {% with messages = get_flashed_messages(with_categories=true) %}
-            {% if messages %}
-                {% for category, message in messages %}
-                    <div class="alert alert-{{ category }}">
-                        {{ message }}
-                    </div>
-                {% endfor %}
-            {% endif %}
-        {% endwith %}
+        <div class="form-group">
+            <label for="device_id">Device ID:</label>
+            <select id="device_id" name="device_id" required>
+                <option value="">Select a device</option>
+                <!-- Devices will be loaded from API -->
+            </select>
+        </div>
         
-        {% if has_face_encoding %}
-            <div class="face-preview">
-                <img src="{{ url_for('static', filename='debug_frames/' + (session.get('debug_frame', 'frame_final_latest.jpg'))) }}" alt="Your face">
-                <p>Your face was detected but not recognized. Please register to continue.</p>
-            </div>
-            
-            <form method="POST" action="{{ url_for('register_face') }}">
-                <div class="form-group">
-                    <label for="name">Full Name:</label>
-                    <input type="text" id="name" name="name" required>
-                </div>
-                
-                <div class="form-group">
-                    <label for="phone">Phone Number:</label>
-                    <input type="tel" id="phone" name="phone" required>
-                </div>
-                
-                <div class="form-group">
-                    <button type="submit">Register</button>
-                    <a href="{{ url_for('index') }}" class="btn btn-secondary">Cancel</a>
-                </div>
-            </form>
-        {% else %}
-            <div class="alert alert-warning">
-                No face data available. Please complete the face recognition process first.
-            </div>
-            <a href="{{ url_for('face_recognition') }}" class="btn">Go to Face Recognition</a>
-        {% endif %}
+        <div class="form-group">
+            <label for="access_level">Access Level:</label>
+            <select id="access_level" name="access_level" required>
+                <option value="1">Basic Access</option>
+                <option value="2">Standard Access</option>
+                <option value="3">Admin Access</option>
+            </select>
+        </div>
+        
+        <button id="register-btn">Register Face</button>
     </div>
+    
+    <div id="status" class="status" style="display: none;"></div>
+    
+    <script>
+        $(document).ready(function() {
+            // Load devices from API
+            $.ajax({
+                url: "/api/devices",
+                method: "GET",
+                success: function(response) {
+                    if (response.success && response.devices) {
+                        var deviceSelect = $("#device_id");
+                        response.devices.forEach(function(device) {
+                            deviceSelect.append(
+                                `<option value="${device.id}">${device.name}</option>`
+                            );
+                        });
+                    }
+                },
+                error: function() {
+                    showStatus("Failed to load devices", false);
+                }
+            });
+            
+            // Handle registration form submission
+            $("#register-btn").click(function() {
+                var name = $("#name").val();
+                var device_id = $("#device_id").val();
+                var access_level = $("#access_level").val();
+                
+                if (!name || !device_id) {
+                    showStatus("Please fill in all required fields", false);
+                    return;
+                }
+                
+                // Submit registration data
+                $.ajax({
+                    url: "/register-face",
+                    method: "POST",
+                    contentType: "application/json",
+                    data: JSON.stringify({
+                        name: name,
+                        device_id: device_id,
+                        access_level: access_level
+                    }),
+                    success: function(response) {
+                        if (response.success) {
+                            showStatus("Face registered successfully!", true);
+                            setTimeout(function() {
+                                window.location.href = "/";
+                            }, 2000);
+                        } else {
+                            showStatus("Registration failed: " + response.error, false);
+                        }
+                    },
+                    error: function() {
+                        showStatus("Failed to communicate with server", false);
+                    }
+                });
+            });
+            
+            function showStatus(message, isSuccess) {
+                var statusDiv = $("#status");
+                statusDiv.removeClass("success error");
+                statusDiv.addClass(isSuccess ? "success" : "error");
+                statusDiv.text(message);
+                statusDiv.show();
+            }
+        });
+    </script>
 </body>
 </html> 
