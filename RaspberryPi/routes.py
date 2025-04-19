@@ -556,8 +556,6 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                     
                     # Add timestamp
                     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    cv2.putText(frame, timestamp, 
-                               (10, 30), font, font_scale, font_color, 1)
                     
                     # Convert to JPEG
                     ret, buffer = cv2.imencode('.jpg', frame)
@@ -661,10 +659,23 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
         
         # If we have a result and it's not active, include it
         if not recognition_state.face_recognition_active and recognition_state.face_recognition_result:
-            response["result"] = recognition_state.face_recognition_result
+            # Create a serializable copy of the result
+            serializable_result = {}
+            for key, value in recognition_state.face_recognition_result.items():
+                # Convert numpy arrays to lists
+                if isinstance(value, np.ndarray):
+                    serializable_result[key] = value.tolist()
+                # Ensure all values are JSON serializable
+                elif isinstance(value, (bool, int, float, str, list, dict)) or value is None:
+                    serializable_result[key] = value
+                else:
+                    # Convert other types to string
+                    serializable_result[key] = str(value)
+            
+            response["result"] = serializable_result
             
             # If registration needed, mark this explicitly
-            if recognition_state.face_recognition_result.get("registration_needed"):
+            if serializable_result.get("registration_needed"):
                 response["registration_needed"] = True
                 
             # Reset the result after sending it once
@@ -981,17 +992,6 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                     logger.error("Failed to capture preview frame")
                     return jsonify({"success": False, "error": "Failed to capture frame"}), 500
             
-            # Add timestamp to the frame
-            cv2.putText(
-                frame, 
-                timestamp, 
-                (10, 30), 
-                cv2.FONT_HERSHEY_SIMPLEX, 
-                0.7, 
-                (0, 255, 0), 
-                2
-            )
-            
             # Save the frame
             filename = f"{debug_dir}/preview_{timestamp}.jpg"
             cv2.imwrite(filename, frame)
@@ -1173,8 +1173,11 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                 
                 # Check liveness (only on the best frame to save time)
                 liveness_start = time.time()
-                is_live = check_liveness(best_frame, best_face_location)
+                liveness_result = check_liveness(best_frame, best_face_location)
                 liveness_time = time.time() - liveness_start
+                
+                # Ensure is_live is a proper Python boolean, not a numpy bool
+                is_live = bool(liveness_result)
                 logger.info(f"Liveness check completed in {liveness_time:.2f} seconds: {is_live}")
                 
                 result["face_detected"] = True
@@ -1333,7 +1336,8 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
             white_ratio = white_pixels / (gray.shape[0] * gray.shape[1])
             uniform_check = white_ratio < 0.15  # Real faces shouldn't have large uniform white regions
             
-            is_live = texture_check and uniform_check
+            # Convert to regular Python boolean, not numpy.bool_
+            is_live = bool(texture_check and uniform_check)
             
             logger.info(f"Liveness check: texture_std={std_dev:.2f}, white_ratio={white_ratio:.3f}, is_live={is_live}")
             return is_live
