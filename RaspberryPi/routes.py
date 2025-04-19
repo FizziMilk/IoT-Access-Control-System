@@ -14,6 +14,7 @@ import uuid
 import subprocess
 import io
 import platform
+import copy
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -600,8 +601,29 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
             return jsonify({'status': 'processing'})
         
         if face_recognition_result:
+            # Fix potential JSON serialization issues by ensuring all values are serializable
             result = face_recognition_result
-            return jsonify({'status': 'complete', 'result': result})
+            
+            # Deep copy the result to avoid modifying the original
+            serializable_result = copy.deepcopy(result)
+            
+            # Function to make all values JSON serializable
+            def make_serializable(obj):
+                if isinstance(obj, dict):
+                    return {k: make_serializable(v) for k, v in obj.items()}
+                elif isinstance(obj, list):
+                    return [make_serializable(item) for item in obj]
+                elif isinstance(obj, (np.ndarray, np.generic)):
+                    return obj.tolist()
+                elif isinstance(obj, (bool, int, float, str)) or obj is None:
+                    return obj
+                else:
+                    return str(obj)
+            
+            # Convert all values to be JSON serializable
+            serializable_result = make_serializable(serializable_result)
+            
+            return jsonify({'status': 'complete', 'result': serializable_result})
         
         return jsonify({'status': 'not_started'})
     

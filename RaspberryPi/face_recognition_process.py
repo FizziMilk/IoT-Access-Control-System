@@ -570,7 +570,7 @@ def run_face_recognition(camera_index=0, backend_url=None, skip_liveness=False, 
                            faces=face_locations, liveness_results=liveness_results, 
                            matches=matches)
         
-        # Prepare results
+        # Make sure NumPy arrays are converted to lists for JSON serialization
         result = {
             "success": True,
             "face_detected": True,
@@ -606,6 +606,14 @@ def run_face_recognition(camera_index=0, backend_url=None, skip_liveness=False, 
                 logger.info("Camera released")
             except Exception as e:
                 logger.error(f"Error releasing camera: {e}")
+                
+        # Clean up any OpenCV windows
+        try:
+            cv2.destroyAllWindows()
+            cv2.waitKey(1)  # Give a moment for windows to close
+            logger.info("Destroyed all OpenCV windows")
+        except Exception as e:
+            logger.error(f"Error destroying windows: {e}")
                 
         # Sleep briefly to ensure camera resources are freed
         time.sleep(0.5)
