@@ -49,7 +49,7 @@
                     {% else %}
                         <!-- Fallback options -->
                         <p>Please choose a verification method:</p>
-                        <a href="{{ url_for('face_recognition') }}" class="btn btn-primary btn-block mb-3">Try Face Recognition Again</a>
+                        <a href="{{ url_for('face_recognition_page') }}" class="btn btn-primary btn-block mb-3">Try Face Recognition Again</a>
                         <a href="{{ url_for('door_entry') }}" class="btn btn-secondary btn-block">Use Phone Number</a>
                     {% endif %}
 

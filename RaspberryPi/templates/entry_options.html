@@ -46,7 +46,7 @@
         {% endwith %}
         
         <div class="d-flex flex-column align-items-center mt-4">
-            <a href="{{ url_for('face_recognition') }}" class="btn btn-primary btn-lg">
+            <a href="{{ url_for('face_recognition_page') }}" class="btn btn-primary btn-lg">
                 <i class="fas fa-user-circle icon"></i> Face Recognition
             </a>
             <a href="{{ url_for('phone_entry') }}" class="btn btn-secondary btn-lg">
@@ -58,7 +58,7 @@
     <script>
         // Force a fresh page load when selecting face recognition to prevent session issues
         document.addEventListener('DOMContentLoaded', function() {
-            const faceRecLink = document.querySelector('a[href="/face-recognition"]');
+            const faceRecLink = document.querySelector('a[href*="face-recognition"]');
             if (faceRecLink) {
                 faceRecLink.addEventListener('click', function(e) {
                     e.preventDefault();
