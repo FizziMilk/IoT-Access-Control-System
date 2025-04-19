@@ -957,6 +957,111 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
             flash("Error connecting to backend.", "danger")
         return redirect(url_for("door_entry"))
     
+    # Global camera variable for simplified management
+    camera = None
+    
+    def get_camera_simple():
+        """Get global camera instance or initialize a new one"""
+        global camera
+        
+        if camera is None or not camera.isOpened():
+            logger.info("Initializing camera at index 0")
+            camera = cv2.VideoCapture(0)
+            
+            # Set camera properties
+            if camera.isOpened():
+                camera.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+                camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+                camera.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                logger.info("Camera initialization successful")
+            else:
+                logger.error("Failed to open camera")
+        
+        return camera
+    
+    def release_camera_simple():
+        """Explicitly release the camera when requested"""
+        global camera
+        
+        if camera is not None and camera.isOpened():
+            logger.info("Releasing camera resources")
+            camera.release()
+            camera = None
+            logger.info("Camera released successfully")
+    
+    @app.route('/start-camera', methods=['POST'])
+    def start_camera():
+        """Start the camera explicitly"""
+        cam = get_camera_simple()
+        if cam and cam.isOpened():
+            flash("Camera started successfully", "success")
+        else:
+            flash("Failed to start camera", "danger")
+        
+        return redirect(url_for("face_recognition"))
+    
+    @app.route('/stop-camera', methods=['POST'])
+    def stop_camera():
+        """Stop the camera explicitly"""
+        release_camera_simple()
+        flash("Camera stopped", "info")
+        return redirect(url_for("face_recognition"))
+    
+    # Modified generate_frames to use the simplified camera approach
+    def generate_frames_simple():
+        """Generate video frames using the simplified camera approach"""
+        cam = get_camera_simple()
+        if not cam or not cam.isOpened():
+            # Return error frame if camera isn't available
+            error_frame = np.zeros((480, 640, 3), dtype=np.uint8)
+            cv2.putText(error_frame, "Camera not available", (50, 240),
+                       cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+            
+            # Convert to jpeg
+            _, buffer = cv2.imencode('.jpg', error_frame)
+            error_bytes = buffer.tobytes()
+            
+            # Yield error frame and return
+            yield (b'--frame\r\n'
+                  b'Content-Type: image/jpeg\r\n\r\n' + error_bytes + b'\r\n')
+            return
+        
+        # Normal frame generation loop
+        while True:
+            success, frame = cam.read()
+            if not success:
+                break
+            
+            # Process frame (e.g., face recognition) here
+            # ...
+            
+            # Convert to jpeg
+            ret, buffer = cv2.imencode('.jpg', frame)
+            frame_bytes = buffer.tobytes()
+            
+            # Yield the frame
+            yield (b'--frame\r\n'
+                  b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+    
+    @app.route('/video_feed_simple')
+    def video_feed_simple():
+        """Video feed using simplified camera management"""
+        return Response(
+            generate_frames_simple(),
+            mimetype='multipart/x-mixed-replace; boundary=frame'
+        )
+    
+    @app.route('/face-recognition-simple', methods=['GET'])
+    def face_recognition_simple():
+        """Face recognition page with simplified camera approach"""
+        # Ensure OpenCV windows are destroyed
+        try:
+            cv2.destroyAllWindows()
+        except Exception as e:
+            logger.error(f"Error destroying windows: {e}")
+            
+        return render_template('face_recognition_simple.html')
+    
     # Clean up resources when app exits
     @app.teardown_appcontext
     def cleanup_resources(exception=None):
