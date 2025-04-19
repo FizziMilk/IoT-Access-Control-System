@@ -665,9 +665,10 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                 flash('No face recognition results available', 'error')
                 return redirect(url_for('face_recognition'))
             
-            # Check access permissions
-            backend_url = current_app.config['BACKEND_SERVICE_URL']
-            backend_session = get_backend_session()
+            # Check access permissions - use the backend_url from the outer scope
+            # instead of trying to get it from current_app.config
+            # backend_url is already available from the function parameter of setup_routes
+            # backend_session is also available from the outer scope
             
             try:
                 # First check if this face already has access
