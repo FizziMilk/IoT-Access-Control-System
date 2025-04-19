@@ -29,6 +29,142 @@ logging.basicConfig(
 
 logger = logging.getLogger("FaceRecognitionProcess")
 
+# Add WebRecognition class implementation
+class WebRecognition:
+    """
+    Face recognition system optimized for web applications.
+    Handles storing face encodings and recognizing faces.
+    """
+    
+    def __init__(self):
+        """Initialize the recognition system."""
+        logger.info("Initializing WebRecognition")
+        self.known_face_encodings = []
+        self.known_face_names = []
+        self.detection_threshold = 0.6  # Lower values are more strict
+        
+    def load_encodings(self, encodings, names):
+        """
+        Load face encodings and corresponding names.
+        
+        Args:
+            encodings: List of face encodings (numpy arrays)
+            names: List of names corresponding to each encoding
+            
+        Returns:
+            bool: True if successful
+        """
+        if len(encodings) != len(names):
+            logger.error(f"Mismatch between encodings ({len(encodings)}) and names ({len(names)})")
+            return False
+            
+        self.known_face_encodings = encodings
+        self.known_face_names = names
+        logger.info(f"Loaded {len(encodings)} encodings with names")
+        return True
+        
+    def identify_face(self, frame, face_location=None):
+        """
+        Identify a face in the given frame.
+        
+        Args:
+            frame: OpenCV BGR image
+            face_location: Optional face location tuple (top, right, bottom, left)
+            
+        Returns:
+            dict or None: Match information if found, None otherwise
+        """
+        try:
+            if not self.known_face_encodings:
+                logger.warning("No known face encodings to match against")
+                return None
+                
+            # Convert to RGB (face_recognition uses RGB)
+            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            
+            # If face location not provided, detect faces
+            if face_location is None:
+                face_locations = face_recognition.face_locations(rgb_frame)
+                if not face_locations:
+                    return None
+                face_location = face_locations[0]  # Use first detected face
+            else:
+                face_locations = [face_location]
+                
+            # Get face encodings
+            face_encodings = face_recognition.face_encodings(rgb_frame, face_locations)
+            
+            if not face_encodings:
+                logger.warning("Could not encode detected face")
+                return None
+                
+            face_encoding = face_encodings[0]
+            
+            # Compare with known faces
+            face_distances = face_recognition.face_distance(self.known_face_encodings, face_encoding)
+            
+            if len(face_distances) > 0:
+                # Find best match
+                best_match_index = np.argmin(face_distances)
+                best_match_distance = face_distances[best_match_index]
+                
+                # Check if the match is close enough
+                if best_match_distance <= self.detection_threshold:
+                    match_name = self.known_face_names[best_match_index]
+                    match_confidence = 1.0 - best_match_distance  # Convert distance to confidence
+                    
+                    logger.info(f"Face matched with {match_name} (confidence: {match_confidence:.2f})")
+                    
+                    return {
+                        "name": match_name,
+                        "confidence": float(match_confidence),
+                        "distance": float(best_match_distance)
+                    }
+                else:
+                    logger.info(f"Best match too far ({best_match_distance:.2f} > {self.detection_threshold:.2f})")
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error identifying face: {e}")
+            logger.error(traceback.format_exc())
+            return None
+    
+    def process_face_encoding(self, face_image):
+        """
+        Generate face encoding from image.
+        
+        Args:
+            face_image: OpenCV BGR image
+            
+        Returns:
+            numpy.ndarray or None: Face encoding if successful
+        """
+        try:
+            # Convert to RGB for face_recognition
+            rgb_image = cv2.cvtColor(face_image, cv2.COLOR_BGR2RGB)
+            
+            # Detect face locations
+            face_locations = face_recognition.face_locations(rgb_image)
+            
+            if not face_locations:
+                logger.warning("No face detected in image for encoding")
+                return None
+                
+            # Generate encoding
+            face_encodings = face_recognition.face_encodings(rgb_image, face_locations)
+            
+            if not face_encodings:
+                logger.warning("Could not generate face encoding")
+                return None
+                
+            return face_encodings[0]
+            
+        except Exception as e:
+            logger.error(f"Error processing face encoding: {e}")
+            logger.error(traceback.format_exc())
+            return None
+
 def setup_camera():
     """Initialize the camera and return the camera object"""
     try:

@@ -127,14 +127,16 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
     def release_camera():
         """Release camera resources safely"""
         nonlocal camera
-        if camera is not None:
-            try:
-                camera.release()
-                logger.info("Camera released")
-            except Exception as e:
-                logger.error(f"Error releasing camera: {e}")
-            finally:
-                camera = None
+        with camera_lock:
+            if camera is not None:
+                try:
+                    if camera.isOpened():
+                        camera.release()
+                        logger.info("Camera released")
+                except Exception as e:
+                    logger.error(f"Error releasing camera: {e}")
+                finally:
+                    camera = None
     
     @app.route('/')
     def index():
@@ -314,12 +316,19 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
             font_color = (255, 255, 255)
             line_type = 2
             
+            # Initialize camera outside the loop
+            cam = get_camera()
+            
             try:
                 while True:
-                    # Acquire lock to ensure thread safety
+                    frame = None
+                    
+                    # Acquire lock only for the camera operations
                     with camera_lock:
-                        # Get camera
-                        cam = get_camera()
+                        if cam is None or not cam.isOpened():
+                            # Try to reinitialize camera if it's closed
+                            cam = get_camera()
+                            
                         if cam is None:
                             # Create a placeholder frame
                             frame = np.zeros((480, 640, 3), dtype=np.uint8)
@@ -334,7 +343,9 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                                 cv2.putText(frame, "Failed to read frame", 
                                           (50, 240), font, font_scale, font_color, line_type)
                                 continue
-                        
+                    
+                    # Process frame outside the lock to minimize lock time
+                    if frame is not None:
                         # Process face recognition if active
                         if face_recognition_active:
                             # Add status text
@@ -344,7 +355,67 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                             # Initialize recognition system if needed
                             if recognition is None:
                                 try:
-                                    from face_recognition_process import WebRecognition
+                                    # Try to directly use the face_recognition module first
+                                    class WebRecognition:
+                                        """Simple face recognition class"""
+                                        def __init__(self):
+                                            self.known_face_encodings = []
+                                            self.known_face_names = []
+                                            self.detection_threshold = 0.6
+                                            logger.info("WebRecognition initialized")
+                                            
+                                        def load_encodings(self, encodings, names):
+                                            self.known_face_encodings = encodings
+                                            self.known_face_names = names
+                                            return True
+                                            
+                                        def identify_face(self, frame, face_location=None):
+                                            if not self.known_face_encodings:
+                                                return None
+                                                
+                                            # Convert to RGB for face_recognition
+                                            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                                            
+                                            # Get face locations if not provided
+                                            if face_location is None:
+                                                import face_recognition
+                                                face_locations = face_recognition.face_locations(rgb_frame)
+                                                if not face_locations:
+                                                    return None
+                                                face_location = face_locations[0]
+                                            else:
+                                                face_locations = [face_location]
+                                                
+                                            # Get face encodings
+                                            import face_recognition
+                                            face_encodings = face_recognition.face_encodings(rgb_frame, face_locations)
+                                            
+                                            if not face_encodings:
+                                                return None
+                                                
+                                            face_encoding = face_encodings[0]
+                                            
+                                            # Compare with known faces
+                                            face_distances = face_recognition.face_distance(self.known_face_encodings, face_encoding)
+                                            
+                                            if len(face_distances) > 0:
+                                                # Find best match
+                                                best_match_index = np.argmin(face_distances)
+                                                best_match_distance = face_distances[best_match_index]
+                                                
+                                                # Check if match is close enough
+                                                if best_match_distance <= self.detection_threshold:
+                                                    match_name = self.known_face_names[best_match_index]
+                                                    match_confidence = 1.0 - best_match_distance
+                                                    
+                                                    return {
+                                                        "name": match_name,
+                                                        "confidence": float(match_confidence),
+                                                        "distance": float(best_match_distance)
+                                                    }
+                                            
+                                            return None
+                                    
                                     recognition = WebRecognition()
                                     logger.info("Face recognition initialized")
                                 except Exception as e:
@@ -450,6 +521,7 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                                     
                             except Exception as e:
                                 logger.error(f"Error in face recognition: {e}")
+                                logger.error(traceback.format_exc())
                                 face_recognition_active = False
                                 face_recognition_result = {
                                     'success': False,
@@ -459,11 +531,11 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                         # Convert frame to JPEG for streaming
                         ret, buffer = cv2.imencode('.jpg', frame)
                         frame_bytes = buffer.tobytes()
-                    
-                    # Yield the frame in the MJPEG format
-                    yield (b'--frame\r\n'
-                           b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
-                    
+                        
+                        # Yield the frame in the MJPEG format
+                        yield (b'--frame\r\n'
+                               b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+                        
                     # Add a small delay to control frame rate
                     time.sleep(0.033)  # ~30 FPS
                     
@@ -471,7 +543,12 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                 logger.error(f"Error in video feed: {e}")
                 logger.error(traceback.format_exc())
             finally:
-                # Always clean up
+                # Clean up - only release the camera at the end of the generator
+                with camera_lock:
+                    if cam is not None:
+                        cam.release()
+                        logger.info("Camera released at end of video feed")
+                # Clean up recognition object
                 if recognition:
                     del recognition
         
@@ -492,9 +569,8 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
         if skip_liveness:
             logger.warning("Skipping liveness detection - TESTING MODE ONLY")
         
-        # Start recognition process
-        with camera_lock:
-            face_recognition_active = True
+        # Start recognition process without touching the camera, which is handled by video_feed
+        face_recognition_active = True
         
         return jsonify({'status': 'started'})
     
@@ -502,6 +578,8 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
     def check_face_recognition_status():
         """Check if face recognition is complete and get results"""
         nonlocal face_recognition_active, face_recognition_result
+        
+        # No camera operations here, so no need to use camera_lock
         
         if face_recognition_active:
             return jsonify({'status': 'processing'})
