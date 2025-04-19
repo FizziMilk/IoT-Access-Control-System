@@ -57,6 +57,7 @@
             left: 50%;
             transform: translate(-50%, -50%);
             z-index: 10;
+            max-width: 90%;
         }
         .video-container {
             position: relative;
@@ -71,6 +72,42 @@
         }
         #resetCameraButton {
             padding: 10px 15px;
+        }
+        .distance-warning {
+            background-color: rgba(255, 193, 7, 0.85);
+            color: #000;
+            padding: 15px;
+            border-radius: 5px;
+            font-weight: bold;
+            margin-top: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+            animation: pulse 2s infinite;
+        }
+        .distance-error {
+            background-color: rgba(220, 53, 69, 0.85);
+            color: white;
+            padding: 15px;
+            border-radius: 5px;
+            font-weight: bold;
+            margin-top: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+            animation: pulse 2s infinite;
+        }
+        @keyframes pulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.03); }
+            100% { transform: scale(1); }
+        }
+        #retryButton {
+            font-size: 1.1rem;
+            padding: 8px 20px;
+            background-color: #28a745;
+            border-color: #28a745;
+            transition: all 0.3s;
+        }
+        #retryButton:hover {
+            background-color: #218838;
+            transform: scale(1.05);
         }
     </style>
 </head>
@@ -407,6 +444,60 @@
             if (data.status === 'processing') {
                 // Still processing, check again in a moment
                 window.statusCheckTimer = setTimeout(() => checkRecognitionStatus(progressInterval, originalVideoSrc), 500); // Reduced from 1000ms for more responsive feedback
+            } else if (data.status === 'face_too_small') {
+                // Face detected but too small - show guidance to the user
+                console.log("Face detected but too small/far away:", data.result);
+                
+                // Show the final debug frame showing the too-small face
+                if (data.result && data.result.debug_frame) {
+                    try {
+                        document.getElementById('videoFeed').src = 
+                            `/static/debug_frames/${data.result.debug_frame}?t=${new Date().getTime()}`;
+                    } catch (e) {
+                        console.error("Error displaying face-too-small debug frame:", e);
+                    }
+                }
+                
+                // Update progress bar to show we're waiting for user to adjust
+                clearInterval(progressInterval);
+                document.getElementById('progressBar').style.width = '50%';
+                document.getElementById('progressBar').classList.add('bg-warning');
+                
+                // Show distance feedback based on how far they are
+                let distanceMessage = "Please move closer to the camera";
+                let distanceClass = "distance-warning";
+                
+                if (data.result && data.result.distance_feedback === "much_too_far") {
+                    distanceMessage = "You are too far away. Please move much closer to the camera.";
+                    distanceClass = "distance-error";
+                } else if (data.result && data.result.distance_feedback === "too_far") {
+                    distanceMessage = "You are slightly too far. Please move a bit closer to the camera.";
+                    distanceClass = "distance-warning";
+                }
+                
+                document.getElementById('statusText').innerHTML = 
+                    `<div class="${distanceClass}"><i class="fas fa-exclamation-triangle"></i> ${distanceMessage}</div>`;
+                
+                // Display instructions
+                document.getElementById('processingText').innerHTML = 
+                    `<h4>Face detected but too small for recognition</h4>
+                     <p>Please adjust your position and look directly at the camera.</p>
+                     <p><button id="retryButton" class="btn btn-primary mt-2">Try Again</button></p>`;
+                
+                // Make the processing text more visible
+                document.getElementById('processingText').style.display = 'block';
+                document.getElementById('processingText').style.backgroundColor = 'rgba(0,0,0,0.7)';
+                document.getElementById('processingText').style.padding = '20px';
+                
+                // Add event listener to the retry button
+                document.getElementById('retryButton').addEventListener('click', function() {
+                    // Reset UI and restart recognition
+                    document.getElementById('statusText').textContent = "Starting new recognition attempt...";
+                    document.getElementById('progressBar').classList.remove('bg-warning');
+                    document.getElementById('progressBar').style.width = '0%';
+                    startFaceRecognition();
+                });
+                
             } else if (data.status === 'complete') {
                 // Recognition complete, get the final debug frame
                 console.log("Recognition complete with result:", data.result);

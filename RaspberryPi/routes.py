@@ -710,7 +710,13 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
             status = "processing"
             result = None
         elif face_recognition_result is not None:
-            status = "complete"
+            # If face is detected but too small, set special status
+            if face_recognition_result.get("face_detected") and face_recognition_result.get("face_too_small"):
+                status = "face_too_small"
+                # Record that face was detected but was too small for processing
+                logger.info("Face detected but too small/far for reliable recognition")
+            else:
+                status = "complete"
             
             # Deep copy and make serializable to avoid modifying the original
             def make_serializable(obj):
@@ -739,9 +745,12 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                 try:
                     # Try to find the final or most relevant frame
                     if os.path.exists(debug_dir):
-                        # Look for files in order of preference: 
-                        # 1. final frame, 2. faces frame, 3. liveness frame, 4. no faces frame, 5. initial frame
-                        patterns = ['frame_final_', 'frame_faces_', 'frame_liveness_fail_', 'frame_nofaces_', 'frame_initial_']
+                        # For face_too_small status, look for that specific frame first
+                        if status == "face_too_small":
+                            patterns = ['frame_face_too_small_', 'frame_faces_', 'frame_initial_']
+                        else:
+                            # Look for files in order of preference
+                            patterns = ['frame_final_', 'frame_faces_', 'frame_liveness_fail_', 'frame_nofaces_', 'frame_initial_']
                         
                         for pattern in patterns:
                             files = [f for f in os.listdir(debug_dir) if f.startswith(pattern)]

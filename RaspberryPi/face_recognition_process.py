@@ -409,116 +409,148 @@ def perform_liveness_check(frame, face_locations):
     return results
 
 
-def run_face_recognition(camera_index=0, backend_url=None, skip_liveness=False, debug_dir=None):
+def run_face_recognition(camera_index=0, backend_url=None, skip_liveness=False, output_file=None, debug_dir=None):
     """
-    Run the face recognition process
-    
-    Args:
-        camera_index: Camera device index
-        backend_url: URL for backend API
-        skip_liveness: Whether to skip liveness detection
-        debug_dir: Directory to save debug frames
-        
-    Returns:
-        dict: Recognition results
+    Main function to run face recognition process
     """
-    camera = None
-    
     try:
-        # Initialize camera with retries
-        max_camera_retries = 5
-        retry_count = 0
-        retry_delay = 2.0  # seconds
+        # Initialize variables
+        result = {
+            "success": False,
+            "face_detected": False,
+            "face_recognized": False,
+            "liveness_check_passed": False,
+            "face_too_small": False,  # New flag to indicate if face is too small
+            "distance_feedback": None  # New field for distance feedback
+        }
+        camera = None
         
-        while retry_count < max_camera_retries:
-            logger.info(f"Opening camera at index {camera_index} (attempt {retry_count + 1}/{max_camera_retries})")
-            camera = cv2.VideoCapture(camera_index)
-            
-            # Give camera time to initialize
-            time.sleep(1.0)
-            
-            # Set camera properties
-            if camera.isOpened():
-                camera.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-                camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-                camera.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-                
-                # Test if camera works by reading a frame
-                ret, test_frame = camera.read()
-                if ret and test_frame is not None:
-                    logger.info(f"Successfully opened camera at index {camera_index}")
-                    break
-                else:
-                    logger.warning(f"Camera opened but could not read frame, retrying...")
-                    camera.release()
-            
-            # If we get here, camera failed to open or read frames
-            logger.warning(f"Failed to open camera on attempt {retry_count + 1}, retrying in {retry_delay} seconds...")
-            retry_count += 1
-            
-            # Release any partial camera resources
-            if camera is not None:
-                try:
-                    camera.release()
-                except:
-                    pass
-            
-            # Wait before retry
-            time.sleep(retry_delay)
+        # Define minimum face size for reliable recognition
+        MIN_FACE_WIDTH = 100  # Minimum width in pixels
+        MIN_FACE_HEIGHT = 100  # Minimum height in pixels
         
-        # If we exhausted all retries
-        if retry_count >= max_camera_retries:
-            logger.error(f"Failed to open camera after {max_camera_retries} attempts")
-            return {"success": False, "error": "Failed to open camera after multiple attempts"}
-        
-        # At this point, we have a working camera
-        
-        # Initialize recognition system
+        # Initialize WebRecognition class
         recognition = WebRecognition()
         
-        # Load known faces
-        encodings, names = load_known_faces(backend_url)
-        if encodings:
-            recognition.load_encodings(encodings, names)
+        # Try to load known faces from backend
+        if backend_url:
+            try:
+                recognition.load_encodings(load_known_faces(backend_url))
+            except Exception as e:
+                logger.error(f"Error loading known faces: {e}")
+                # Continue with empty known faces list
         
-        # Read multiple frames to stabilize camera
-        for _ in range(5):
-            ret, _ = camera.read()
-            if not ret:
-                logger.warning("Failed to read warmup frame")
-            time.sleep(0.1)
+        # Initialize camera with multiple attempts
+        for attempt in range(1, 6):  # Try up to 5 times
+            logger.info(f"Opening camera at index {camera_index} (attempt {attempt}/5)")
+            try:
+                camera = cv2.VideoCapture(camera_index)
+                if camera.isOpened():
+                    logger.info(f"Successfully opened camera at index {camera_index}")
+                    break
+            except Exception as e:
+                logger.error(f"Error opening camera on attempt {attempt}: {e}")
+            
+            # Wait before retrying
+            time.sleep(1)
         
-        # Capture and process frame
+        # If camera still not opened after all attempts, return error
+        if not camera or not camera.isOpened():
+            logger.error("Failed to open camera after multiple attempts")
+            result["error"] = "Failed to open camera"
+            return result
+        
+        # Create debug directory if specified
+        if debug_dir and not os.path.exists(debug_dir):
+            os.makedirs(debug_dir)
+        
+        # Start recognition process
+        logger.info("Initializing WebRecognition")
+        
+        # Read frame from camera
         ret, frame = camera.read()
-        
         if not ret or frame is None:
-            logger.error("Failed to capture frame")
-            return {"success": False, "error": "Failed to capture frame"}
+            logger.error("Failed to capture frame from camera")
+            result["error"] = "Failed to capture frame"
+            return result
         
-        # Save initial frame if debugging
+        # Save initial debug frame
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         if debug_dir:
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             save_debug_frame(frame, f"{debug_dir}/frame_initial_{timestamp}.jpg")
         
-        # Convert to RGB for face_recognition
-        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        
-        # Detect faces
-        face_locations = face_recognition.face_locations(rgb_frame)
+        # Detect faces in the frame
+        # Use a higher upsample value to detect smaller/more distant faces
+        face_locations = face_recognition.face_locations(frame, model="hog", number_of_times_to_upsample=2)
         
         if not face_locations:
             logger.warning("No faces detected in frame")
-            
-            # Save debug frame with no faces
             if debug_dir:
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                # Add text to the frame indicating no face detected
+                cv2.putText(
+                    frame, 
+                    "No face detected - Please move closer to the camera", 
+                    (10, 30), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 
+                    0.7, 
+                    (0, 0, 255), 
+                    2
+                )
                 save_debug_frame(frame, f"{debug_dir}/frame_nofaces_{timestamp}.jpg")
-            
-            return {"success": True, "face_detected": False}
+            result["error"] = "No faces detected"
+            return result
         
-        # Save frame with faces
+        # Check if the detected face is large enough
+        face_location = face_locations[0]  # Take the first face
+        top, right, bottom, left = face_location
+        face_width = right - left
+        face_height = bottom - top
+        
+        logger.info(f"Detected face size: {face_width}x{face_height} pixels")
+        
+        # If face is too small, return feedback
+        if face_width < MIN_FACE_WIDTH or face_height < MIN_FACE_HEIGHT:
+            logger.warning(f"Detected face is too small for reliable recognition ({face_width}x{face_height})")
+            result["face_detected"] = True
+            result["face_too_small"] = True
+            
+            if face_width < MIN_FACE_WIDTH * 0.5 or face_height < MIN_FACE_HEIGHT * 0.5:
+                distance_feedback = "much_too_far"
+            else:
+                distance_feedback = "too_far"
+                
+            result["distance_feedback"] = distance_feedback
+            
+            if debug_dir:
+                # Add text to the frame indicating face is too small
+                cv2.rectangle(frame, (left, top), (right, bottom), (0, 255, 255), 2)
+                cv2.putText(
+                    frame, 
+                    "Face too small - Please move closer", 
+                    (left, top - 10), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 
+                    0.7, 
+                    (0, 0, 255), 
+                    2
+                )
+                save_debug_frame(frame, f"{debug_dir}/frame_face_too_small_{timestamp}.jpg", 
+                                faces=face_locations)
+            return result
+        
+        # Extract face encodings
+        face_encodings = face_recognition.face_encodings(frame, face_locations)
+        if not face_encodings:
+            logger.warning("Failed to extract face encodings")
+            if debug_dir:
+                save_debug_frame(frame, f"{debug_dir}/frame_nofaces_{timestamp}.jpg")
+            result["error"] = "Failed to extract face encodings"
+            return result
+        
+        # Process detected faces
+        result["face_detected"] = True
+        
+        # Save debug frame with detected faces
         if debug_dir:
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             save_debug_frame(frame, f"{debug_dir}/frame_faces_{timestamp}.jpg", 
                             faces=face_locations)
         
@@ -539,15 +571,16 @@ def run_face_recognition(camera_index=0, backend_url=None, skip_liveness=False, 
                     save_debug_frame(frame, f"{debug_dir}/frame_liveness_fail_{timestamp}.jpg", 
                                     faces=face_locations, liveness_results=liveness_results)
                 
-                return {
-                    "success": True,
-                    "face_detected": True,
-                    "is_live": False,
-                    "liveness_results": liveness_results
-                }
+                result["liveness_check_passed"] = False
+                result["is_live"] = False
+                result["liveness_results"] = liveness_results
+            else:
+                result["liveness_check_passed"] = True
+                result["is_live"] = any(r.get("is_live", False) for r in liveness_results)
+                result["liveness_results"] = liveness_results
         
         # Get face encodings
-        face_encodings = face_recognition.face_encodings(rgb_frame, face_locations)
+        face_encodings = face_recognition.face_encodings(frame, face_locations)
         
         # Identify faces
         matches = []
@@ -587,17 +620,8 @@ def run_face_recognition(camera_index=0, backend_url=None, skip_liveness=False, 
                            matches=matches)
         
         # Make sure NumPy arrays are converted to lists for JSON serialization
-        result = {
-            "success": True,
-            "face_detected": True,
-            "face_encodings": [e.tolist() for e in face_encodings],
-            "face_locations": face_locations
-        }
-        
-        # Add liveness results if available
-        if liveness_results:
-            result["is_live"] = any(r.get("is_live", False) for r in liveness_results)
-            result["liveness_results"] = liveness_results
+        result["face_encodings"] = [e.tolist() for e in face_encodings]
+        result["face_locations"] = face_locations
         
         # Add match if found
         for match in matches:
@@ -609,7 +633,8 @@ def run_face_recognition(camera_index=0, backend_url=None, skip_liveness=False, 
         
     except Exception as e:
         logger.error(f"Error during face recognition: {e}")
-        return {"success": False, "error": str(e)}
+        result["error"] = str(e)
+        return result
     
     finally:
         # Release camera
