@@ -1104,6 +1104,52 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
             logger.error(f"Error resetting camera resources: {e}", exc_info=True)
             return jsonify({"status": "error", "message": str(e)}), 500
     
+    @app.route('/capture-preview-frame', methods=['POST'])
+    def capture_preview_frame():
+        """Capture a single frame to display during face recognition processing"""
+        nonlocal camera
+        
+        try:
+            logger.info("Capturing preview frame for face recognition")
+            debug_dir = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'static', 'debug_frames')
+            os.makedirs(debug_dir, exist_ok=True)
+            
+            # Get camera and capture a frame
+            with camera_lock:
+                if camera is None:
+                    camera = get_camera()
+                
+                if not (hasattr(camera, 'isOpened') and camera.isOpened()):
+                    logger.warning("Camera not available for preview capture")
+                    return jsonify({"success": False, "error": "Camera not available"})
+                
+                # Read a few frames to make sure we get a current one
+                for _ in range(3):
+                    success, frame = camera.read()
+                
+                if not success or frame is None:
+                    logger.warning("Failed to capture preview frame")
+                    return jsonify({"success": False, "error": "Failed to capture frame"})
+            
+            # Generate timestamp
+            timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S%f")
+            
+            # Save the preview frame
+            preview_path = os.path.join(debug_dir, f"preview_{timestamp}.jpg")
+            cv2.imwrite(preview_path, frame)
+            
+            # Return success with timestamp
+            logger.info(f"Preview frame captured and saved: {preview_path}")
+            return jsonify({
+                "success": True, 
+                "timestamp": timestamp,
+                "path": f"/static/debug_frames/preview_{timestamp}.jpg"
+            })
+            
+        except Exception as e:
+            logger.error(f"Error capturing preview frame: {e}", exc_info=True)
+            return jsonify({"success": False, "error": str(e)})
+    
     # Clean up resources when app exits
     @app.teardown_appcontext
     def cleanup_resources(exception=None):
