@@ -618,7 +618,7 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                     except Exception as e:
                         logger.error(f"Failed to convert numpy array to list: {e}")
                         return []
-                elif isinstance(obj, datetime.datetime):
+                elif isinstance(obj, datetime):
                     return obj.isoformat()
                 elif isinstance(obj, (bool, int, float, str)) or obj is None:
                     return obj

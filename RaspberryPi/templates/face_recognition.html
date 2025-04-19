@@ -103,8 +103,7 @@
             <p id="statusText" class="mt-2">Initializing camera...</p>
         </div>
         
-        <form id="faceForm" method="POST" style="display:none;">
-            <input type="hidden" name="face_id" id="faceIdInput">
+        <form action="{{ url_for('process_face') }}" method="POST" id="faceForm" style="display:none;">
             <!-- No additional fields needed -->
         </form>
         
@@ -213,28 +212,10 @@
                     clearInterval(progressInterval);
                     document.getElementById('progressBar').style.width = '100%';
                     
-                    // Check if the result contains face data
-                    if (data.result && data.result.face_detected) {
-                        // Generate a unique face ID
-                        const faceId = Date.now().toString(36) + Math.random().toString(36).substr(2);
-                        
-                        // Set the face ID in the hidden input
-                        document.getElementById('faceIdInput').value = faceId;
-                        
-                        // Set the form action with the face ID
-                        const form = document.getElementById('faceForm');
-                        form.action = "{{ url_for('process_face', face_id='') }}" + faceId;
-                        
-                        // Give a moment to see the complete status before submitting
-                        setTimeout(() => {
-                            form.submit();
-                        }, 1000);
-                    } else {
-                        // No face detected
-                        document.getElementById('statusText').textContent = "No face detected. Please try again.";
-                        // Reset UI after a delay
-                        setTimeout(resetUI, 3000);
-                    }
+                    // Give a moment to see the complete status before submitting
+                    setTimeout(() => {
+                        document.getElementById('faceForm').submit();
+                    }, 1000);
                 } else {
                     // Not started or error
                     document.getElementById('statusText').textContent = "Recognition not active.";
