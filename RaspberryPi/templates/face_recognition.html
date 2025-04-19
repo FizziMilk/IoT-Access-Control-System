@@ -32,6 +32,7 @@
         #startButton {
             padding: 15px 30px;
             font-size: 1.2rem;
+            display: none; /* Hide initially as we'll auto-start */
         }
         #instructions {
             margin-bottom: 25px;
@@ -109,6 +110,50 @@
             background-color: #218838;
             transform: scale(1.05);
         }
+        /* Face oval guide styles */
+        .face-guide-container {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 5;
+            pointer-events: none;
+        }
+        .face-oval-guide {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 200px;
+            height: 260px;
+            border: 3px dashed rgba(75, 192, 192, 0.8);
+            border-radius: 50%;
+            box-shadow: 0 0 0 2000px rgba(0, 0, 0, 0.3);
+            z-index: 5;
+            animation: glow 2s infinite alternate;
+        }
+        @keyframes glow {
+            from { box-shadow: 0 0 0 2000px rgba(0, 0, 0, 0.3), 0 0 5px rgba(75, 192, 192, 0.8); }
+            to { box-shadow: 0 0 0 2000px rgba(0, 0, 0, 0.3), 0 0 20px rgba(75, 192, 192, 0.8); }
+        }
+        .countdown-timer {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background-color: rgba(0, 0, 0, 0.7);
+            color: white;
+            width: 60px;
+            height: 60px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 24px;
+            font-weight: bold;
+            z-index: 6;
+            display: none;
+        }
     </style>
 </head>
 <body>
@@ -124,14 +169,14 @@
         {% endwith %}
         
         <div id="instructions">
-            <p class="lead">Click the button below to start facial recognition.</p>
-            <p>Look directly at the camera and keep your face visible.</p>
+            <p class="lead">Position your face in the oval guide for facial recognition.</p>
+            <p>Look directly at the camera and keep your face visible. Recognition will begin in 5 seconds.</p>
         </div>
         
         <div class="button-group">
-        <button id="startButton" class="btn btn-primary btn-lg">
-            <i class="fas fa-camera"></i> Start Face Recognition
-        </button>
+            <button id="startButton" class="btn btn-primary btn-lg">
+                <i class="fas fa-camera"></i> Start Face Recognition
+            </button>
             <button id="resetCameraButton" class="btn btn-secondary">
                 <i class="fas fa-sync"></i> Reset Camera
             </button>
@@ -139,6 +184,10 @@
         
         <div class="video-container">
             <img id="videoFeed" src="{{ url_for('video_feed') }}" alt="Face Recognition Feed" onerror="handleVideoError(this)">
+            <div class="face-guide-container">
+                <div class="face-oval-guide"></div>
+                <div class="countdown-timer" id="countdownTimer">5</div>
+            </div>
             <div id="processingText" class="mt-2">
                 <h4>Processing your face. Please keep still...</h4>
             </div>
@@ -181,7 +230,7 @@
     
     <script>
     console.log("Script initializing at: " + new Date().toISOString());
-
+    
     // Reset camera resources function
     function resetCameraResources() {
         $('#resetCameraButton').prop('disabled', true).html('<i class="fas fa-spinner fa-spin"></i> Resetting...');
@@ -243,17 +292,17 @@
     function startFaceRecognition() {
         console.log("Starting face recognition at: " + new Date().toISOString());
         
-            // Hide the instructions and button
-            document.getElementById('instructions').style.display = 'none';
-            document.getElementById('startButton').style.display = 'none';
+        // Hide the instructions and button
+        document.getElementById('instructions').style.display = 'none';
+        document.getElementById('startButton').style.display = 'none';
         document.getElementById('resetCameraButton').style.display = 'none';
-            document.getElementById('backButton').style.display = 'none';
+        document.getElementById('backButton').style.display = 'none';
         
         // Show the processing text
         document.getElementById('processingText').style.display = 'block';
             
-            // Show the loading spinner
-            document.getElementById('loadingSpinner').style.display = 'block';
+        // Show the loading spinner
+        document.getElementById('loadingSpinner').style.display = 'block';
             
         // Save the current video src to restore it later if needed
         const videoFeed = document.getElementById('videoFeed');
@@ -590,18 +639,48 @@
         // Reset the UI to initial state
         console.log("Resetting UI");
         document.getElementById('instructions').style.display = 'block';
-        document.getElementById('startButton').style.display = 'inline-block';
         document.getElementById('resetCameraButton').style.display = 'inline-block';
         document.getElementById('backButton').style.display = 'inline-block';
         document.getElementById('processingText').style.display = 'none';
         document.getElementById('loadingSpinner').style.display = 'none';
         document.getElementById('progressBar').style.width = '0%';
         document.getElementById('statusText').textContent = "Initializing camera...";
+        
+        // Show the face guide
+        document.querySelector('.face-guide-container').style.display = 'block';
+        
+        // Initialize the countdown
+        startCountdown();
+    }
+    
+    // Function to start the countdown and automatically trigger face recognition
+    function startCountdown() {
+        const countdownElement = document.getElementById('countdownTimer');
+        countdownElement.style.display = 'flex';
+        
+        let seconds = 5;
+        countdownElement.textContent = seconds;
+        
+        const countdownInterval = setInterval(() => {
+            seconds--;
+            countdownElement.textContent = seconds;
+            
+            if (seconds <= 0) {
+                clearInterval(countdownInterval);
+                
+                // Hide countdown and guide
+                countdownElement.style.display = 'none';
+                document.querySelector('.face-guide-container').style.display = 'none';
+                
+                // Start face recognition automatically
+                startFaceRecognition();
+            }
+        }, 1000);
     }
 
     // Ensure DOM is fully loaded before attaching events
     document.addEventListener('DOMContentLoaded', function() {
-        console.log("DOM fully loaded, attaching event handlers");
+        console.log("DOM fully loaded, initializing face recognition");
         
         // Safely attach event to reset button
         const resetBtn = document.getElementById('resetCameraButton');
@@ -610,13 +689,12 @@
             console.log("Reset button handler attached");
         }
         
-        // Safely attach event to start button
-        const startBtn = document.getElementById('startButton');
-        if (startBtn) {
-            startBtn.addEventListener('click', startFaceRecognition);
-            console.log("Start button handler attached");
-        }
-        });
+        // Show the face oval guide
+        document.querySelector('.face-guide-container').style.display = 'block';
+        
+        // Start the countdown automatically when page loads
+        startCountdown();
+    });
     </script>
 </body>
 </html> 
