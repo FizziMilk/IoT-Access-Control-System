@@ -257,9 +257,19 @@ class WebRecognition:
         for name, encodings in person_encodings.items():
             distances = []
             for encoding in encodings:
+                # Make sure encoding is a numpy array
+                if isinstance(encoding, list):
+                    encoding = np.array(encoding)
                 # Calculate face distance for each encoding
-                distance = face_recognition.face_distance([encoding], face_encoding)[0]
-                distances.append(distance)
+                try:
+                    distance = face_recognition.face_distance([encoding], face_encoding)[0]
+                    # Make sure we have a scalar value, not an array
+                    if isinstance(distance, np.ndarray):
+                        distance = float(distance.item()) if distance.size == 1 else float(distance.mean())
+                    distances.append(distance)
+                except Exception as e:
+                    logger.error(f"Error calculating face distance: {e}")
+                    continue
             
             # Calculate the average distance for this person
             # Use a weighted average that emphasizes the best matching encoding
@@ -317,7 +327,14 @@ class WebRecognition:
         else:
             # Fallback to original logic - should never reach here if there are known encodings
             logger.warning("No person encodings available despite having known face encodings")
-            face_distances = face_recognition.face_distance(self.known_face_encodings, face_encoding)
+            try:
+                face_distances = face_recognition.face_distance(self.known_face_encodings, face_encoding)
+                # Ensure face_distances is a list of scalar values
+                if isinstance(face_distances, np.ndarray):
+                    face_distances = [float(d) if not isinstance(d, np.ndarray) else float(d.mean()) for d in face_distances]
+            except Exception as e:
+                logger.error(f"Error in fallback face distance calculation: {e}")
+                face_distances = []
             
             result = {
                 "encoding": face_encoding,
