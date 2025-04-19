@@ -782,12 +782,20 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                             liveness_result = recognition.liveness_detector.check_face_liveness(frame, face_location)
                             logger.info(f"Frame {i+1} liveness result: {liveness_result}")
                             
-                            # Store the result
+                            # Ensure is_live is a scalar boolean
+                            is_live = liveness_result.get("is_live", False)
+                            if isinstance(is_live, np.ndarray):
+                                if is_live.size == 1:
+                                    is_live = bool(is_live.item())
+                                else:
+                                    is_live = bool(is_live.any())  # Consider live if any element is True
+                            
+                            # Store the result with scalar values
                             frame_liveness_results.append({
                                 "frame_index": i,
-                                "is_live": liveness_result.get("is_live", False),
-                                "confidence": liveness_result.get("confidence", 0),
-                                "texture_score": liveness_result.get("texture_score", 0)
+                                "is_live": bool(is_live),
+                                "confidence": float(liveness_result.get("confidence", 0)),
+                                "texture_score": float(liveness_result.get("texture_score", 0))
                             })
                             
                             # For debug frame visualization
@@ -800,7 +808,14 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                     # Calculate average confidence
                     avg_confidence = 0
                     if total_votes > 0:
-                        avg_confidence = sum(result.get("confidence", 0) for result in frame_liveness_results) / total_votes
+                        confidence_sum = 0
+                        for result in frame_liveness_results:
+                            confidence = result.get("confidence", 0)
+                            # Ensure we're adding scalar values
+                            if isinstance(confidence, np.ndarray):
+                                confidence = float(confidence.item()) if confidence.size == 1 else float(confidence.mean())
+                            confidence_sum += confidence
+                        avg_confidence = confidence_sum / total_votes
                     
                     # Need majority of frames to show liveness
                     is_live = (live_votes > total_votes / 2) if total_votes > 0 else False
@@ -809,10 +824,10 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                     
                     # Create combined liveness result
                     combined_liveness_result = {
-                        "is_live": is_live,
-                        "confidence": avg_confidence,
-                        "live_frame_count": live_votes,
-                        "total_frame_count": total_votes,
+                        "is_live": bool(is_live),
+                        "confidence": float(avg_confidence),
+                        "live_frame_count": int(live_votes),
+                        "total_frame_count": int(total_votes),
                         "frame_results": frame_liveness_results
                     }
                 else:
@@ -821,7 +836,9 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                     combined_liveness_result = {
                         "is_live": True,
                         "confidence": 1.0,
-                        "skipped": True
+                        "skipped": True,
+                        "live_frame_count": len(face_locations),  # Count all faces as live
+                        "total_frame_count": len(face_locations)
                     }
                 
                 # Identify the face
@@ -835,9 +852,19 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                 best_match = None
                 best_confidence = 0
                 for match in match_results:
-                    if match.get("match") and match["match"].get("confidence", 0) > best_confidence:
-                        best_match = match
-                        best_confidence = match["match"]["confidence"]
+                    # Make sure we're dealing with scalar values when comparing
+                    if match and match.get("match"):
+                        confidence = match["match"].get("confidence", 0)
+                        # Ensure confidence is a scalar value
+                        if isinstance(confidence, np.ndarray):
+                            if confidence.size == 1:
+                                confidence = float(confidence.item())
+                            else:
+                                confidence = float(confidence.mean())
+                        # Now compare with scalar values
+                        if confidence > best_confidence:
+                            best_match = match
+                            best_confidence = confidence
                 
                 # Save final debug frame
                 faces = [best_face_location] if best_face_location else []
