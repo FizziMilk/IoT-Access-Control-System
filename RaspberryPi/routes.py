@@ -594,7 +594,7 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
         
         # Define function to run in the background
         def run_recognition_background():
-            nonlocal face_recognition_active, face_recognition_result
+            nonlocal face_recognition_active, face_recognition_result, camera, camera_needs_cleanup
             
             # Mark as active
             face_recognition_active = True
