@@ -737,7 +737,21 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                     return
                 
                 # Check if the best face is large enough
-                if best_face_width < MIN_FACE_WIDTH or best_face_height < MIN_FACE_HEIGHT:
+                # For NumPy array comparisons, we use logical operators explicitly
+                face_width_too_small = False
+                face_height_too_small = False
+                
+                if isinstance(best_face_width, np.ndarray):
+                    face_width_too_small = (best_face_width < MIN_FACE_WIDTH).any()
+                else:
+                    face_width_too_small = best_face_width < MIN_FACE_WIDTH
+                    
+                if isinstance(best_face_height, np.ndarray):
+                    face_height_too_small = (best_face_height < MIN_FACE_HEIGHT).any()
+                else:
+                    face_height_too_small = best_face_height < MIN_FACE_HEIGHT
+                
+                if face_width_too_small or face_height_too_small:
                     logger.warning(f"Best face too small: {best_face_width}x{best_face_height}")
                     
                     # Prepare result with size feedback
@@ -749,7 +763,18 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                     }
                     
                     # Determine how far away the face is
-                    if best_face_width < MIN_FACE_WIDTH * 0.5 or best_face_height < MIN_FACE_HEIGHT * 0.5:
+                    # Use explicit logical operations for NumPy arrays
+                    if isinstance(best_face_width, np.ndarray):
+                        width_much_too_small = (best_face_width < MIN_FACE_WIDTH * 0.5).any()
+                    else:
+                        width_much_too_small = best_face_width < MIN_FACE_WIDTH * 0.5
+                        
+                    if isinstance(best_face_height, np.ndarray):
+                        height_much_too_small = (best_face_height < MIN_FACE_HEIGHT * 0.5).any()
+                    else:
+                        height_much_too_small = best_face_height < MIN_FACE_HEIGHT * 0.5
+                    
+                    if width_much_too_small or height_much_too_small:
                         result["distance_feedback"] = "much_too_far"
                     else:
                         result["distance_feedback"] = "too_far"

@@ -73,34 +73,30 @@ class LivenessDetector:
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
         color_std = np.std(hsv[:,:,1])  # Saturation channel
         
-        # Ensure all values are scalar to avoid array comparison issues
-        if isinstance(texture_entropy, np.ndarray):
-            texture_entropy = float(texture_entropy.item()) if texture_entropy.size == 1 else float(texture_entropy.mean())
-        if isinstance(mean_gradient, np.ndarray):
-            mean_gradient = float(mean_gradient.item()) if mean_gradient.size == 1 else float(mean_gradient.mean())
-        if isinstance(bright_spot_ratio, np.ndarray):
-            bright_spot_ratio = float(bright_spot_ratio.item()) if bright_spot_ratio.size == 1 else float(bright_spot_ratio.mean())
-        if isinstance(color_std, np.ndarray):
-            color_std = float(color_std.item()) if color_std.size == 1 else float(color_std.mean())
-
-        # Evaluate liveness as scalar boolean values
-        entropy_ok = bool(texture_entropy > self.entropy_threshold)
-        gradient_ok = bool(mean_gradient > self.gradient_threshold)
-        reflection_ok = bool(bright_spot_ratio < self.reflection_threshold)
-        color_ok = bool(color_std > self.color_threshold)
+        # Convert any arrays to scalars to ensure safe boolean operations
+        texture_entropy_scalar = float(texture_entropy.item() if isinstance(texture_entropy, np.ndarray) and texture_entropy.size == 1 else texture_entropy)
+        mean_gradient_scalar = float(mean_gradient.item() if isinstance(mean_gradient, np.ndarray) and mean_gradient.size == 1 else mean_gradient)
+        bright_spot_ratio_scalar = float(bright_spot_ratio.item() if isinstance(bright_spot_ratio, np.ndarray) and bright_spot_ratio.size == 1 else bright_spot_ratio)
+        color_std_scalar = float(color_std.item() if isinstance(color_std, np.ndarray) and color_std.size == 1 else color_std)
+        
+        # Evaluate liveness
+        entropy_ok = texture_entropy_scalar > self.entropy_threshold
+        gradient_ok = mean_gradient_scalar > self.gradient_threshold
+        reflection_ok = bright_spot_ratio_scalar < self.reflection_threshold
+        color_ok = color_std_scalar > self.color_threshold
         
         # Combined result
         is_live = entropy_ok and gradient_ok and reflection_ok and color_ok
         
         # Log metrics
-        logger.info(f"Liveness: entropy={texture_entropy:.2f}, gradient={mean_gradient:.2f}, "
-                    f"reflection={bright_spot_ratio:.4f}, color={color_std:.2f}, live={is_live}")
+        logger.info(f"Liveness: entropy={texture_entropy_scalar:.2f}, gradient={mean_gradient_scalar:.2f}, "
+                    f"reflection={bright_spot_ratio_scalar:.4f}, color={color_std_scalar:.2f}, live={is_live}")
         
         return {
-            "texture_entropy": float(texture_entropy),
-            "mean_gradient": float(mean_gradient),
-            "bright_spot_ratio": float(bright_spot_ratio),
-            "color_std": float(color_std),
+            "texture_entropy": texture_entropy_scalar,
+            "mean_gradient": mean_gradient_scalar,
+            "bright_spot_ratio": bright_spot_ratio_scalar,
+            "color_std": color_std_scalar,
             "is_live": bool(is_live)
         }
     
@@ -334,21 +330,30 @@ class WebRecognition:
             }
             
             # Check if the match is close enough
-            if best_match_distance <= self.detection_threshold:
-                # Convert distance to confidence (0 distance = 100% confidence, 1 distance = 0% confidence)
-                match_confidence = 1.0 - best_match_distance
-                best_single_confidence = 1.0 - best_single_distance
+            # Use .all() to ensure all elements in the array meet the threshold criteria
+            if isinstance(best_match_distance, np.ndarray):
+                is_close_enough = (best_match_distance <= self.detection_threshold).all()
+            else:
+                is_close_enough = best_match_distance <= self.detection_threshold
                 
-                logger.info(f"Face matched with {best_match_name} (confidence: {match_confidence:.2f}, " +
-                           f"best single confidence: {best_single_confidence:.2f}, " +
-                           f"using {best_match_info['num_encodings']} encodings)")
+            if is_close_enough:
+                match_name = best_match_name
+                # Convert distance to confidence (0 distance = 100% confidence, 1 distance = 0% confidence)
+                if isinstance(best_match_distance, np.ndarray):
+                    # If it's an array, take the mean for confidence
+                    match_confidence = 1.0 - np.mean(best_match_distance)
+                    match_confidence_scalar = float(match_confidence.item() if isinstance(match_confidence, np.ndarray) and match_confidence.size == 1 else match_confidence)
+                    best_match_distance_scalar = float(np.mean(best_match_distance))
+                else:
+                    match_confidence_scalar = 1.0 - best_match_distance
+                    best_match_distance_scalar = float(best_match_distance)
+                
+                logger.info(f"Face matched with {match_name} (confidence: {match_confidence_scalar:.2f}, distance: {best_match_distance_scalar:.2f})")
                 
                 result["match"] = {
-                    "name": best_match_name,
-                    "confidence": float(match_confidence),
-                    "distance": float(best_match_distance),
-                    "best_single_confidence": float(best_single_confidence),
-                    "num_encodings": best_match_info['num_encodings']
+                    "name": match_name,
+                    "confidence": match_confidence_scalar,
+                    "distance": best_match_distance_scalar
                 }
             else:
                 logger.info(f"Best match too far ({best_match_distance:.2f} > {self.detection_threshold:.2f})")
@@ -380,17 +385,29 @@ class WebRecognition:
                 # Check if the match is close enough (lower distance means better match)
                 # face_distance is a measure of difference, with 0 being a perfect match
                 # and values closer to 1 being poor matches
-                if best_match_distance <= self.detection_threshold:
+                if isinstance(best_match_distance, np.ndarray):
+                    is_close_enough = (best_match_distance <= self.detection_threshold).all()
+                else:
+                    is_close_enough = best_match_distance <= self.detection_threshold
+                    
+                if is_close_enough:
                     match_name = self.known_face_names[best_match_index]
                     # Convert distance to confidence (0 distance = 100% confidence, 1 distance = 0% confidence)
-                    match_confidence = 1.0 - best_match_distance
+                    if isinstance(best_match_distance, np.ndarray):
+                        # If it's an array, take the mean for confidence
+                        match_confidence = 1.0 - np.mean(best_match_distance)
+                        match_confidence_scalar = float(match_confidence.item() if isinstance(match_confidence, np.ndarray) and match_confidence.size == 1 else match_confidence)
+                        best_match_distance_scalar = float(np.mean(best_match_distance))
+                    else:
+                        match_confidence_scalar = 1.0 - best_match_distance
+                        best_match_distance_scalar = float(best_match_distance)
                     
-                    logger.info(f"Face matched with {match_name} (confidence: {match_confidence:.2f}, distance: {best_match_distance:.2f})")
+                    logger.info(f"Face matched with {match_name} (confidence: {match_confidence_scalar:.2f}, distance: {best_match_distance_scalar:.2f})")
                     
                     result["match"] = {
                         "name": match_name,
-                        "confidence": float(match_confidence),
-                        "distance": float(best_match_distance)
+                        "confidence": match_confidence_scalar,
+                        "distance": best_match_distance_scalar
                     }
                 else:
                     logger.info(f"Best match too far ({best_match_distance:.2f} > {self.detection_threshold:.2f})")
@@ -458,11 +475,8 @@ def save_debug_frame(frame, filename, faces=None, liveness_results=None, matches
                 # Handle is_live which might be a NumPy array
                 is_live_value = result.get("is_live", False)
                 if isinstance(is_live_value, np.ndarray):
-                    # Convert NumPy array to scalar boolean 
-                    if is_live_value.size == 1:
-                        is_live_value = bool(is_live_value.item())
-                    else:
-                        is_live_value = bool(is_live_value.any())  # Consider live if any element is True
+                    # Use .any() for array boolean evaluation
+                    is_live_value = is_live_value.any()
                         
                 if is_live_value:
                     is_live = "Live"
