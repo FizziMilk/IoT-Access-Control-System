@@ -371,8 +371,7 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                 flask_session.pop('recent_recognition', None)
             
             return render_template('door_entry.html', 
-                                  recent_recognition=recent_recognition,
-                                  testing_mode=TESTING_MODE_ENABLED)
+                                  recent_recognition=recent_recognition)
 
         # If we get here, schedule check didn't unlock the door
         if request.method == "POST":
@@ -468,11 +467,8 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
         except Exception as e:
             logger.error(f"Error cleaning up CV resources: {e}")
         
-        # Check if testing mode - pass this to the template
-        testing_mode = request.args.get('testing', 'false').lower() == 'true'
-        
         # Return the template
-        return render_template("face_recognition.html", testing_mode=testing_mode)
+        return render_template("face_recognition.html")
     
     @app.route('/video_feed')
     def video_feed():

@@ -215,18 +215,6 @@
                 <i class="fas fa-arrow-left"></i> Back
             </a>
         </div>
-        
-        {% if testing_mode %}
-        <div class="mt-3 alert alert-warning">
-            <strong>Testing Mode Enabled</strong>
-            <div class="form-check mt-2">
-                <input class="form-check-input" type="checkbox" id="skipLivenessCheck">
-                <label class="form-check-label" for="skipLivenessCheck">
-                    Skip liveness detection (for testing only)
-                </label>
-            </div>
-        </div>
-        {% endif %}
     </div>
     
     <script>
@@ -374,9 +362,8 @@
             }
         }, 500); // Updates every 500ms
         
-        // Check if skip liveness is checked (in testing mode)
-        var skipLivenessElement = document.getElementById('skipLivenessCheck');
-        var skipLiveness = skipLivenessElement && skipLivenessElement.checked;
+        // Testing mode removed - always use liveness detection
+        const skipLiveness = false;
         
         // Reset the error counters
         videoErrorCount = 0;
