@@ -580,8 +580,15 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
     
     @app.route('/start-face-recognition', methods=['POST'])
     def start_face_recognition():
-        nonlocal camera
-
+        nonlocal camera, camera_needs_cleanup
+        
+        # If camera has been released, get a new one
+        with camera_lock:
+            if camera is None or not hasattr(camera, 'isOpened') or not camera.isOpened():
+                logger.info("Getting new camera for face recognition")
+                camera = get_camera()
+                camera_needs_cleanup = True
+        
         # Don't start if already running
         if recognition_state.recognition_running:
             return jsonify({
@@ -599,9 +606,18 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
         frames = []
         try:
             for i in range(num_frames):
-                logger.info(f"Captured frame {i+1}/{num_frames}")
-                ret, frame = camera.read()
-                if ret:
+                # Check if camera is still valid before each frame capture
+                with camera_lock:
+                    if camera is None or not hasattr(camera, 'isOpened') or not camera.isOpened():
+                        logger.warning("Camera was released, getting a new one")
+                        camera = get_camera()
+                        camera_needs_cleanup = True
+                    
+                    # Read frame while holding the lock
+                    ret, frame = camera.read()
+                
+                if ret and frame is not None:
+                    logger.info(f"Captured frame {i+1}/{num_frames}")
                     frames.append(frame)
                 else:
                     logger.warning(f"Failed to capture frame {i+1}")
@@ -822,7 +838,6 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
             }
             
             # Make request to backend
-            backend_url = app.config.get('BACKEND_URL', 'http://localhost:5001')
             response = requests.post(f"{backend_url}/api/register-face", json=payload)
             
             if response.status_code == 200:
@@ -972,7 +987,7 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
             with camera_lock:
                 if camera is None or not hasattr(camera, 'isOpened') or not camera.isOpened():
                     camera = get_camera()
-                    camera_needs_cleanup = True
+                    # Don't set cleanup flag here - we need the camera for face recognition
                 
                 if camera is None or not hasattr(camera, 'read'):
                     logger.error("Camera not available for preview capture")
@@ -1087,7 +1102,7 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
             
             # Initialize recognition system and load known faces
             recognition = WebRecognition()
-            encodings, names = load_known_faces()
+            encodings, names = load_known_faces(backend_url)
             if encodings and names:
                 recognition.load_encodings(encodings, names)
             else:
