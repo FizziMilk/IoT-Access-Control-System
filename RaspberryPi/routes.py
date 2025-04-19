@@ -95,6 +95,9 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
     # Set up Qt environment once at startup
     setup_qt_environment()
     
+    # Define API URL for backend requests
+    API_URL = backend_url
+    
     # Add integrated video feed with face recognition
     camera = None
     camera_lock = threading.Lock()
@@ -618,6 +621,7 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                 
                 if ret and frame is not None:
                     logger.info(f"Captured frame {i+1}/{num_frames}")
+                    # Convert to RGB for face_recognition library
                     frames.append(frame)
                 else:
                     logger.warning(f"Failed to capture frame {i+1}")
@@ -1090,44 +1094,27 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                 "timestamp": datetime.now().isoformat()
             }
             
-            # Create a camera object - faster to create a new one than reuse
-            camera = cv2.VideoCapture(0)
-            if not camera.isOpened():
-                logger.error("Failed to open camera")
-                result["error"] = "Failed to open camera"
-                recognition_state.face_recognition_result = result
-                return
-            
-            # Only capture 2 frames instead of 4 for faster processing
-            frames = []
+            # Detect faces in the frames that were provided
             face_locations = []
+            rgb_frames = []
             
-            # Capture frames with timeout
-            frame_capture_start = time.time()
-            for _ in range(2):  # Reduced from 4 frames to 2
-                ret, frame = camera.read()
-                if not ret:
-                    logger.warning("Failed to grab frame")
-                    continue
-                    
-                # Convert to RGB for face_recognition library
-                rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            for frame in frames:
+                # Convert to RGB for face_recognition library if needed
+                if frame.shape[2] == 3 and frame[0,0].size == 3:  # Check if BGR
+                    rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                else:
+                    rgb_frame = frame  # Already RGB
                 
                 # Detect faces in this frame (using HOG which is faster than CNN)
                 locations = face_recognition.face_locations(rgb_frame, model="hog")
                 
                 if locations:
-                    frames.append(rgb_frame)
+                    rgb_frames.append(rgb_frame)
                     face_locations.append(locations)
             
-            camera.release()
-            
-            frame_capture_time = time.time() - frame_capture_start
-            logger.info(f"Captured {len(frames)} frames in {frame_capture_time:.2f} seconds")
-            
-            if not frames:
-                logger.warning("No usable frames captured")
-                result["error"] = "No usable frames captured"
+            if not rgb_frames:
+                logger.warning("No faces detected in any frames")
+                result["error"] = "No faces detected in frames"
                 recognition_state.face_recognition_result = result
                 return
             
@@ -1164,7 +1151,7 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                     return
                     
                 # Get the best frame and its face location
-                best_frame = frames[best_frame_index]
+                best_frame = rgb_frames[best_frame_index]
                 
                 # Check if face is too small (min 100x100 pixels for reliable recognition)
                 top, right, bottom, left = best_face_location
@@ -1181,7 +1168,7 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                     result["error"] = "Face is too small for reliable recognition"
                     
                     # Save a debug frame with rectangle and text
-                    debug_frame = frames[best_frame_index].copy()
+                    debug_frame = rgb_frames[best_frame_index].copy()
                     debug_frame = cv2.cvtColor(debug_frame, cv2.COLOR_RGB2BGR)
                     cv2.rectangle(debug_frame, (left, top), (right, bottom), (0, 0, 255), 2)
                     cv2.putText(debug_frame, f"Too small: {face_width}x{face_height}", 
@@ -1315,5 +1302,45 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
         finally:
             # Always set recognition state to inactive when done
             recognition_state.face_recognition_active = False
+
+    # Define a simple liveness check function in routes.py
+    def check_liveness(frame, face_location):
+        """Simple placeholder liveness detection to check if a face is real
+        
+        In a production system, you would implement a more robust liveness detection
+        using blink detection, texture analysis, etc.
+        """
+        try:
+            # Get face dimensions
+            top, right, bottom, left = face_location
+            face_img = frame[top:bottom, left:right]
+            
+            # Ensure the face region is valid
+            if face_img.size == 0:
+                logger.warning("Invalid face region for liveness check")
+                return False
+            
+            # Basic checks - in a real system, you'd have much more sophisticated checks
+            
+            # Check 1: Face has some variation in color/texture (non-flat)
+            gray = cv2.cvtColor(face_img, cv2.COLOR_RGB2GRAY) if len(face_img.shape) == 3 else face_img
+            std_dev = np.std(gray)
+            texture_check = std_dev > 25  # Arbitrary threshold
+            
+            # Check 2: Face doesn't have unnaturally uniform regions
+            # Simplified check for demonstration
+            _, thresh = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY)
+            white_pixels = np.count_nonzero(thresh)
+            white_ratio = white_pixels / (gray.shape[0] * gray.shape[1])
+            uniform_check = white_ratio < 0.15  # Real faces shouldn't have large uniform white regions
+            
+            is_live = texture_check and uniform_check
+            
+            logger.info(f"Liveness check: texture_std={std_dev:.2f}, white_ratio={white_ratio:.3f}, is_live={is_live}")
+            return is_live
+            
+        except Exception as e:
+            logger.error(f"Error in liveness check: {str(e)}")
+            return False
 
     return app 
