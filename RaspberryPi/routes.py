@@ -107,6 +107,20 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
     # Define API URL for backend requests
     API_URL = backend_url
     
+    # Initialize schedule from backend
+    try:
+        logger.info("Fetching initial schedule from backend")
+        schedule_response = backend_session.get(f"{backend_url}/schedule")
+        if schedule_response.status_code == 200:
+            schedule_data = schedule_response.json()
+            logger.info(f"Successfully retrieved schedule with {len(schedule_data)} days")
+            mqtt_handler.update_schedule(schedule_data)
+            logger.info("Schedule initialized in MQTT handler")
+        else:
+            logger.warning(f"Failed to fetch initial schedule: {schedule_response.status_code}")
+    except Exception as e:
+        logger.error(f"Error initializing schedule: {e}")
+    
     # Add integrated video feed with face recognition
     camera = None
     camera_lock = threading.Lock()
@@ -1766,5 +1780,36 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
             return jsonify({"status": "success", "message": "Door locked"}), 200
         else:
             return jsonify({"error": "Invalid command"}), 400
+
+    # Test endpoint to verify MQTT functionality for door commands
+    @app.route('/test-mqtt', methods=['POST'])
+    def test_mqtt():
+        """Test endpoint to directly publish MQTT commands for testing"""
+        try:
+            data = request.get_json(silent=True) or {}
+            cmd = data.get('command', 'unlock_door')
+            
+            # Direct publish using Flask-MQTT
+            logger.info(f"Publishing test MQTT message to door/commands: {cmd}")
+            
+            # Try to publish using both the general and specific MQTT handlers
+            success = mqtt_handler.mqtt.publish('door/commands', cmd)
+            
+            # Also try direct call to door controller as fallback
+            if cmd == 'unlock_door':
+                logger.info("Directly calling door_controller.unlock_door() as fallback")
+                door_controller.unlock_door()
+            elif cmd == 'lock_door':
+                logger.info("Directly calling door_controller.lock_door() as fallback")
+                door_controller.lock_door()
+                
+            return jsonify({
+                "status": "success", 
+                "message": f"Test MQTT command '{cmd}' sent", 
+                "mqtt_result": success
+            }), 200
+        except Exception as e:
+            logger.error(f"Error in test-mqtt endpoint: {e}")
+            return jsonify({"error": str(e)}), 500
 
     return app 

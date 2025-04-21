@@ -85,6 +85,7 @@ class MQTTHandler:
         def handle_connect(client, userdata, flags, rc):
             if rc == 0:
                 print(f"[DEBUG] Connected to MQTT broker with result code {rc}")
+                print(f"[DEBUG] Attempting to subscribe to door/commands and other topics")
                 self.mqtt.subscribe([
                     ("door/commands", 1),
                     ("door/schedule", 1),
@@ -92,10 +93,13 @@ class MQTTHandler:
                     ("door/otp/verify", 1)
                 ])
                 print("[DEBUG] Subscribed to all necessary topics")
+            else:
+                print(f"[ERROR] Failed to connect to MQTT broker with code {rc}")
 
         @self.mqtt.on_message()
         def handle_mqtt_message(client, userdata, message):
             print(f"[DEBUG] Received message on topic: {message.topic}")
+            print(f"[DEBUG] Message payload: {message.payload}")
             try:
                 if message.topic.startswith("door/otp/response/"):
                     phone_number = message.topic.split('/')[-1]
@@ -121,7 +125,9 @@ class MQTTHandler:
 
                 elif message.topic == "door/schedule":
                     schedule_data = json.loads(message.payload.decode())
+                    print(f"[DEBUG] Received schedule data: {schedule_data}")
                     self.update_schedule(schedule_data)
+                    print(f"[DEBUG] Updated schedule: {self.schedule}")
 
                 elif message.topic == "door/otp/verify":
                     try:
@@ -170,6 +176,27 @@ class MQTTHandler:
         @self.mqtt.on_subscribe()
         def handle_subscribe(client, userdata, mid, granted_qos):
             print(f"[DEBUG] Subscribed to topic with mid: {mid}, granted QoS: {granted_qos}")
+            print(f"[DEBUG] MQTT client active subscriptions: {self.mqtt.topics}")
+
+        # Register explicit callback for door commands to ensure they're captured
+        @self.mqtt.on_topic('door/commands')
+        def handle_door_command(client, userdata, message):
+            print(f"[DEBUG] Direct door command received: {message.payload.decode()}")
+            command = message.payload.decode()
+            
+            try:
+                if command == "unlock_door":
+                    print(f"[DEBUG] Explicitly unlocking door from dedicated handler")
+                    self.door_controller.unlock_door()
+                    print(f"[DEBUG] Door unlock command executed successfully (dedicated handler)")
+                elif command == "lock_door":
+                    print(f"[DEBUG] Explicitly locking door from dedicated handler")
+                    self.door_controller.lock_door()
+                    print(f"[DEBUG] Door lock command executed successfully (dedicated handler)")
+                else:
+                    print(f"[WARNING] Unknown door command received in dedicated handler: {command}")
+            except Exception as e:
+                print(f"[ERROR] Error executing door command in dedicated handler: {e}")
 
     def update_schedule(self, data):
         try:
