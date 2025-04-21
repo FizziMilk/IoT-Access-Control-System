@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container">
+    <div class="row justify-content-center">
+        <div class="col-md-6">
+            <div class="card">
+                <div class="card-header">
+                    <h3 class="text-center">Verification Options</h3>
+                </div>
+                <div class="card-body">
+                    {% with messages = get_flashed_messages(with_categories=true) %}
+                    {% if messages %}
+                    {% for category, message in messages %}
+                    <div class="alert alert-{{ category }}">{{ message }}</div>
+                    {% endfor %}
+                    {% endif %}
+                    {% endwith %}
+
+                    {% if user_recognized and face_recognized %}
+                        <!-- User is recognized but needs additional verification -->
+                        <p>Face recognized! Please verify with OTP to complete access.</p>
+                        <form action="{{ url_for('index') }}" method="post">
+                            <input type="hidden" name="phone_number" value="{{ phone_number }}">
+                            <button type="submit" class="btn btn-primary btn-block mb-3">Get OTP</button>
+                        </form>
+                    {% elif has_face %}
+                        <!-- Face was captured but not recognized - allow registration -->
+                        <p>Your face was captured but not recognized in our system.</p>
+                        <form action="{{ url_for('register_face') }}" method="post" class="mb-4">
+                            <div class="form-group mb-3">
+                                <label for="phone_number">Your Phone Number:</label>
+                                <input type="text" class="form-control" id="phone_number" name="phone_number" 
+                                       placeholder="+447123456789" required>
+                                <small class="form-text text-muted">Enter your phone number to register your face.</small>
+                            </div>
+                            <button type="submit" class="btn btn-success btn-block mb-3">Register Face</button>
+                        </form>
+                        
+                        <p>Or verify with your phone number instead:</p>
+                        <form action="{{ url_for('index') }}" method="post">
+                            <div class="form-group mb-3">
+                                <label for="phone_number">Phone Number:</label>
+                                <input type="text" class="form-control" id="phone_number" name="phone_number" 
+                                       placeholder="+447123456789" required>
+                            </div>
+                            <button type="submit" class="btn btn-primary btn-block">Get OTP</button>
+                        </form>
+                    {% else %}
+                        <!-- Fallback options -->
+                        <p>Please choose a verification method:</p>
+                        <a href="{{ url_for('face_recognition_page') }}" class="btn btn-primary btn-block mb-3">Try Face Recognition Again</a>
+                        <a href="{{ url_for('index') }}" class="btn btn-secondary btn-block">Use Phone Number</a>
+                    {% endif %}
+
+                    <div class="mt-3">
+                        <a href="{{ url_for('index') }}" class="btn btn-outline-secondary btn-block">Back to Main Menu</a>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %} 

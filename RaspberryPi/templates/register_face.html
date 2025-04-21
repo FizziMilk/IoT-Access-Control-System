@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Register Face</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <style>
+        body {
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 500px;
+            padding: 30px;
+            background-color: white;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        .face-data-available {
+            color: #28a745;
+            font-weight: bold;
+            margin-bottom: 15px;
+        }
+        .face-data-unavailable {
+            color: #dc3545;
+            font-weight: bold;
+            margin-bottom: 15px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1 class="mb-4 text-center">Register Your Face</h1>
+        
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="alert alert-{{ category }}">{{ message }}</div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+        
+        {% if encoding_available %}
+        <div class="face-data-available mb-4">
+            <i class="fas fa-check-circle"></i> Face data is available. Please complete your registration.
+        </div>
+        {% elif liveness_failed %}
+        <div class="alert alert-danger mb-4">
+            <h5><i class="fas fa-exclamation-triangle"></i> Liveness Check Failed</h5>
+            <p>For security reasons, registration requires a real face to be detected.</p>
+            <p>Please return to the face recognition page and ensure:</p>
+            <ul>
+                <li>You're using a real face, not a photo or screen</li>
+                <li>You have adequate lighting</li>
+                <li>Your face is clearly visible to the camera</li>
+            </ul>
+            <div class="mt-3">
+                <a href="{{ url_for('face_recognition_page') }}" class="btn btn-primary">
+                    <i class="fas fa-camera"></i> Try Face Recognition Again
+                </a>
+            </div>
+        </div>
+        {% else %}
+        <div class="face-data-unavailable mb-4">
+            <i class="fas fa-exclamation-circle"></i> No face data available. Please return to face recognition page.
+        </div>
+        {% endif %}
+        
+        <form method="POST" action="{{ url_for('register_face') }}" {% if liveness_failed %}style="display: none;"{% endif %}>
+            <div class="mb-3">
+                <label for="name" class="form-label">Full Name</label>
+                <input type="text" class="form-control" id="name" name="name" required>
+                <div class="form-text">Enter your full name as it should appear in the system.</div>
+            </div>
+            
+            <div class="mb-3">
+                <label for="phone_number" class="form-label">Phone Number</label>
+                <input type="tel" class="form-control" id="phone_number" name="phone_number" 
+                       placeholder="+1234567890" required>
+                <div class="form-text">Enter your phone number with country code (e.g., +44 for UK).</div>
+            </div>
+            
+            <div class="d-grid gap-2 mt-4">
+                <button type="submit" class="btn btn-primary btn-lg" {% if not encoding_available %}disabled{% endif %}>
+                    <i class="fas fa-user-plus"></i> Register
+                </button>
+                <a href="{{ url_for('index') }}" class="btn btn-secondary">
+                    <i class="fas fa-arrow-left"></i> Back to Home
+                </a>
+            </div>
+        </form>
+        
+        <div class="mt-4 text-center text-muted small">
+            <p>Your face data will be stored securely and used only for building access.</p>
+            <p>Registration must be approved by an administrator before access is granted.</p>
+        </div>
+    </div>
+</body>
+</html> 

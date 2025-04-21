@@ -1,0 +1,123 @@
+# Environment files
+.env
+twilio.env
+backend/twilio.env
+
+MobileApp/node_modules/
+
+# Expo
+MobileApp/.expo/
+MobileApp/dist/
+MobileApp/web-build/
+MobileApp/expo-env.d.ts
+
+# Native
+# Environment files
+.env
+twilio.env
+backend/twilio.env
+Backend/twilio.env
+RaspberryPi/.env
+MobileApp/.env
+MobileApp/.env*.local
+
+# Database files
+*.db
+access_logs.db
+backend/access_logs.db
+
+# Log files
+*.log
+.log
+nohup.out
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
+env/
+ENV/
+
+# Node
+MobileApp/node_modules/
+MobileApp/.expo/
+MobileApp/dist/
+MobileApp/web-build/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Certificates and keys
+*.pem
+*.key
+*.crt
+*.csr
+*.srl
+
+# Build files
+*.orig.*
+*.jks
+*.p8
+*.p12
+<<<<<<< HEAD
+*.key
+*.mobileprovision
+
+# Metro
+MobileApp/.metro-health-check*
+
+# debug
+MobileApp/npm-debug.*
+MobileApp/yarn-debug.*
+MobileApp/yarn-error.*
+
+# macOS
+MobileApp/.DS_Store
+*.pem
+
+# local env files
+MobileApp/.env*.local
+MobileApp/.env
+
+# typescript
+*.tsbuildinfo
+
+MobileApp/app-example
+
+RaspberryPi/.env
+
+.env
+*.mobileprovision
+
+# Debug files
+MobileApp/npm-debug.*
+MobileApp/yarn-debug.*
+MobileApp/yarn-error.*
+MobileApp/.metro-health-check*
+
+# Example files
+MobileApp/app-example/
+
+# TypeScript
+<<<<<<< HEAD
+*.tsbuildinfo
+
+# Backend specific
+Backend/*.py.save
+Backend/hello.py
+Backend/mqtt_publish_test.py
+
+Backend/start_verification.sh
+Backend/start_verification.sh
+=======
+*.tsbuildinfo
+>>>>>>> b4b94dedbe3032bba1b6cd7bdefbdf010e9737c3

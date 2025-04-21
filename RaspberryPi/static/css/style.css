@@ -1,0 +1,26 @@
+/* Network error indicator */
+.network-error {
+    color: #ff9900;
+    font-weight: bold;
+    font-size: 1.2rem;
+    padding: 10px;
+    border: 2px solid #ff9900;
+    border-radius: 5px;
+    background-color: rgba(255, 153, 0, 0.1);
+    margin: 10px 0;
+    display: inline-block;
+}
+
+.network-error i {
+    margin-right: 8px;
+}
+
+/* Retry button styling */
+#retryButton {
+    background-color: #007bff;
+    transition: background-color 0.3s;
+}
+
+#retryButton:hover {
+    background-color: #0056b3;
+} 

@@ -1,0 +1,32 @@
+# Python byte-compiled files
+__pycache__/
+*.py[cod]
+
+# Environment variables
+*.env
+
+# Virtual environment
+env/
+venv/
+
+# SQLite database file
+*.sqlite3
+
+# Instance folder
+instance/
+
+# Logs and outputs
+*.log
+nohup.out
+
+# Certificates and keys
+*.pem
+*.key
+
+# Backup and temporary files
+*~
+.idea/
+.vscode/
+
+# Ignore user creation script
+add_user.py

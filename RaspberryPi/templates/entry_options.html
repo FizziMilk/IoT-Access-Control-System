@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IoT Access Control</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css">
+    <style>
+        body {
+            background-color: #f5f5f5;
+            padding: 20px;
+        }
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            background-color: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+        }
+        .btn-primary {
+            background-color: #4c8dff;
+            border-color: #4c8dff;
+        }
+        .btn-secondary {
+            background-color: #6c757d;
+            border-color: #6c757d;
+        }
+        .entry-option {
+            margin-bottom: 20px;
+            padding: 20px;
+            border-radius: 8px;
+            border: 1px solid #dee2e6;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        .entry-option:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 6px 12px rgba(0, 0, 0, 0.1);
+        }
+        .option-header {
+            display: flex;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+        .option-icon {
+            font-size: 24px;
+            margin-right: 15px;
+            color: #4c8dff;
+            width: 40px;
+            height: 40px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background-color: #e6f0ff;
+            border-radius: 50%;
+        }
+        .option-title {
+            margin: 0;
+            font-size: 20px;
+            font-weight: 600;
+        }
+        .option-description {
+            color: #6c757d;
+        }
+        .success-badge {
+            background-color: #28a745;
+            color: white;
+            font-size: 14px;
+            padding: 5px 15px;
+            border-radius: 20px;
+            margin-left: 15px;
+        }
+        #phoneEntryForm {
+            margin-top: 15px;
+            display: none;
+        }
+        .form-control {
+            padding: 12px;
+            border-radius: 8px;
+        }
+        .alert {
+            margin-bottom: 25px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container mt-5">
+        <h1 class="text-center mb-4">IoT Access Control</h1>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="alert alert-{{ category }}">{{ message }}</div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+
+        <div class="entry-option" id="mainEntryOption">
+            <div class="option-header">
+                <div class="option-icon">
+                    <i class="fas fa-door-open"></i>
+                </div>
+                <h2 class="option-title">Door Access</h2>
+                {% if recognition_success %}
+                <span class="success-badge">Recognition Successful</span>
+                {% endif %}
+            </div>
+            <p class="option-description">Request access to enter through facial recognition.</p>
+            <form action="{{ url_for('door_entry') }}" method="GET">
+                <button type="submit" class="btn btn-primary btn-lg w-100">
+                    <i class="fas fa-sign-in-alt me-2"></i> Request Access
+                </button>
+            </form>
+        </div>
+
+        <div class="text-center mt-4">
+            <p class="text-muted">IoT Access Control System - Secure Entry Management</p>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html> 
