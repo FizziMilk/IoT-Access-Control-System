@@ -240,6 +240,7 @@ def setup_mqtt_client():
 class MQTTHandler:
     def __init__(self, mqtt_broker=None, mqtt_port=None):
         """Initialize the MQTT handler"""
+        self.schedule = {}
         self.client = None
         self.connected = False
         self.mqtt_broker = mqtt_broker

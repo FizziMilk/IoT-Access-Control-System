@@ -1064,8 +1064,9 @@ api.add_resource(GetUserEncodingsAPI, '/get-user-encodings')
 
 # Simple health check endpoint
 @app.route('/health')
+@app.route('/api/health')  # Health endpoint for external clients
 def health_check():
-    return {"status": "ok"}, 200
+    return {"status": "OK", "message": "Healthy"}, 200
 
 if __name__ == '__main__':
     try:
