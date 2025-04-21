@@ -83,7 +83,6 @@ for var in required_env_vars:
 door_controller = DoorController()
 session, backend_url = create_backend_session()
 mqtt_handler = MQTTHandler(app, door_controller)
-mqtt_handler.start()  # Start MQTT handler to subscribe to topics including door/schedule
 
 # Setup routes
 logger.info("Setting up application routes")
