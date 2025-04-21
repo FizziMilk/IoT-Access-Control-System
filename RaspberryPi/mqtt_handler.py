@@ -83,7 +83,7 @@ class MQTTHandler:
         # Only enable this if your MQTT broker is using self-signed certificates
         # self.app.config['MQTT_TLS_INSECURE'] = True
 
-        # Initialize Flask-MQTT client, retry without client cert if permission denied
+        # Attempt to initialize Flask-MQTT, handle cert or DNS errors
         try:
             self.mqtt = Mqtt(self.app)
         except PermissionError as e:
@@ -91,6 +91,11 @@ class MQTTHandler:
             # Remove client cert config and retry
             self.app.config.pop('MQTT_TLS_CERTFILE', None)
             self.app.config.pop('MQTT_TLS_KEYFILE', None)
+            self.mqtt = Mqtt(self.app)
+        except Exception as e:
+            logger.error(f"Error connecting to MQTT broker ({self.app.config.get('MQTT_BROKER_URL')}): {e}. Falling back to localhost.")
+            # Fallback to local broker
+            self.app.config['MQTT_BROKER_URL'] = '127.0.0.1'
             self.mqtt = Mqtt(self.app)
         self.setup_mqtt_handlers()
 
