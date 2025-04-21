@@ -90,9 +90,9 @@ Security features include OTP via Twilio, JWT‑authenticated endpoints, mutual 
 
 ---
 ## Installation & Setup
-### 1. Backend Server
+
 <details>
-<summary>Expand for Backend instructions</summary>
+<summary>### Backend Server</summary>
 
 ```bash
 # 1.1 Clone the repo
@@ -118,9 +118,9 @@ cp .env.example .env  # edit .env to add your own TWILIO, MQTT, JWT settings
 
 </details>
 
-### 2. Raspberry Pi Edge Client
+
 <details>
-<summary>Expand for Raspberry Pi instructions</summary>
+<summary>### Raspberry Pi Edge Client</summary>
 
 ```bash
 # 2.1 Prepare the Pi (Ubuntu 24.04)
@@ -146,9 +146,9 @@ python3 main.py
 
 </details>
 
-### 3. Mobile App (Expo)
+
 <details>
-<summary>Expand for Mobile App instructions</summary>
+<summary>### Mobile App (Expo)</summary>
 
 ```bash
 # 3.1 Prerequisites
@@ -174,17 +174,15 @@ npm start  # then scan QR code in Expo Go
 ---
 ## Configuration
 - **Example env files**: Copy the `.env.example` in each folder (Backend, RaspberryPi, MobileApp) to `.env` and fill in your own values to configure secrets and URLs.
-- **Environment Variables**: See `.env.example` in each folder for template. Never commit real `.env` files.
-- **Nginx**: Configure `/etc/nginx/sites-available/your-domain.conf` to serve static at `/` and proxy `/api/` to Flask on port 5000.
+- **Nginx**: Configure `/etc/nginx/sites-available/your-domain.conf` to proxy `/api/` to Flask on port 5000.
 - **Certificates**: Use Let's Encrypt for TLS; sync fullchain.pem + privkey.pem into Nginx and Pi's trusted CA store.
 - **MQTT**: Use port 8883 with mutual TLS (configure mosquitto to require certificates, see `mosquitto.conf`).
 
 ---
 ## Usage
-1. Browse to `https://your.domain/` to view static gallery.
-2. API endpoints under `https://your.domain/api/` (login, verify-otp, users, schedule).
-3. Mobile App: login → OTP → manage users & schedule → unlock door.
-4. Pi Client: continuously runs face recognition + liveness → calls `/api/verify-face` → activates GPIO.
+1. API endpoints under `https://your.domain/api/` (login, verify-otp, users, schedule).
+2. Mobile App: login → OTP → manage users & schedule → unlock door.
+3. Pi Client: continuously runs face recognition + liveness → calls `/api/verify-face` → activates GPIO.
 
 ---
 ## Troubleshooting
