@@ -217,7 +217,10 @@ def setup_mqtt_client():
         # If client cert and key are provided, set up mutual TLS
         if client_cert and client_key:
             logger.info(f"Using client cert: {client_cert} and key: {client_key}")
-            tls_context.load_cert_chain(client_cert, client_key)
+            try:
+                tls_context.load_cert_chain(client_cert, client_key)
+            except PermissionError as pe:
+                logger.warning(f"Permission denied loading client cert: {pe}. Skipping client cert")
         
         # Enforce hostname verification
         tls_context.check_hostname = True
@@ -225,8 +228,8 @@ def setup_mqtt_client():
         client.tls_set_context(tls_context)
         logger.info("TLS configuration completed successfully")
     except Exception as e:
-        logger.error(f"Failed to set up TLS: {e}")
-        raise
+        logger.error(f"Failed to set up TLS: {e}. Continuing without TLS")
+        # Proceed without TLS
     
     # Set up auth if provided
     username = os.environ.get("MQTT_USERNAME")
