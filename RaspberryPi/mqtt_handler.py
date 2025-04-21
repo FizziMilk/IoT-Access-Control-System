@@ -66,18 +66,32 @@ class MQTTHandler:
         self.app.config['MQTT_TLS_VERSION'] = ssl.PROTOCOL_TLSv1_2
         self.app.config['MQTT_TLS_ENABLED'] = True
         
-        # Let's Encrypt certificates for MQTT
-        self.app.config['MQTT_TLS_CA_CERTS'] = os.getenv("CA_CERT")
+        # Let's Encrypt certificates for MQTT (trim whitespace)
+        ca_cert_env = os.getenv("CA_CERT", "").strip()
+        self.app.config['MQTT_TLS_CA_CERTS'] = ca_cert_env if ca_cert_env else None
         
-        # Client certificate authentication for MQTT
-        self.app.config['MQTT_TLS_CERTFILE'] = os.getenv("CLIENT_CERT_PATH")
-        self.app.config['MQTT_TLS_KEYFILE'] = os.getenv("CLIENT_KEY_PATH")
-        
+        # Client certificate authentication for MQTT, only if files are readable (trim whitespace)
+        certfile_path = os.getenv("CLIENT_CERT_PATH", "").strip()
+        keyfile_path = os.getenv("CLIENT_KEY_PATH", "").strip()
+        if certfile_path and keyfile_path and os.path.isfile(certfile_path) and os.access(certfile_path, os.R_OK) and os.path.isfile(keyfile_path) and os.access(keyfile_path, os.R_OK):
+            self.app.config['MQTT_TLS_CERTFILE'] = certfile_path
+            self.app.config['MQTT_TLS_KEYFILE'] = keyfile_path
+        else:
+            logger.warning("MQTT client cert or key not accessible; skipping mutual TLS")
+
         # If using Let's Encrypt certificates, we don't need to skip verification
         # Only enable this if your MQTT broker is using self-signed certificates
         # self.app.config['MQTT_TLS_INSECURE'] = True
 
-        self.mqtt = Mqtt(self.app)
+        # Initialize Flask-MQTT client, retry without client cert if permission denied
+        try:
+            self.mqtt = Mqtt(self.app)
+        except PermissionError as e:
+            logger.error(f"Permission denied loading MQTT client cert: {e}. Disabling mutual TLS and retrying.")
+            # Remove client cert config and retry
+            self.app.config.pop('MQTT_TLS_CERTFILE', None)
+            self.app.config.pop('MQTT_TLS_KEYFILE', None)
+            self.mqtt = Mqtt(self.app)
         self.setup_mqtt_handlers()
 
     def setup_mqtt_handlers(self):
