@@ -35,7 +35,7 @@ JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY")
 twilio_client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
 
 app = Flask(__name__)
-api = Api(app)
+api = Api(app, prefix='/api')
 bcrypt = Bcrypt(app)
 
 # Flask-MQTT Configuration
