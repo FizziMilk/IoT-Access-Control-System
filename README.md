@@ -120,7 +120,7 @@ cp .env.example .env  # edit .env to add your own TWILIO, MQTT, JWT settings
 
 
 <details>
-<summary>Raspberry Pi </strong></summary>
+<summary><strong>Raspberry Pi </strong></summary>
 
 ```bash
 # 2.1 Prepare the Pi (Ubuntu 24.04)
