@@ -92,7 +92,7 @@ Security features include OTP via Twilio, JWT‑authenticated endpoints, mutual 
 ## Installation & Setup
 
 <details>
-<summary>### Backend Server</summary>
+<summary>Backend Server</summary>
 
 ```bash
 # 1.1 Clone the repo
@@ -120,7 +120,7 @@ cp .env.example .env  # edit .env to add your own TWILIO, MQTT, JWT settings
 
 
 <details>
-<summary>### Raspberry Pi Edge Client</summary>
+<summary>Raspberry Pi Edge Client</summary>
 
 ```bash
 # 2.1 Prepare the Pi (Ubuntu 24.04)
@@ -148,7 +148,7 @@ python3 main.py
 
 
 <details>
-<summary>### Mobile App (Expo)</summary>
+<summary>Mobile App (Expo)</summary>
 
 ```bash
 # 3.1 Prerequisites
