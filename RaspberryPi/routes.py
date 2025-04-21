@@ -1752,4 +1752,19 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
         recognition_state.reset()
         logger.info("Recognition state has been reset")
 
+    # HTTP endpoint to unlock or lock the door directly
+    @app.route('/unlock', methods=['POST'])
+    def unlock_endpoint():
+        # Accept a JSON body with optional 'command'
+        data = request.get_json(silent=True) or {}
+        cmd = data.get('command', 'unlock_door')
+        if cmd == 'unlock_door':
+            door_controller.unlock_door()
+            return jsonify({"status": "success", "message": "Door unlocked"}), 200
+        elif cmd == 'lock_door':
+            door_controller.lock_door()
+            return jsonify({"status": "success", "message": "Door locked"}), 200
+        else:
+            return jsonify({"error": "Invalid command"}), 400
+
     return app 
