@@ -19,7 +19,7 @@ Installation of this project from GitHub has not yet been attempted, if you have
 ## Overview
 This system provides multi‑factor door access control via:
 
-1. **Backend Server** – Flask REST API & MQTT broker, hosted on AWS EC2.
+1. **Backend Server** – Flask REST API & MQTT broker, hosted on AWS EC2. Twilio API for OTP handling.
 2. **Edge Device** – Raspberry Pi client running face recognition + liveness detection, communicating over HTTPS & secure MQTT.
 3. **Mobile App** – Expo React Native app for administrators to manage users, schedules, and door locks.
 
