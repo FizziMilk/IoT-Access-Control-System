@@ -189,12 +189,12 @@ def setup_mqtt_client():
     Set up and configure the MQTT client with TLS certificate support
     """
     # Get config from environment or use defaults
-    mqtt_broker = os.environ.get("MQTT_BROKER", "mqtt.example.com")
+    mqtt_broker = os.environ.get("MQTT_BROKER_URL", "mqtt.example.com")
     mqtt_port = int(os.environ.get("MQTT_PORT", 8883))
     client_id = os.environ.get("MQTT_CLIENT_ID", f"raspberry-pi-{socket.gethostname()}")
     
     # Certificate paths
-    ca_cert = os.environ.get("CA_CERT_PATH", "/etc/ssl/certs/letsencrypt-fullchain.pem")
+    ca_cert = os.environ.get("CA_CERT", "/etc/ssl/certs/letsencrypt-fullchain.pem")
     client_cert = os.environ.get("CLIENT_CERT_PATH", None)
     client_key = os.environ.get("CLIENT_KEY_PATH", None)
     
