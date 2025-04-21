@@ -41,6 +41,11 @@ def check_schedule(door_controller, mqtt_handler, backend_session=None, backend_
     now = datetime.now()
     weekday = now.strftime("%A")
 
+    # Safely skip schedule check if handler has no schedule attribute
+    if not hasattr(mqtt_handler, 'schedule'):
+        logger.warning("MQTT handler has no schedule attribute; skipping schedule check")
+        return False
+
     if weekday in mqtt_handler.schedule:
         entry = mqtt_handler.schedule[weekday]
         print(f"[DEBUG] Schedule entry for {weekday}: {entry}")
