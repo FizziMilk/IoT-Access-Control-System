@@ -58,7 +58,7 @@ Security features include OTP via Twilio, JWT‑authenticated endpoints, mutual 
 </details>
 
 <details>
-<summary><strong>📟 Raspberry Pi (Edge Device)</strong></summary>
+<summary><strong>📟 Raspberry Pi</strong></summary>
 
 - Hardware: Raspberry Pi 4 Model B (4GB RAM)
 - Operating System: Ubuntu 24.04 LTS for arm64/Desktop
