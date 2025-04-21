@@ -412,7 +412,7 @@ export default function Management() {
                                     </Text>
                                 </TouchableOpacity>
                                 <TouchableOpacity
-                                    style={styles.actionButton}
+                                    style={[styles.actionButton, styles.scheduleButton]}
                                     onPress={() => {
                                         setSelectedUser(item);
                                         setShowSchedulePicker(true);
@@ -433,6 +433,12 @@ export default function Management() {
                             userId={selectedUser.id}
                             onScheduleCreated={handleScheduleCreated}
                         />
+                        <TouchableOpacity 
+                            style={styles.closeScheduleButton}
+                            onPress={() => setShowSchedulePicker(false)}
+                        >
+                            <Text style={styles.closeButtonText}>Cancel</Text>
+                        </TouchableOpacity>
                     </View>
                 )}
             </ScrollView>
@@ -588,9 +594,24 @@ const styles = StyleSheet.create({
         left: 0,
         right: 0,
         bottom: 0,
-        backgroundColor: 'rgba(255, 255, 255, 0.95)',
+        backgroundColor: 'rgba(255, 255, 255, 0.98)',
         zIndex: 100,
         elevation: 5,
         padding: 16,
+        justifyContent: 'center',
+    },
+    scheduleButton: {
+        backgroundColor: '#007AFF',
+    },
+    closeScheduleButton: {
+        marginTop: 16,
+        padding: 10,
+        backgroundColor: '#ccc',
+        borderRadius: 4,
+        alignItems: 'center',
+    },
+    closeButtonText: {
+        color: '#fff',
+        fontWeight: 'bold',
     },
 });

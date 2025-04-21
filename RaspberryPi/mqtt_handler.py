@@ -200,15 +200,43 @@ class MQTTHandler:
 
     def update_schedule(self, data):
         try:
+            if not isinstance(data, list):
+                return {"status": "error", "message": "Schedule data must be a list"}, 400
+                
             new_schedule = {}
+            processed_days = []
+            
             for entry in data:
+                # Skip non-dictionary entries
+                if not isinstance(entry, dict):
+                    logger.warning(f"Skipping invalid schedule entry: {entry}")
+                    continue
+                    
                 day = entry.get("day")
-                if day:
-                    new_schedule[day] = entry
+                if not day:
+                    logger.warning(f"Skipping schedule entry without day: {entry}")
+                    continue
+                    
+                # Check for duplicate days
+                if day in processed_days:
+                    logger.warning(f"Duplicate day entry for {day}. Using last entry.")
+                
+                # Process the entry
+                processed_days.append(day)
+                new_schedule[day] = entry
+                
+                # Log the entry details
+                open_time = entry.get("open_time", "None")
+                close_time = entry.get("close_time", "None")
+                force_unlocked = entry.get("forceUnlocked", False)
+                logger.info(f"Schedule entry for {day}: Open={open_time}, Close={close_time}, Force={force_unlocked}")
+                
+            # Update the schedule
             self.schedule = new_schedule
-            return {"status": "success"}, 200
+            logger.info(f"Schedule updated with {len(new_schedule)} days")
+            return {"status": "success", "message": f"Schedule updated with {len(new_schedule)} days"}, 200
         except Exception as e:
-            print(f"Error updating schedule: {e}")
+            logger.error(f"Error updating schedule: {e}")
             return {"status": "error", "message": str(e)}, 500
 
 def setup_mqtt_client():
@@ -267,7 +295,7 @@ def setup_mqtt_client():
     
     return client 
 
-class MQTTHandler:
+class MQTTPahoHandler:
     def __init__(self, mqtt_broker=None, mqtt_port=None):
         """Initialize the MQTT handler"""
         self.client = None

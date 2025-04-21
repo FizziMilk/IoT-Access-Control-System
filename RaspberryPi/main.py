@@ -14,6 +14,7 @@ import platform
 
 # Import local modules
 from door_controller import DoorController
+# Import the correct MQTTHandler class that integrates with Flask and has update_schedule
 from mqtt_handler import MQTTHandler
 from routes import setup_routes
 from utils import create_backend_session

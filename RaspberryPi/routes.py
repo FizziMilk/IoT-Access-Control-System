@@ -40,21 +40,28 @@ def check_schedule(door_controller, mqtt_handler, backend_session=None, backend_
     """Check if door should be unlocked based on current schedule"""
     now = datetime.now()
     weekday = now.strftime("%A")
+    logger.info(f"Checking schedule for {weekday}")
 
     # Safely skip schedule check if handler has no schedule attribute
     if not hasattr(mqtt_handler, 'schedule'):
         logger.warning("MQTT handler has no schedule attribute; skipping schedule check")
         return False
+        
+    # Check if schedule is empty
+    if not mqtt_handler.schedule:
+        logger.info("Schedule is empty; no scheduled unlocks defined")
+        return False
 
     if weekday in mqtt_handler.schedule:
         entry = mqtt_handler.schedule[weekday]
-        print(f"[DEBUG] Schedule entry for {weekday}: {entry}")
+        logger.info(f"Found schedule entry for {weekday}: {entry}")
+        
         open_time_str = entry.get("open_time")
         close_time_str = entry.get("close_time")
         force_unlocked = entry.get("forceUnlocked", False)
 
         if force_unlocked:
-            print("[DEBUG] Force unlock is enabled. Unlocking door.")
+            logger.info(f"Force unlock is enabled for {weekday}. Unlocking door.")
             door_controller.unlock_door()
             flash("Door unlocked based on schedule.", "success")
             
@@ -67,7 +74,7 @@ def check_schedule(door_controller, mqtt_handler, backend_session=None, backend_
                         "details": "Force unlocked"
                     })
                 except Exception as e:
-                    print(f"[DEBUG] Error logging door access: {e}")
+                    logger.error(f"Error logging door access: {e}")
             
             return True
 
@@ -75,14 +82,17 @@ def check_schedule(door_controller, mqtt_handler, backend_session=None, backend_
             try:
                 open_time = datetime.strptime(open_time_str, "%H:%M").time()
                 close_time = datetime.strptime(close_time_str, "%H:%M").time()
+                logger.info(f"Schedule times: Open={open_time}, Close={close_time}")
             except ValueError as ve:
+                logger.error(f"Schedule time format error: {ve}")
                 flash("Schedule time format error.", "danger")
-                print(f"[DEBUG] Schedule time format error: {ve}")
                 return False
 
             current_time = now.time().replace(second=0, microsecond=0)
+            logger.info(f"Current time: {current_time}")
 
             if open_time <= current_time <= close_time:
+                logger.info(f"Door should be unlocked: current time {current_time} is within schedule {open_time}-{close_time}")
                 door_controller.unlock_door()
                 flash("Door unlocked based on schedule.", "success")
                 
@@ -95,9 +105,14 @@ def check_schedule(door_controller, mqtt_handler, backend_session=None, backend_
                             "details": f"{weekday} {open_time_str}-{close_time_str}"
                         })
                     except Exception as e:
-                        print(f"[DEBUG] Error logging door access: {e}")
+                        logger.error(f"Error logging door access: {e}")
                 
                 return True
+            else:
+                logger.info(f"Door remains locked: current time {current_time} is outside schedule {open_time}-{close_time}")
+    else:
+        logger.info(f"No schedule entry found for {weekday}")
+        
     return False
 
 def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_url):
@@ -375,9 +390,33 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
     def update_schedule():
         try:
             data = request.get_json()
-            return mqtt_handler.update_schedule(data)
+            
+            # Validate that data is not None and is a list
+            if data is None:
+                return {"status": "error", "message": "No JSON data provided"}, 400
+                
+            if not isinstance(data, list):
+                return {"status": "error", "message": "Invalid data format. Expected a list of schedule entries."}, 400
+                
+            # Check if every entry has a 'day' property
+            for i, entry in enumerate(data):
+                if not isinstance(entry, dict):
+                    return {"status": "error", "message": f"Entry at index {i} is not a valid object"}, 400
+                    
+                if 'day' not in entry:
+                    return {"status": "error", "message": f"Entry at index {i} is missing required 'day' property"}, 400
+            
+            # Update the schedule
+            logger.info(f"Updating schedule with {len(data)} entries")
+            result = mqtt_handler.update_schedule(data)
+            logger.info(f"Schedule update result: {result}")
+            return result
+            
+        except ValueError as e:
+            logger.error(f"Value error in update_schedule: {e}")
+            return {"status": "error", "message": f"Invalid data format: {str(e)}"}, 400
         except Exception as e:
-            print(f"Error updating schedule: {e}")
+            logger.error(f"Error updating schedule: {e}")
             return {"status": "error", "message": str(e)}, 500
     
     @app.route('/door_entry', methods=['GET', 'POST'])
