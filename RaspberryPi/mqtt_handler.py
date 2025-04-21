@@ -66,37 +66,18 @@ class MQTTHandler:
         self.app.config['MQTT_TLS_VERSION'] = ssl.PROTOCOL_TLSv1_2
         self.app.config['MQTT_TLS_ENABLED'] = True
         
-        # Let's Encrypt certificates for MQTT (trim whitespace)
-        ca_cert_env = os.getenv("CA_CERT", "").strip()
-        self.app.config['MQTT_TLS_CA_CERTS'] = ca_cert_env if ca_cert_env else None
+        # Let's Encrypt certificates for MQTT
+        self.app.config['MQTT_TLS_CA_CERTS'] = os.getenv("CA_CERT")
         
-        # Client certificate authentication for MQTT, only if files are readable (trim whitespace)
-        certfile_path = os.getenv("CLIENT_CERT_PATH", "").strip()
-        keyfile_path = os.getenv("CLIENT_KEY_PATH", "").strip()
-        if certfile_path and keyfile_path and os.path.isfile(certfile_path) and os.access(certfile_path, os.R_OK) and os.path.isfile(keyfile_path) and os.access(keyfile_path, os.R_OK):
-            self.app.config['MQTT_TLS_CERTFILE'] = certfile_path
-            self.app.config['MQTT_TLS_KEYFILE'] = keyfile_path
-        else:
-            logger.warning("MQTT client cert or key not accessible; skipping mutual TLS")
-
+        # Client certificate authentication for MQTT
+        self.app.config['MQTT_TLS_CERTFILE'] = os.getenv("CLIENT_CERT_PATH")
+        self.app.config['MQTT_TLS_KEYFILE'] = os.getenv("CLIENT_KEY_PATH")
+        
         # If using Let's Encrypt certificates, we don't need to skip verification
         # Only enable this if your MQTT broker is using self-signed certificates
         # self.app.config['MQTT_TLS_INSECURE'] = True
 
-        # Attempt to initialize Flask-MQTT, handle cert or DNS errors
-        try:
-            self.mqtt = Mqtt(self.app)
-        except PermissionError as e:
-            logger.error(f"Permission denied loading MQTT client cert: {e}. Disabling mutual TLS and retrying.")
-            # Remove client cert config and retry
-            self.app.config.pop('MQTT_TLS_CERTFILE', None)
-            self.app.config.pop('MQTT_TLS_KEYFILE', None)
-            self.mqtt = Mqtt(self.app)
-        except Exception as e:
-            logger.error(f"Error connecting to MQTT broker ({self.app.config.get('MQTT_BROKER_URL')}): {e}. Falling back to localhost.")
-            # Fallback to local broker
-            self.app.config['MQTT_BROKER_URL'] = '127.0.0.1'
-            self.mqtt = Mqtt(self.app)
+        self.mqtt = Mqtt(self.app)
         self.setup_mqtt_handlers()
 
     def setup_mqtt_handlers(self):
@@ -201,4 +182,136 @@ class MQTTHandler:
             return {"status": "success"}, 200
         except Exception as e:
             print(f"Error updating schedule: {e}")
-            return {"status": "error", "message": str(e)}, 500 
+            return {"status": "error", "message": str(e)}, 500
+
+def setup_mqtt_client():
+    """
+    Set up and configure the MQTT client with TLS certificate support
+    """
+    # Get config from environment or use defaults
+    mqtt_broker = os.environ.get("MQTT_BROKER", "mqtt.example.com")
+    mqtt_port = int(os.environ.get("MQTT_PORT", 8883))
+    client_id = os.environ.get("MQTT_CLIENT_ID", f"raspberry-pi-{socket.gethostname()}")
+    
+    # Certificate paths
+    ca_cert = os.environ.get("CA_CERT_PATH", "/etc/ssl/certs/letsencrypt-fullchain.pem")
+    client_cert = os.environ.get("CLIENT_CERT_PATH", None)
+    client_key = os.environ.get("CLIENT_KEY_PATH", None)
+    
+    logger.info(f"Setting up MQTT client with ID: {client_id}")
+    logger.info(f"MQTT broker: {mqtt_broker}:{mqtt_port}")
+    logger.info(f"CA cert path: {ca_cert}")
+    
+    # Create MQTT client
+    client = mqtt.Client(client_id=client_id, protocol=mqtt.MQTTv5)
+    
+    # Set up callbacks
+    client.on_connect = on_connect
+    client.on_disconnect = on_disconnect
+    client.on_message = on_message
+    
+    # Set up TLS
+    try:
+        tls_context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH, cafile=ca_cert)
+        
+        # If client cert and key are provided, set up mutual TLS
+        if client_cert and client_key:
+            logger.info(f"Using client cert: {client_cert} and key: {client_key}")
+            tls_context.load_cert_chain(client_cert, client_key)
+        
+        # Enforce hostname verification
+        tls_context.check_hostname = True
+        
+        client.tls_set_context(tls_context)
+        logger.info("TLS configuration completed successfully")
+    except Exception as e:
+        logger.error(f"Failed to set up TLS: {e}")
+        raise
+    
+    # Set up auth if provided
+    username = os.environ.get("MQTT_USERNAME")
+    password = os.environ.get("MQTT_PASSWORD")
+    if username and password:
+        logger.info(f"Using MQTT authentication with username: {username}")
+        client.username_pw_set(username, password)
+    
+    return client 
+
+class MQTTHandler:
+    def __init__(self, mqtt_broker=None, mqtt_port=None):
+        """Initialize the MQTT handler"""
+        self.client = None
+        self.connected = False
+        self.mqtt_broker = mqtt_broker
+        self.mqtt_port = mqtt_port
+        self.stop_event = Event()
+        self.mqtt_thread = None
+        
+    def start(self):
+        """Start the MQTT client and connect to the broker"""
+        try:
+            self.client = setup_mqtt_client()
+            
+            # Start the client in a separate thread
+            self.mqtt_thread = Thread(target=self._mqtt_loop, daemon=True)
+            self.mqtt_thread.start()
+            
+            # Connect to the broker
+            if self.mqtt_broker and self.mqtt_port:
+                self.client.connect(self.mqtt_broker, self.mqtt_port, keepalive=60)
+            else:
+                # Use values from environment variables
+                broker = os.environ.get("MQTT_BROKER", "mqtt.example.com")
+                port = int(os.environ.get("MQTT_PORT", 8883))
+                self.client.connect(broker, port, keepalive=60)
+                
+            logger.info("MQTT handler started")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to start MQTT handler: {e}")
+            return False
+    
+    def _mqtt_loop(self):
+        """MQTT client loop running in a separate thread"""
+        while not self.stop_event.is_set():
+            try:
+                self.client.loop(timeout=1.0)
+            except Exception as e:
+                logger.error(f"Error in MQTT loop: {e}")
+                # Try to reconnect after a delay
+                self.stop_event.wait(5.0)
+                if not self.stop_event.is_set():
+                    try:
+                        self.client.reconnect()
+                    except Exception as e:
+                        logger.error(f"Failed to reconnect: {e}")
+    
+    def stop(self):
+        """Stop the MQTT client and clean up resources"""
+        if self.client:
+            self.stop_event.set()
+            self.client.disconnect()
+            if self.mqtt_thread:
+                self.mqtt_thread.join(timeout=2.0)
+            logger.info("MQTT handler stopped")
+    
+    def publish(self, topic, payload, qos=1, retain=False):
+        """Publish a message to the MQTT broker"""
+        if not self.client:
+            logger.error("MQTT client not initialized")
+            return False
+            
+        try:
+            if isinstance(payload, dict):
+                payload = json.dumps(payload)
+            
+            result = self.client.publish(topic, payload, qos=qos, retain=retain)
+            if result.rc == mqtt.MQTT_ERR_SUCCESS:
+                logger.info(f"Published message to topic {topic}")
+                return True
+            else:
+                logger.error(f"Failed to publish message: {result.rc}")
+                return False
+        except Exception as e:
+            logger.error(f"Error publishing message: {e}")
+            return False 
