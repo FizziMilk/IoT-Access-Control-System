@@ -33,17 +33,22 @@ class LivenessDetector:
     
     def __init__(self):
         # Default thresholds - can be tuned based on environment
-        self.entropy_threshold = 3.5  # Reduced from 4.0
-        self.gradient_threshold = 10.0  # Reduced from 15.0
+        self.entropy_threshold = 4.0  # Increased based on logs (real faces have 4.17-4.28)
+        self.gradient_threshold = 25.0  # Increased based on logs (real faces have 29-35)
         self.reflection_threshold = 0.05  # Critical for distinguishing phones - real faces have very low values (<0.001)
-        self.color_threshold = 15.0  # Reduced from 18.0
+        self.color_threshold = 20.0  # Adjusted based on logs (real faces have 24-31)
         self.lbp_uniformity_threshold = 0.4  # Reduced from 0.6
         self.frequency_threshold = 20.0  # Reduced from 25.0
         self.gradient_variance_threshold = 15.0  # Reduced from 20.0
         self.micro_texture_threshold = 0.15  # Reduced from 0.2
         # Maximum gradient and gradient variance for real faces
-        self.max_gradient_threshold = 35.0  # Real faces typically below this
+        self.max_gradient_threshold = 38.0  # Increased based on logs (real faces <36)
         self.max_gradient_variance = 3000.0  # Real faces typically below this
+        
+        # New thresholds for improved fake detection
+        self.min_gradient_variance = 1000.0  # Increased based on logs (real faces >1200, fake faces <600)
+        self.min_color_std = 22.0  # Real faces typically have higher color variation
+        self.entropy_balance_threshold = 0.3  # Balance between texture and direction entropy
     
     def check_liveness(self, frame):
         """
@@ -90,13 +95,42 @@ class LivenessDetector:
         direction_entropy = -np.sum(direction_hist * np.log2(direction_hist + 1e-10))
         
         # Detect reflections (phone screens have much higher reflection values)
-        _, bright_spots = cv2.threshold(gray, 220, 255, cv2.THRESH_BINARY)
-        bright_spot_count = cv2.countNonZero(bright_spots)
-        bright_spot_ratio = bright_spot_count / (gray.shape[0] * gray.shape[1])
+        # Use a lower threshold to detect subtle reflections
+        _, bright_spots_high = cv2.threshold(gray, 220, 255, cv2.THRESH_BINARY)
+        _, bright_spots_med = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY)
+        
+        bright_spot_count_high = cv2.countNonZero(bright_spots_high)
+        bright_spot_count_med = cv2.countNonZero(bright_spots_med)
+        
+        bright_spot_ratio_high = bright_spot_count_high / (gray.shape[0] * gray.shape[1])
+        bright_spot_ratio_med = bright_spot_count_med / (gray.shape[0] * gray.shape[1])
+        
+        # Combined reflection measure
+        bright_spot_ratio = bright_spot_ratio_high * 2 + bright_spot_ratio_med
+        
+        # NEW: Calculate brightness uniformity (printed photos tend to be more uniform)
+        brightness_std = np.std(gray)
+        brightness_uniformity = 1.0 - (brightness_std / 128.0)  # Normalize to 0-1 range
         
         # Analyze color variance
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
         color_std = np.std(hsv[:,:,1])  # Saturation channel
+        
+        # NEW: Calculate micro-texture using GLCM (Gray-Level Co-occurrence Matrix)
+        h, w = gray.shape
+        if h > 64 and w > 64:
+            # Downsample for faster processing
+            small_gray = cv2.resize(gray, (64, 64))
+            dx = np.diff(small_gray, axis=1)
+            dy = np.diff(small_gray, axis=0)
+            
+            # Get average absolute gradient changes
+            micro_texture_score = (np.mean(np.abs(dx)) + np.mean(np.abs(dy))) / 2.0
+        else:
+            micro_texture_score = 0.0
+        
+        # NEW: Calculate entropy balance (real faces have a better balance)
+        entropy_balance = abs(texture_entropy - direction_entropy) / max(texture_entropy, direction_entropy)
         
         # Convert any arrays to scalars to ensure safe boolean operations
         texture_entropy_scalar = float(texture_entropy.item() if hasattr(texture_entropy, 'item') else texture_entropy)
@@ -105,6 +139,9 @@ class LivenessDetector:
         direction_entropy_scalar = float(direction_entropy.item() if hasattr(direction_entropy, 'item') else direction_entropy)
         bright_spot_ratio_scalar = float(bright_spot_ratio.item() if hasattr(bright_spot_ratio, 'item') else bright_spot_ratio)
         color_std_scalar = float(color_std.item() if hasattr(color_std, 'item') else color_std)
+        entropy_balance_scalar = float(entropy_balance)
+        brightness_uniformity_scalar = float(brightness_uniformity)
+        micro_texture_score_scalar = float(micro_texture_score)
         
         # Evaluate basic liveness checks
         entropy_ok = texture_entropy_scalar > self.entropy_threshold
@@ -116,19 +153,32 @@ class LivenessDetector:
         gradient_normal = mean_gradient_scalar < self.max_gradient_threshold
         variance_normal = gradient_variance_scalar < self.max_gradient_variance
         
+        # NEW: Additional checks for fake detection
+        # 1. Real faces have higher gradient variance than prints
+        variance_high_enough = gradient_variance_scalar > self.min_gradient_variance
+        # 2. Real faces have better color variation
+        color_varied_enough = color_std_scalar > self.min_color_std
+        # 3. Real faces have better entropy balance
+        entropy_balanced = entropy_balance_scalar < self.entropy_balance_threshold
+        # 4. Printed faces are often more uniform in brightness
+        non_uniform_brightness = brightness_uniformity_scalar < 0.7
+        
         # Calculate confidence score for basic checks (0-1)
         basic_checks = [
-            entropy_ok, gradient_ok, color_ok
+            entropy_ok, gradient_ok, color_ok, 
+            variance_high_enough, color_varied_enough, entropy_balanced, non_uniform_brightness
         ]
         
-        # CRITICAL: Make reflection check mandatory and add upper bounds checks
-        is_live = (reflection_ok and                # Must pass reflection check
-                  sum(1 for c in basic_checks if c) >= 2 and  # Pass at least 2 other basic checks
-                  (gradient_normal or variance_normal))       # Gradient not abnormally high
+        # Improved liveness detection logic with more robust checks
+        is_live = (reflection_ok and                  # Must pass reflection check
+                  ((sum(1 for c in basic_checks if c) >= 3) and  # Pass at least 3 of the enhanced checks
+                   (gradient_normal and variance_normal)) and  # Gradient must be in normal range
+                  ((variance_high_enough and color_varied_enough) or  # Must pass BOTH texture and color checks
+                   (variance_high_enough and gradient_variance_scalar > 1200)))  # Or have very high variance (real face characteristic)
         
         # Calculate overall confidence
-        confidence_score = (sum(1 for c in basic_checks if c) / len(basic_checks) * 0.4 + 
-                           int(reflection_ok) * 0.4 +          # Reflection gets highest weight
+        confidence_score = (sum(1 for c in basic_checks if c) / len(basic_checks) * 0.6 + 
+                           int(reflection_ok) * 0.2 +          
                            (int(gradient_normal) + int(variance_normal)) / 2 * 0.2)
         
         # Log metrics
@@ -136,6 +186,8 @@ class LivenessDetector:
                    f"grad_var={gradient_variance_scalar:.2f}, dir_entropy={direction_entropy_scalar:.2f}, "
                    f"reflection={bright_spot_ratio_scalar:.4f}, color={color_std_scalar:.2f}, "
                    f"grad_normal={gradient_normal}, var_normal={variance_normal}, "
+                   f"var_high={variance_high_enough}, color_varied={color_varied_enough}, "
+                   f"entropy_bal={entropy_balance_scalar:.2f}, uniform={brightness_uniformity_scalar:.2f}, "
                    f"confidence={confidence_score:.2f}, live={is_live}")
         
         return {
@@ -145,6 +197,9 @@ class LivenessDetector:
             "direction_entropy": direction_entropy_scalar,
             "bright_spot_ratio": bright_spot_ratio_scalar,
             "color_std": color_std_scalar,
+            "entropy_balance": entropy_balance_scalar,
+            "brightness_uniformity": brightness_uniformity_scalar,
+            "micro_texture": micro_texture_score_scalar,
             "confidence_score": confidence_score,
             "is_live": bool(is_live)
         }
