@@ -237,6 +237,9 @@
         <div id="captureCompleteMessage" style="display:none; margin: 15px 0; color: #28a745; font-weight: bold; font-size: 1.2rem;">
             Pictures taken! Please wait while we process your face...
         </div>
+        <div id="processingAfterTimer" style="display:none; margin: 15px 0; color: #007bff; font-weight: bold; font-size: 1.1rem;">
+            Processing your face. Please wait...<br>Your image has been captured and is being analyzed
+        </div>
         
         <form id="faceForm" method="POST" style="display:none;">
             <input type="hidden" name="face_id" id="faceIdInput">
@@ -339,16 +342,16 @@
         .then(data => {
             if (data.success) {
                 console.log("Preview frame captured successfully:", data.filename);
-                // Display the static preview frame without timestamp
                 videoFeed.src = `/static/debug_frames/${data.filename}`;
-                // Show the capture complete message
                 document.getElementById('captureCompleteMessage').style.display = 'block';
-                // Hide the countdown if visible
                 document.getElementById('countdownTimer').style.display = 'none';
-                // Add a processing overlay to indicate system is working
-                document.getElementById('processingText').innerHTML = 
-                    "<h4>Processing your face. Please wait...</h4>" +
-                    "<p>Your image has been captured and is being analyzed</p>";
+                // Hide processing message initially
+                document.getElementById('processingAfterTimer').style.display = 'none';
+                // After 10 seconds, hide capture message and show processing message
+                setTimeout(function() {
+                    document.getElementById('captureCompleteMessage').style.display = 'none';
+                    document.getElementById('processingAfterTimer').style.display = 'block';
+                }, 10000);
             } else {
                 console.error("Failed to capture preview frame:", data.error);
             }
@@ -456,6 +459,7 @@
         
         // In startActualFaceRecognition, hide the capture complete message when processing starts
         document.getElementById('captureCompleteMessage').style.display = 'none';
+        document.getElementById('processingAfterTimer').style.display = 'none';
     }
     
     // Handle video feed errors with auto-reset after multiple failures
@@ -550,7 +554,18 @@
             // Continue with normal status checking
             if (data.active) {
                 // Still processing, check again in a moment
-                window.statusCheckTimer = setTimeout(() => checkRecognitionStatus(progressInterval, originalVideoSrc), 300); // Reduced from 500ms for more responsive feedback
+                window.statusCheckTimer = setTimeout(() => checkRecognitionStatus(progressInterval, originalVideoSrc), 300);
+            } else if (!data.active && !data.status?.startsWith('complete') && !data.status?.startsWith('recognized') && !data.status?.startsWith('pending_approval') && !data.status?.startsWith('liveness_failed') && !data.status?.startsWith('face_too_small') && !data.status?.startsWith('backend_error')) {
+                // Backend is done capturing frames but not yet finished processing
+                // Show 'Pictures taken!' message for 5 seconds, then show processing message
+                document.getElementById('captureCompleteMessage').style.display = 'block';
+                document.getElementById('processingAfterTimer').style.display = 'none';
+                setTimeout(function() {
+                    document.getElementById('captureCompleteMessage').style.display = 'none';
+                    document.getElementById('processingAfterTimer').style.display = 'block';
+                }, 5000);
+                // Continue polling for result
+                window.statusCheckTimer = setTimeout(() => checkRecognitionStatus(progressInterval, originalVideoSrc), 1000);
             } else if (data.status === 'face_too_small') {
                 // Face detected but too small - show guidance to the user
                 console.log("Face detected but too small/far away:", data.result);
