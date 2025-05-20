@@ -234,6 +234,10 @@
             <p id="statusText" class="mt-2">Initializing camera...</p>
         </div>
         
+        <div id="captureCompleteMessage" style="display:none; margin: 15px 0; color: #28a745; font-weight: bold; font-size: 1.2rem;">
+            Pictures taken! Please wait while we process your face...
+        </div>
+        
         <form id="faceForm" method="POST" style="display:none;">
             <input type="hidden" name="face_id" id="faceIdInput">
             <!-- No additional fields needed -->
@@ -337,6 +341,10 @@
                 console.log("Preview frame captured successfully:", data.filename);
                 // Display the static preview frame without timestamp
                 videoFeed.src = `/static/debug_frames/${data.filename}`;
+                // Show the capture complete message
+                document.getElementById('captureCompleteMessage').style.display = 'block';
+                // Hide the countdown if visible
+                document.getElementById('countdownTimer').style.display = 'none';
                 // Add a processing overlay to indicate system is working
                 document.getElementById('processingText').innerHTML = 
                     "<h4>Processing your face. Please wait...</h4>" +
@@ -445,6 +453,9 @@
             // Show error and reset UI after a delay
             setTimeout(resetUI, 5000);
         });
+        
+        // In startActualFaceRecognition, hide the capture complete message when processing starts
+        document.getElementById('captureCompleteMessage').style.display = 'none';
     }
     
     // Handle video feed errors with auto-reset after multiple failures
