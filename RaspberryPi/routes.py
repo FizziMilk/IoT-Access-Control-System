@@ -199,8 +199,8 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                 # Check if camera opened
                 if cam.isOpened():
                     # Set camera properties
-                    cam.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-                    cam.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+                    cam.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+                    cam.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
                     cam.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Minimize latency
                     
                     # Read a test frame to confirm camera is working

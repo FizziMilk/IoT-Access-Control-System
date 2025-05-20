@@ -626,47 +626,7 @@
                 
                 // Add event listener to the retry button with camera reset
                 document.getElementById('retryButton').addEventListener('click', function() {
-                    // Reset camera resources first to ensure we get a fresh camera feed
-                    resetCameraResources();
-                    
-                    // Set a slight delay to allow camera to reinitialize before starting new recognition
-                    document.getElementById('statusText').textContent = "Resetting camera...";
-                    document.getElementById('processingText').innerHTML = "<h4>Preparing camera...</h4><p>Please wait...</p>";
-                    
-                    // Use a longer delay to ensure the camera is fully reset
-                    setTimeout(() => {
-                        // Reset UI and restart recognition
-                        document.getElementById('statusText').textContent = "Starting new recognition attempt...";
-                        document.getElementById('progressBar').classList.remove('bg-warning');
-                        document.getElementById('progressBar').style.width = '0%';
-                        
-                        // Reload video feed with a new timestamp to force refresh
-                        const videoFeed = document.getElementById('videoFeed');
-                        videoFeed.src = '/video_feed?t=' + new Date().getTime();
-                        
-                        // Start recognition after camera has time to initialize
-                        setTimeout(() => {
-                            // First grab a new preview frame
-                            capturePreviewFrame()
-                                .then(response => response.json())
-                                .then(data => {
-                                    if (data.success) {
-                                        console.log("Preview frame captured successfully");
-                                        // Wait a bit for the feed to stabilize
-                                        setTimeout(() => {
-                                            startFaceRecognition();
-                                        }, 1000);
-                                    } else {
-                                        console.error("Failed to capture preview frame", data);
-                                        alert("Camera error. Please refresh the page and try again.");
-                                    }
-                                })
-                                .catch(error => {
-                                    console.error("Error capturing preview frame", error);
-                                    alert("Camera error. Please refresh the page and try again.");
-                                });
-                        }, 2000);
-                    }, 2000);
+                    window.location.href = '/'; // Redirect to home page for a full system reset
                 });
             } else if (data.status === 'complete') {
                 // Recognition complete, get the final debug frame
