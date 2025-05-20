@@ -199,8 +199,8 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
                 # Check if camera opened
                 if cam.isOpened():
                     # Set camera properties
-                    cam.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-                    cam.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+                    cam.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+                    cam.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
                     cam.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Minimize latency
                     
                     # Read a test frame to confirm camera is working
@@ -1547,47 +1547,39 @@ def setup_routes(app, door_controller, mqtt_handler, backend_session, backend_ur
             start_time = time.time()
             try:
                 is_live = False
-                
-                # Create liveness detector with anti-spoofing features
                 from face_recognition_process import LivenessDetector
                 liveness_detector = LivenessDetector()
-                
-                # We need frames with faces to do liveness analysis
                 if len(face_locations) > 0 and frames:
                     logger.info(f"Performing enhanced liveness detection with gradient analysis and LBP")
-                    
-                    # Get the best frame (middle frame usually has the best quality)
                     best_frame_idx = len(frames) // 2
                     best_frame = frames[best_frame_idx]
                     best_face_loc = face_locations[best_frame_idx][0] if len(face_locations[best_frame_idx]) > 0 else None
-                    
                     if best_face_loc:
-                        # Run enhanced liveness detection on the face
                         liveness_result = liveness_detector.check_face_liveness(best_frame, best_face_loc)
-                        
-                        # Get results
                         is_live = liveness_result.get("is_live", False)
                         confidence_score = liveness_result.get("confidence_score", 0.0)
-                        
-                        # Add all liveness metrics to the result
                         for key, value in liveness_result.items():
                             result[f"liveness_{key}"] = value
-                        
                         logger.info(f"Enhanced liveness check completed with confidence {confidence_score:.2f}, is_live={is_live}")
                     else:
                         logger.warning("No suitable face location found for liveness check")
                 else:
                     logger.warning("No faces detected for liveness analysis")
-                
                 result["liveness_check"] = is_live
                 result["is_live"] = is_live
-                
                 liveness_time = time.time() - start_time
                 logger.info(f"Liveness check completed in {liveness_time:.2f} seconds")
             except Exception as e:
                 logger.error(f"Error during liveness check: {e}")
                 result["liveness_check"] = False
                 result["is_live"] = False
+
+            # Return early if liveness failed
+            if not result["is_live"]:
+                result["status"] = "liveness_failed"
+                recognition_state.face_recognition_result = result
+                recognition_state.face_recognition_active = False
+                return result
             
             # Update progress - retrieving known user encodings
             recognition_state.face_recognition_progress = 70

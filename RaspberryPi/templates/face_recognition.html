@@ -587,47 +587,7 @@
                 
                 // Add event listener to the retry button
                 document.getElementById('retryButton').addEventListener('click', function() {
-                    // Reset camera resources first to ensure we get a fresh camera feed
-                    resetCameraResources();
-                    
-                    // Set a slight delay to allow camera to reinitialize before starting new recognition
-                    document.getElementById('statusText').textContent = "Resetting camera...";
-                    document.getElementById('processingText').innerHTML = "<h4>Preparing camera...</h4><p>Please wait...</p>";
-                    
-                    // Use a longer delay to ensure the camera is fully reset
-                    setTimeout(() => {
-                        // Reset UI and restart recognition
-                        document.getElementById('statusText').textContent = "Starting new recognition attempt...";
-                        document.getElementById('progressBar').classList.remove('bg-warning');
-                        document.getElementById('progressBar').style.width = '0%';
-                        
-                        // Reload video feed with a new timestamp to force refresh
-                        const videoFeed = document.getElementById('videoFeed');
-                        videoFeed.src = '/video_feed?t=' + new Date().getTime();
-                        
-                        // Start recognition after camera has time to initialize
-                        setTimeout(() => {
-                            // First grab a new preview frame
-                            capturePreviewFrame()
-                                .then(response => response.json())
-                                .then(data => {
-                                    if (data.success) {
-                                        console.log("Preview frame captured successfully");
-                                        // Wait a bit for the feed to stabilize
-                                        setTimeout(() => {
-                                            startFaceRecognition();
-                                        }, 1000);
-                                    } else {
-                                        console.error("Failed to capture preview frame", data);
-                                        alert("Camera error. Please refresh the page and try again.");
-                                    }
-                                })
-                                .catch(error => {
-                                    console.error("Error capturing preview frame", error);
-                                    alert("Camera error. Please refresh the page and try again.");
-                                });
-                        }, 2000);
-                    }, 2000); // Increased from 1000ms to 2000ms
+                    window.location.href = '/'; // Redirect to home page for a full system reset
                 });
             } else if (data.status === 'liveness_failed' || (data.result && data.result.face_detected && data.result.is_live === false)) {
                 // Face detected but liveness check failed
@@ -954,30 +914,33 @@
         document.querySelector('.face-guide-container').style.display = 'block';
         
         // Initialize the countdown
-        startCountdown();
+        startCountdownAndRecognition();
     }
     
-    // Function to start the countdown and automatically trigger face recognition
-    function startCountdown() {
+    // Function to start the countdown and trigger face recognition at 2 seconds
+    function startCountdownAndRecognition() {
         const countdownElement = document.getElementById('countdownTimer');
         countdownElement.style.display = 'flex';
-        
-        let seconds = 5; // Decreased from 7 to 5 seconds
+        let seconds = 7;
         countdownElement.textContent = seconds;
-        
+        let recognitionStarted = false;
+
         const countdownInterval = setInterval(() => {
             seconds--;
             countdownElement.textContent = seconds;
-            
+
+            // When timer hits 2, start face recognition (frame capture)
+            if (seconds === 2 && !recognitionStarted) {
+                recognitionStarted = true;
+                startFaceRecognition(); // This should begin frame capture
+            }
+
+            // When timer hits 0, hide the countdown and show processing
             if (seconds <= 0) {
                 clearInterval(countdownInterval);
-                
-                // Hide countdown and guide
                 countdownElement.style.display = 'none';
-                document.querySelector('.face-guide-container').style.display = 'none';
-                
-                // Start face recognition automatically
-                startFaceRecognition();
+                // Optionally show a "Processing..." message or spinner here
+                document.getElementById('processingText').style.display = 'block';
             }
         }, 1000);
     }
@@ -995,13 +958,10 @@
         
         // Wait for camera to warm up before showing face guide
         setTimeout(() => {
-            // Show the face oval guide after a delay
             document.querySelector('.face-guide-container').style.display = 'block';
-            
-            // Start the countdown automatically after camera warm-up
-            startCountdown();
-        }, 1500); // 1.5 second delay for camera warm-up
-        });
+            startCountdownAndRecognition();
+        }, 1500);
+    });
     </script>
 </body>
 </html> 

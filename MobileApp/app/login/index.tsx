@@ -173,7 +173,10 @@ export default function LoginScreen() {
                     {isLoading ? (
                         <ActivityIndicator size="large" color="#0000ff" />
                     ) : (
-                        <Button title="Verify OTP" onPress={handleVerifyOTP} />
+                        <>
+                            <Button title="Verify OTP" onPress={handleVerifyOTP} />
+                            <Button title="Back to Login" onPress={() => setStage('login')} color="#888" />
+                        </>
                     )}
                 </>
             )}
