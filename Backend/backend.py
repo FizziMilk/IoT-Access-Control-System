@@ -35,6 +35,14 @@ JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY")
 twilio_client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
 
 app = Flask(__name__)
+# Configure CORS
+CORS(app, resources={
+    r"/api/*": {
+        "origins": ["https://siaudvytisbenas.dev", "http://localhost:19006", "exp://localhost:19000"],
+        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        "allow_headers": ["Content-Type", "Authorization"]
+    }
+})
 api = Api(app, prefix='/api')
 bcrypt = Bcrypt(app)
 

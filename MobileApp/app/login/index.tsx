@@ -52,9 +52,18 @@ export default function LoginScreen() {
             
             const response = await fetch(url, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json'},
+                headers: { 
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json'
+                },
                 body: JSON.stringify({ username, password }),
             });
+            
+            if (!response.ok) {
+                const errorText = await response.text();
+                console.error('[Login] Error response:', errorText);
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
             
             const data = await response.json();
             console.log('[Login] Response data:', JSON.stringify(data, null, 2));
