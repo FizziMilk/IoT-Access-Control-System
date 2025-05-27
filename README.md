@@ -32,7 +32,7 @@ Security features include OTP via Twilio, JWT‑authenticated endpoints, mutual 
 - **RESTful API** for user, OTP, schedule, and access-logs management.
 - **MQTT Broker** for real‑time door control commands and status updates.
 - **Facial Recognition & Liveness** on Pi using OpenCV, dlib, and custom LBP+reflection analysis.
-- ![image](https://github.com/user-attachments/assets/e42f625a-7202-4454-83f3-ad56a4ec4379)
+  ![image](https://github.com/user-attachments/assets/e42f625a-7202-4454-83f3-ad56a4ec4379)
 
 - **React Native App** for cross‑platform (iOS/Android) administration with JWT login & OTP verification.
 ![image](https://github.com/user-attachments/assets/65bc9cbe-98b4-469d-a05d-43f86b30941e)
