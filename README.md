@@ -4,6 +4,8 @@ BEng Project For LSBU Electronic and Computer Systems Engineering
 A full‑stack IoT door access control project combining secure backend services, edge‑device facial recognition, and a mobile administration app.
 Installation of this project from GitHub has not yet been attempted, if you have any issues get in touch.
 
+![image](https://github.com/user-attachments/assets/fc46b3c4-89ce-4ecd-9f65-a963463834b9)
+
 
 ---
 ## Table of Contents
